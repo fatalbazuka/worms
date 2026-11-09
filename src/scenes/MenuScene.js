@@ -2,7 +2,8 @@ import { UI, font, ensureButton } from '../ui/theme.js';
 import { CFG } from '../config.js';
 import { MISSIONS, loadProgress, isUnlocked } from '../campaign/missions.js';
 import { objectiveText } from '../campaign/objectives.js';
-import { quickMatch, campaignMatch, onlineMatch } from '../core/match.js';
+import { quickMatch, campaignMatch, onlineMatch, QUICK_OPTIONS } from '../core/match.js';
+import { SHAPES } from '../core/shapes.js';
 import { randomRoom, copyText } from '../net/transport.js';
 import { isCasualRoom } from '../net/rooms.js';
 import { Lobby } from '../net/lobby.js';
@@ -312,12 +313,28 @@ export default class MenuScene extends Phaser.Scene {
   showQuick() {
     this.section = this.showQuick;
     this._clear();
-    this._title('Быстрая игра', 'случайная карта, 2 на 2');
+    const o = this.quickOptions;
+    this._title('Быстрая игра', `${o.worms} на ${o.worms} · ход ${o.turnTime} с`);
     const cx = this.W / 2;
-    const y0 = 186, step = 74;
 
+    // Настройки партии: каждая кнопка перебирает свои варианты по кругу.
+    // Выбор запоминается и действует и на игру вдвоём, и против бота.
+    const shapes = ['random', ...SHAPES.map((sh) => sh.id)];
+    const shapeName = (id) => (id === 'random' ? 'любая' : SHAPES.find((sh) => sh.id === id)?.name ?? id);
+    const cycle = (list, cur) => list[(list.indexOf(cur) + 1) % list.length];
+    const opt = (key, x, w, label, next) => this._button(key, x, 168, label, '',
+      () => { this.quickOptions = { ...this.quickOptions, ...next() }; this.showQuick(); },
+      { w, h: 44 });
+    opt('opt-shape', cx - 140, 270, `Карта: ${shapeName(o.shape)}`,
+      () => ({ shape: cycle(shapes, o.shape) }));
+    opt('opt-worms', cx + 70, 140, `Бойцов: ${o.worms}`,
+      () => ({ worms: cycle(QUICK_OPTIONS.worms, o.worms) }));
+    opt('opt-time', cx + 215, 140, `Ход: ${o.turnTime} с`,
+      () => ({ turnTime: cycle(QUICK_OPTIONS.turnTime, o.turnTime) }));
+
+    const y0 = 240, step = 74;
     this._button('hotseat', cx, y0, 'Вдвоём на одном устройстве', 'ходы по очереди',
-      () => this.start(quickMatch(null)), { variant: 'primary' });
+      () => this.start(quickMatch(null, o)), { variant: 'primary' });
 
     const levels = ['rookie', 'fighter', 'sniper'];
     const hints = {
@@ -327,9 +344,26 @@ export default class MenuScene extends Phaser.Scene {
     };
     levels.forEach((id, i) => {
       this._button(id, cx, y0 + step * (i + 1), `Против бота: ${BOT_LEVELS[id].name}`,
-        hints[id], () => this.start(quickMatch(id)));
+        hints[id], () => this.start(quickMatch(id, o)));
     });
     this._back();
+  }
+
+  /** Настройки быстрой игры: запоминаются в браузере. */
+  get quickOptions() {
+    let saved = null;
+    try { saved = JSON.parse(localStorage.getItem('worms.quick.v1') ?? 'null'); } catch { saved = null; }
+    const pick = (list, v, d) => (list.includes(v) ? v : d);
+    const shapes = ['random', ...SHAPES.map((sh) => sh.id)];
+    return {
+      shape: pick(shapes, saved?.shape, 'random'),
+      worms: pick(QUICK_OPTIONS.worms, saved?.worms, 2),
+      turnTime: pick(QUICK_OPTIONS.turnTime, saved?.turnTime, 30),
+    };
+  }
+
+  set quickOptions(v) {
+    try { localStorage.setItem('worms.quick.v1', JSON.stringify(v)); } catch { /* инкогнито */ }
   }
 
   // ------------------------------------------------------------ кампания

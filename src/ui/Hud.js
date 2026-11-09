@@ -553,7 +553,8 @@ export class Hud {
     this.teamChip.fillColor = TEAM_COLORS[team];
     this.turnText.setText(worm ? `Боец ${worm.name}` : TEAM_NAMES[team]);
     this.turnText.setColor(hex(TEAM_COLORS[team]));
-    this.subText.setText(`${TEAM_NAMES[team]} · ${scene.terrain.biome.name} · ${turn.weapon.name}`);
+    const shape = scene.shape && scene.shape.id !== 'island' ? ` · ${scene.shape.name}` : '';
+    this.subText.setText(`${TEAM_NAMES[team]} · ${scene.terrain.biome.name}${shape} · ${turn.weapon.name}`);
 
     this._updateTimer(turn);
     this._updateWind(scene.wind);
@@ -601,13 +602,15 @@ export class Hud {
 
   _updateTeams(scene) {
     for (let t = 0; t < CFG.TEAMS; t++) {
-      const living = scene.worms.filter((w) => w.team === t && w.alive);
+      // Состав команды — из самой партии: в миссиях и в настройках быстрой
+      // игры бойцов бывает и один, и четыре, а не всегда по два
+      const all = scene.worms.filter((w) => w.team === t);
+      const living = all.filter((w) => w.alive);
       const total = living.reduce((a, w) => a + w.health, 0);
+      const size = Math.max(1, all.length);
       const b = this.teamBars[t];
-      b.bar.width = b.width * Phaser.Math.Clamp(
-        total / (CFG.MAX_HEALTH * CFG.WORMS_PER_TEAM), 0, 1,
-      );
-      b.cnt.setText(`${living.length}/${CFG.WORMS_PER_TEAM}`);
+      b.bar.width = b.width * Phaser.Math.Clamp(total / (CFG.MAX_HEALTH * size), 0, 1);
+      b.cnt.setText(`${living.length}/${size}`);
     }
   }
 

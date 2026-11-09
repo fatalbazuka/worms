@@ -17,19 +17,35 @@ export const HOTSEAT = {
   rules: {},
 };
 
-/** Быстрая игра: случайная карта, соперник — человек рядом или бот. */
-export function quickMatch(botLevel = null) {
+/**
+ * Быстрая игра: случайная карта, соперник — человек рядом или бот.
+ *
+ * opts — настройки из меню: worms (бойцов в команде), turnTime (секунд на
+ * ход), shape (форма карты или 'random'). Без них — как раньше: 2 на 2,
+ * 30 секунд, форма от зерна.
+ */
+export function quickMatch(botLevel = null, opts = {}) {
+  const worms = Math.max(1, Math.min(4, Number(opts.worms) || 2));
+  const rules = {};
+  if (Number(opts.turnTime) > 0) rules.turnTime = Number(opts.turnTime);
   return {
     mode: 'quick',
     teams: [
-      { worms: 2, control: 'human' },
+      { worms, control: 'human' },
       botLevel
-        ? { worms: 2, control: 'bot', level: botLevel }
-        : { worms: 2, control: 'human' },
+        ? { worms, control: 'bot', level: botLevel }
+        : { worms, control: 'human' },
     ],
-    rules: {},
+    rules,
+    ...(opts.shape && opts.shape !== 'random' ? { shape: opts.shape } : {}),
   };
 }
+
+/** Варианты настроек быстрой игры — для меню и проверки сохранённых. */
+export const QUICK_OPTIONS = {
+  worms: [2, 3, 4, 1],
+  turnTime: [30, 45, 60, 20],
+};
 
 /** Миссия кампании: карта, стороны и особые условия из описания миссии. */
 export function campaignMatch(missionId) {

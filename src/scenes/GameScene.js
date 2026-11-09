@@ -1,6 +1,7 @@
 import { CFG, DEPTH, TEAM_COLORS, TEAM_NAMES, canvasSize } from '../config.js';
 import { makeRng, subRng } from '../core/rng.js';
 import { BIOMES, pickBiome } from '../core/biomes.js';
+import { pickShape, shapeRng } from '../core/shapes.js';
 import { Terrain } from '../core/Terrain.js';
 import { TurnManager, STATE } from '../core/TurnManager.js';
 import { has, meta } from '../core/assets.js';
@@ -370,7 +371,11 @@ export default class GameScene extends Phaser.Scene {
       grass: has(this, `${biome.id}_grass`)
         ? this.textures.get(`${biome.id}_grass`).getSourceImage() : null,
     });
-    this.terrain.generate();
+    // Форма карты: из миссии или меню, иначе случайная от зерна (в сети у
+    // обоих одна). Кампания без поля shape — всегда остров, как и была.
+    const wanted = this.match.shape ?? (this.match.mode === 'campaign' ? 'island' : null);
+    this.shape = pickShape(this.seed, wanted);
+    this.terrain.generate(this.shape, shapeRng(this.seed));
 
     // По одной Phaser-текстуре на чанк: после взрыва в GPU уходит
     // только задетый кусок, а не вся карта целиком.
