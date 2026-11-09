@@ -20,23 +20,29 @@ import { simulateShot, muzzle } from './ballistics.js';
  *
  * Уровни различаются не «читом», а точностью и терпением: слабый бот
  * перебирает грубее, ошибается сильнее и стреляет только базукой.
+ *
+ * Позиция. Если с места хорошего выстрела нет (цель за холмом, ствол
+ * упирается в склон), боец и снайпер прикидывают пару точек в шаге-двух
+ * по обе стороны — ровно тех, куда можно дойти ногами, не падая с обрыва
+ * и не заходя в воду, — и, если оттуда выстрел заметно лучше, сначала
+ * идут туда, а потом заново целятся уже с нового места. Новичок стоит.
  */
 
 export const BOT_LEVELS = {
   rookie: {
     id: 'rookie', name: 'Новичок',
     angleErr: 0.10, powerErr: 0.13, coarse: 7, refine: 0,
-    weapons: ['bazooka'], selfRisk: 90,
+    weapons: ['bazooka'], selfRisk: 90, moves: false,
   },
   fighter: {
     id: 'fighter', name: 'Боец',
     angleErr: 0.045, powerErr: 0.06, coarse: 11, refine: 1,
-    weapons: ['bazooka', 'grenade', 'cluster'], selfRisk: 70,
+    weapons: ['bazooka', 'grenade', 'cluster'], selfRisk: 70, moves: true,
   },
   sniper: {
     id: 'sniper', name: 'Снайпер',
     angleErr: 0.015, powerErr: 0.02, coarse: 15, refine: 2,
-    weapons: ['bazooka', 'grenade', 'cluster', 'mole'], selfRisk: 55,
+    weapons: ['bazooka', 'grenade', 'cluster', 'mole'], selfRisk: 55, moves: true,
   },
 };
 
@@ -72,13 +78,41 @@ export class Bot {
 
       case 'think':
         if (this.timer < CFG.BOT_THINK) break;
-        this.plan = this.decide(worm);
+        this.plan = this.decide(worm, { allowMove: this.level.moves });
         if (!this.plan) { this.phase = 'give-up'; this.timer = 0; break; }
+        if (this.plan.moveTo != null) {
+          this.phase = 'walk';
+          this.timer = 0;
+          this.lastX = worm.x;
+          this.stuck = 0;
+          break;
+        }
         worm.facing = this.plan.facing;
         scene.turn.setWeaponIndex(this.plan.weapon);
         this.phase = 'aim';
         this.timer = 0;
         break;
+
+      case 'walk': {
+        // Идём ногами, как игрок: теми же шагами по склону. Дошли, упёрлись
+        // или идём слишком долго — целимся заново уже с того места, где стоим
+        const dx = this.plan.moveTo - worm.x;
+        const moved = Math.abs(worm.x - this.lastX);
+        this.lastX = worm.x;
+        this.stuck = moved < 0.2 ? this.stuck + dt : 0;
+        if (Math.abs(dx) <= 3 || this.stuck > 0.5 || this.timer > 3.5 || !worm.grounded) {
+          if (!worm.grounded && this.timer < 4.5) break;     // докатимся — тогда целимся
+          this.plan = this.decide(worm, { allowMove: false });
+          if (!this.plan) { this.phase = 'give-up'; this.timer = 0; break; }
+          worm.facing = this.plan.facing;
+          scene.turn.setWeaponIndex(this.plan.weapon);
+          this.phase = 'aim';
+          this.timer = 0;
+          break;
+        }
+        worm.walk(dx > 0 ? 1 : -1, dt);
+        break;
+      }
 
       case 'aim': {
         // Доводим ствол с той же скоростью, с какой это делает игрок
@@ -113,15 +147,60 @@ export class Bot {
     }
   }
 
-  /** @returns {{angle:number, power:number, facing:number, weapon:number}|null} */
-  decide(worm) {
+  /**
+   * @returns {{angle:number, power:number, facing:number, weapon:number,
+   *            moveTo?:number}|null}
+   */
+  decide(worm, { allowMove = false } = {}) {
+    const here = this.bestShot(worm);
+    if (!allowMove || (here && here.score < 30)) return this.withError(here);
+
+    // С места плохо: прикидываем пару точек рядом, куда можно дойти ногами
+    let move = null;
+    const x0 = worm.x, y0 = worm.y;
+    for (const x of this.walkableSpots(worm)) {
+      worm.x = x.x; worm.y = x.y;
+      const shot = this.bestShot(worm, 1);
+      if (shot && (!move || shot.score < move.shot.score)) move = { x: x.x, shot };
+    }
+    worm.x = x0; worm.y = y0;
+    // Идти стоит, только если оттуда заметно лучше: суета ради пары
+    // пикселей выглядит глупо и тратит время хода
+    if (move && (!here || move.shot.score < here.score * 0.6 - 10)) {
+      return { ...this.withError(move.shot), moveTo: move.x };
+    }
+    return this.withError(here);
+  }
+
+  /**
+   * Точки в шаге-двух по обе стороны, куда реально дойти: идём по профилю
+   * так же, как ходит боец (подъём не круче шага, без обрывов и воды).
+   */
+  walkableSpots(worm) {
+    const out = [];
+    for (const dir of [-1, 1]) {
+      let x = worm.x, y = worm.y;
+      for (let d = 3; d <= 120; d += 3) {
+        const nx = worm.x + dir * d;
+        if (nx < 30 || nx > this.scene.terrain.width - 30) break;
+        const ny = worm.footYAt(nx, y);
+        if (ny === null || !worm.bodyClear(nx, ny) || ny > CFG.DROWN_Y - 30) break;
+        x = nx; y = ny;
+        if (d === 45 || d === 90 || d === 120) out.push({ x, y });
+      }
+    }
+    return out;
+  }
+
+  /** Лучший выстрел из текущей позиции бойца — без промаха. */
+  bestShot(worm, maxTargets = 2) {
     const targets = this.scene.worms
       .filter((w) => w.alive && w.team !== worm.team)
       .sort((a, b) => this.targetScore(worm, a) - this.targetScore(worm, b));
     if (!targets.length) return null;
 
     let best = null;
-    for (const target of targets.slice(0, 2)) {
+    for (const target of targets.slice(0, maxTargets)) {
       for (const weaponIndex of this.weaponChoices()) {
         const shot = this.solve(worm, target, weaponIndex);
         if (shot && (!best || shot.score < best.score)) best = shot;
@@ -130,8 +209,12 @@ export class Bot {
       }
       if (best && best.score < 12) break;
     }
-    if (!best) return null;
+    return best;
+  }
 
+  /** Промах по уровню поверх идеального решения. */
+  withError(best) {
+    if (!best) return null;
     // Промах по уровню. Врать в оценке нельзя — врём в исполнении, ровно
     // как человек, у которого дрогнула рука.
     const rng = this.scene.turnRng;
