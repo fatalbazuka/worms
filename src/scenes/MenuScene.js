@@ -4,6 +4,7 @@ import { MISSIONS, loadProgress, isUnlocked } from '../campaign/missions.js';
 import { objectiveText } from '../campaign/objectives.js';
 import { quickMatch, campaignMatch, onlineMatch } from '../core/match.js';
 import { randomRoom, copyText } from '../net/transport.js';
+import { isCasualRoom } from '../net/rooms.js';
 import { Lobby } from '../net/lobby.js';
 import { pendingSession, forgetSession } from '../net/session.js';
 import { syncMe, fetchTop, myRank, loggedIn, onAccountChange } from '../net/server.js';
@@ -158,6 +159,7 @@ export default class MenuScene extends Phaser.Scene {
     for (const o of this.items) o.destroy();
     this.items = [];
     this.buttons = {};
+    this.buttonTexts = {};
     this.copiedLabel = null;
   }
 
@@ -186,12 +188,16 @@ export default class MenuScene extends Phaser.Scene {
       font(hint ? 20 : h < 50 ? 17 : 22, 800, enabled ? UI.text : UI.textDim)).setOrigin(0.5).setAlpha(alpha);
     this.items.push(img, title);
     into?.push(img, title);
+    let sub = null;
     if (hint) {
-      const sub = this.add.text(x, y + 15, hint, font(12, 700, UI.textDim))
+      sub = this.add.text(x, y + 15, hint, font(12, 700, UI.textDim))
         .setOrigin(0.5).setAlpha(alpha);
       this.items.push(sub);
       into?.push(sub);
     }
+    // Надписи кнопки — чтобы обновлять подсказку на месте (счётчик поиска)
+    this.buttonTexts ??= {};
+    this.buttonTexts[key] = { title, sub };
 
     if (enabled) {
       img.setInteractive({ useHandCursor: true });
@@ -399,28 +405,36 @@ export default class MenuScene extends Phaser.Scene {
     // Профиль. С аккаунтом — окно профиля (там и смена ника); без него —
     // вход и смена имени, которое увидит соперник. В Telegram имя своё.
     if (loggedIn()) {
-      this._button('profile', cx, 176, `${me.name} · профиль`, '', () => this.openAccount(), { w: 300, h: 46 });
+      this._button('profile', cx, 186, `${me.name} · профиль`, '', () => this.openAccount(), { w: 300, h: 44 });
     } else if (me.telegram) {
-      this._button('login', cx, 176, 'Войти в аккаунт', '', () => this.openAccount(),
-        { w: 256, h: 46, variant: 'primary' });
+      this._button('login', cx, 186, 'Войти в аккаунт', '', () => this.openAccount(),
+        { w: 256, h: 44, variant: 'primary' });
     } else {
-      this._button('login', cx - 136, 176, 'Войти в аккаунт', '', () => this.openAccount(),
-        { w: 256, h: 46, variant: 'primary' });
-      this._button('rename', cx + 136, 176, 'Сменить имя', '', () => {
+      this._button('login', cx - 106, 186, 'Войти в аккаунт', '', () => this.openAccount(),
+        { w: 208, h: 44, variant: 'primary' });
+      this._button('rename', cx + 106, 186, 'Сменить имя', '', () => {
         const v = globalThis.prompt?.('Имя в бою:', me.name);
         if (v) { setName(v); this.showOnline(); }
-      }, { w: 256, h: 46 });
+      }, { w: 208, h: 44 });
     }
-    this.items.push(this.add.text(cx, 212,
+    this.items.push(this.add.text(cx, 214,
       `побед ${me.wins} · поражений ${me.losses}`, font(12, 700, UI.textDim))
       .setOrigin(0.5, 0));
 
-    // 262, а не 250: строка побед/поражений над кнопками заезжала под
-    // верхний край первой кнопки
-    const y0 = 262, step = 74;
-    this._button('create', cx, y0, 'Создать игру', 'стол увидят все в лобби, можно позвать друга',
+    // Режим: на рейтинг или без. У каждого свои столы и своя очередь
+    // поиска; выбор запоминается.
+    const casual = this.onlineQueue === 'casual';
+    const tab = (key, label, queue) => this._button(key, cx + (queue === 'casual' ? 106 : -106), 262,
+      label, '', () => { this.onlineQueue = queue; this.showOnline(); },
+      { w: 208, h: 40, variant: this.onlineQueue === queue ? 'active' : 'normal' });
+    tab('mode-rated', 'Рейтинг', 'rated');
+    tab('mode-casual', 'Без рейтинга', 'casual');
+
+    const y0 = 322, step = 74;
+    this._button('create', cx, y0, 'Создать игру',
+      casual ? 'без рейтинга · стол увидят все в лобби' : 'на рейтинг · стол увидят все в лобби',
       () => this.createGame(), { variant: 'primary' });
-    this._button('quickmatch', cx, y0 + step, 'Быстрый бой', 'подобрать соперника по рейтингу',
+    this._button('quickmatch', cx, y0 + step, 'Быстрый бой', this._searchHint(),
       () => this.startSearch());
     // Код от друга — редкий путь, кнопка маленькая и внизу
     this._button('join', this.W - 108, this.bottomY(46), 'по коду', '',
@@ -492,9 +506,31 @@ export default class MenuScene extends Phaser.Scene {
     openAccountDialog({ onTop: () => this.showTop() });
   }
 
+  /** Режим онлайна: rated | casual. Запоминается в браузере. */
+  get onlineQueue() {
+    if (!this._queue) {
+      try { this._queue = localStorage.getItem('worms.online.queue'); } catch { this._queue = null; }
+      if (this._queue !== 'casual') this._queue = 'rated';
+    }
+    return this._queue;
+  }
+
+  set onlineQueue(q) {
+    this._queue = q === 'casual' ? 'casual' : 'rated';
+    try { localStorage.setItem('worms.online.queue', this._queue); } catch { /* инкогнито */ }
+  }
+
+  /** Подсказка под «Быстрым боем»: как подбираем и сколько человек ищут. */
+  _searchHint() {
+    const casual = this.onlineQueue === 'casual';
+    const how = casual ? 'любой соперник, сразу' : 'соперник по рейтингу';
+    const n = this.lobby?.searchingCount(this.onlineQueue);
+    return n == null ? how : `${how} · сейчас ищут ${n}`;
+  }
+
   /** Своя открытая игра: комната случайная, стол виден в лобби. */
   createGame() {
-    this.showRoom(randomRoom());
+    this.showRoom(randomRoom(this.onlineQueue === 'casual'));
   }
 
   /**
@@ -514,8 +550,9 @@ export default class MenuScene extends Phaser.Scene {
       // Игровая сцена по нему узнаёт, что лобби есть, и отмечает «в бою»
       this.registry.set('lobby', this.lobby);
       await this.lobby.start();
-      // Стол открыли раньше, чем лобби поднялось
+      // Стол открыли или поиск начали раньше, чем лобби поднялось
       if (this.hosting) this.lobby.host(this.hosting);
+      else if (this.section === this.startSearch) this.lobby.search(true, this.searchQueue);
     } catch (e) {
       console.warn('[лобби] не поднялось', e);
       this.lobbyNote = 'сеть недоступна — играть можно по коду комнаты';
@@ -538,9 +575,15 @@ export default class MenuScene extends Phaser.Scene {
 
     const cx = this.W / 2;
     const x = cx - 210;
-    const top = 420;
+    const top = 446;
     const online = (this.lobby?.list().length ?? 0) + 1;
-    const head = this.add.text(x, top, `Открытые игры · в сети ${online}`,
+    const casual = this.onlineQueue === 'casual';
+    tables = this.lobby ? this.lobby.tables(this.onlineQueue) : tables;
+    // Счётчик ищущих живёт в подсказке «Быстрого боя» и обновляется с лобби
+    const hint = this.buttonTexts?.quickmatch?.sub;
+    if (hint?.active) hint.setText(this._searchHint());
+    const head = this.add.text(x, top,
+      `Открытые игры${casual ? ' без рейтинга' : ' на рейтинг'} · в сети ${online}`,
       font(13, 800, UI.accent)).setOrigin(0, 0);
     rows.push(head);
 
@@ -573,44 +616,57 @@ export default class MenuScene extends Phaser.Scene {
     this.section = this.startSearch;
     this._clear();
     const me = player();
-    this._title('Ищем соперника…', leagueLabel(me.rating));
+    const queue = this.onlineQueue;
+    const casual = queue === 'casual';
+    this._title('Ищем соперника…', casual ? 'бой без рейтинга' : leagueLabel(me.rating));
     const cx = this.W / 2;
 
-    // Подбор начинает с равных по рейтингу и постепенно расширяет круг.
+    // Подбор на рейтинг начинает с равных и постепенно расширяет круг.
     // Без этой строки экран выглядит зависшим: непонятно, ищет он ещё
     // впритык или уже согласен на любого.
-    this.searchStatus = this.add.text(cx, 190, 'Ищем соперника…',
+    // Сколько человек ищут прямо сейчас — вместе с тобой. Главная строка
+    // экрана: по ней видно, есть ли вообще с кем играть.
+    this.searchCount = this.add.text(cx, 168, 'подключаемся к лобби…', font(24, 800, UI.text)).setOrigin(0.5, 0);
+    this.items.push(this.searchCount);
+    this.searchStatus = this.add.text(cx, 214, 'Ищем соперника…',
       font(16, 800, UI.accent)).setOrigin(0.5, 0);
     this.items.push(this.searchStatus);
-    this.items.push(this.add.text(cx, 224,
-      'Круг поиска расширяется каждые пять секунд ожидания.',
+    this.items.push(this.add.text(cx, 244, casual
+      ? 'Подойдёт любой, кто тоже ищет бой без рейтинга.'
+      : 'Круг поиска расширяется каждые пять секунд ожидания.',
       font(13, 700, UI.textDim)).setOrigin(0.5, 0));
 
-    this._button('cancel', cx, 300, 'Отменить поиск', '', () => {
+    this._button('cancel', cx, 316, 'Отменить поиск', '', () => {
       this.lobby?.search(false);
       this._stopSearchTicker();
       this.showOnline();
     }, { w: 300, h: 56 });
 
     this._ensureLobby();
-    this.lobby?.search(true);
+    this.searchQueue = queue;
+    this.lobby?.search(true, queue);
     this._startSearchTicker();
   }
 
   /** Строка статуса живёт своим таймером: лобби бьётся реже, чем хочется глазу. */
   _startSearchTicker() {
     this._stopSearchTicker();
-    this.searchTicker = this.time.addEvent({
-      delay: 500, loop: true,
-      callback: () => {
-        if (this.section !== this.startSearch || !this.searchStatus?.active) {
-          this._stopSearchTicker();
-          return;
-        }
-        const text = this.lobby?.statusText();
-        if (text) this.searchStatus.setText(text);
-      },
-    });
+    const tick = () => {
+      if (this.section !== this.startSearch || !this.searchStatus?.active) {
+        this._stopSearchTicker();
+        return;
+      }
+      // Лобби могло подняться уже после нажатия «искать»
+      if (this.lobby && this.lobby.state !== 'searching' && !this.lobby.matched) {
+        this.lobby.search(true, this.searchQueue);
+      }
+      const text = this.lobby?.statusText();
+      if (text) this.searchStatus.setText(text);
+      const n = this.lobby?.searchingCount(this.searchQueue);
+      if (n != null) this.searchCount?.setText(`Сейчас ищут: ${n}${n === 1 ? ' — только ты' : ''}`);
+    };
+    this.searchTicker = this.time.addEvent({ delay: 400, loop: true, callback: tick });
+    tick();
     this.events.once('shutdown', () => this._stopSearchTicker());
   }
 
@@ -633,7 +689,9 @@ export default class MenuScene extends Phaser.Scene {
   showRoom(room) {
     this.section = () => this.showRoom(room);
     this._clear();
-    this._title('Игра создана', 'ждём соперника: стол виден всем в лобби');
+    this._title('Игра создана', isCasualRoom(room)
+      ? 'без рейтинга · стол виден всем в лобби'
+      : 'на рейтинг · стол виден всем в лобби');
     const cx = this.W / 2;
 
     this.hosting = room;

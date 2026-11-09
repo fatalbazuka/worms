@@ -16,6 +16,7 @@ import { captureCommand, captureMove } from '../net/protocol.js';
 import { NetSession } from '../net/session.js';
 import { knock } from '../net/lobby.js';
 import { randomRoom, copyText } from '../net/transport.js';
+import { isCasualRoom } from '../net/rooms.js';
 import { makeTransport } from '../net/connect.js';
 import { startRoom, shareRoom, haptic, inviteLink, offerHomeScreenOnce, setBattle } from '../platform/telegram.js';
 import { HOTSEAT } from '../core/match.js';
@@ -232,7 +233,7 @@ export default class GameScene extends Phaser.Scene {
   _netStatus(text, color) {
     if (text != null) this.netStatusText = text;
     const parts = [];
-    if (this.room) parts.push(`комната ${this.room}`);
+    if (this.room) parts.push(`комната ${this.room}${isCasualRoom(this.room) ? ' · без рейтинга' : ''}`);
     if (this.netStatusText) parts.push(this.netStatusText);
     this.hud.setNetStatus(parts.join(' · '), color);
   }
@@ -1097,7 +1098,11 @@ export default class GameScene extends Phaser.Scene {
     // очков не бывает, иначе их можно было бы «нафармить» о самого себя.
     let ratingLine = '';
     let leagueLine = '';
-    if (this.net?.connected && winner >= 0 && this.net.opponent) {
+    // Бой без рейтинга: рейтинг не трогаем ни здесь, ни на сервере
+    const casual = isCasualRoom(this.room);
+    if (this.net?.connected && winner >= 0 && casual) {
+      ratingLine = 'бой без рейтинга';
+    } else if (this.net?.connected && winner >= 0 && this.net.opponent) {
       const me = player();
       const before = leagueOf(me.rating);
       const delta = eloDelta(me.rating, this.net.opponent.rating, winner === mine);
@@ -1135,7 +1140,7 @@ export default class GameScene extends Phaser.Scene {
       const leagueText = this.rig.ui(this.add.text(CFG.VIEW_W / 2, CFG.VIEW_H / 2 + 38, leagueLine,
         font(14, 800, leagueOf(player().rating).text)).setOrigin(0.5).setScrollFactor(0)
         .setDepth(DEPTH.HUD + 11));
-      this._reportToServer(winner === mine, ratingText, leagueText);
+      if (!casual) this._reportToServer(winner === mine, ratingText, leagueText);
     }
     const sub = this.add.text(CFG.VIEW_W / 2, CFG.VIEW_H / 2 + (ratingLine ? 68 : 32),
       backToMenu ? 'тап — в меню' : 'тап или R — новая карта',

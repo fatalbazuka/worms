@@ -38,6 +38,7 @@ import {
 } from './lib/accounts.js';
 import { verifyInitData, displayName } from './lib/telegram.js';
 import { settle, START_RATING } from './lib/elo.js';
+import { isCasualRoom } from './lib/rooms.js';
 
 const BODY_LIMIT = 16 * 1024;
 
@@ -209,6 +210,8 @@ export function createApp({ db, botToken = '', trustProxy = false, staticDir = n
     const claim = body.won ? 'win' : 'loss';
     if (!/^[A-Z0-9]{4,16}$/.test(room) || !Number.isSafeInteger(seed)) throw new HttpError(400, 'плохая комната');
     if (!opponent || opponent === me.id) throw new HttpError(400, 'нет соперника');
+    // Бой без рейтинга: режим зашит в код комнаты, клиенту здесь не верим
+    if (isCasualRoom(room)) return { status: 'unrated', reason: 'casual', player: view(me) };
     if (!q.byId.get(opponent)) return { status: 'unrated', player: view(me) };
 
     return tx(db, () => {

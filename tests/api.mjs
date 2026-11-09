@@ -112,6 +112,12 @@ r = await call('POST', '/api/result', { room: 'ROOM03', seed: 9, opponent: vasya
 check('чужой бой закрыть нельзя', r.status === 403, r.data?.error);
 r = await call('POST', '/api/result', { room: 'ROOM04', seed: 1, opponent: 'g12345', won: true }, vasya);
 check('бой с анонимом — без рейтинга', r.data.status === 'unrated');
+r = await call('POST', '/api/result', { room: 'ZCASU1', seed: 2, opponent: petyaId, won: true }, vasya);
+await call('POST', '/api/result', { room: 'ZCASU1', seed: 2, opponent: vasyaId, won: false }, petya);
+const afterCasual = (await call('GET', '/api/me', null, vasya)).data.player;
+check('бой без рейтинга (комната на Z) сервер не засчитывает',
+  r.data.status === 'unrated' && r.data.reason === 'casual' && afterCasual.rating === 1012 && afterCasual.wins === 1,
+  `${r.data.status}, рейтинг ${afterCasual.rating}`);
 r = await call('POST', '/api/result', { room: '../x', seed: 1, opponent: petyaId, won: true }, vasya);
 check('кривая комната отклонена', r.status === 400);
 r = await call('POST', '/api/result', { room: 'ROOM05', seed: 1, opponent: petyaId, won: true });

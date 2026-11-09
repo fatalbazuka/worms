@@ -163,9 +163,4 @@ export function copyText(text) {
 }
 
 /** Код комнаты для ссылки: короткий, без похожих друг на друга символов. */
-export function randomRoom() {
-  const abc = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
-  let out = '';
-  for (let i = 0; i < 6; i++) out += abc[Math.floor(Math.random() * abc.length)];
-  return out;
-}
+export { randomRoom } from './rooms.js';
