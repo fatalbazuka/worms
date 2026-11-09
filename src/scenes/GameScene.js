@@ -1153,7 +1153,8 @@ export default class GameScene extends Phaser.Scene {
       if (!casual) this._reportToServer(winner === mine, ratingText, leagueText);
     }
     const sub = this.add.text(CFG.VIEW_W / 2, CFG.VIEW_H / 2 + (ratingLine ? 68 : 32),
-      backToMenu ? 'тап — в меню' : 'тап или R — новая карта',
+      // На ПК — «клик»: «тап» там читается как опечатка
+      `${isDesktop() ? 'клик' : 'тап'}${backToMenu ? ' — в меню' : ' или R — новая карта'}`,
       font(18, 700, UI.textDim))
       .setOrigin(0.5).setScrollFactor(0).setDepth(DEPTH.HUD + 11);
     this.rig.ui(sub);

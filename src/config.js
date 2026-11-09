@@ -177,13 +177,21 @@ export function fitViewToScreen(screenW, screenH, inset = null) {
   if (portrait) {
     CFG.VIEW_W = CFG.VIEW_BASE;
     CFG.VIEW_H = Math.max(CFG.VIEW_BASE, Math.min(CFG.VIEW_H_MAX, wanted));
-  } else {
+  } else if (wanted >= CFG.VIEW_W_MIN) {
     CFG.VIEW_H = CFG.VIEW_BASE;
-    CFG.VIEW_W = Math.max(CFG.VIEW_W_MIN, Math.min(CFG.VIEW_W_MAX, wanted));
+    CFG.VIEW_W = Math.min(CFG.VIEW_W_MAX, wanted);
+  } else {
+    // Ландшафт, но уже 16:9 — ноутбук 16:10, планшет 4:3. Уже 1280 ширину
+    // не сжимаем (интерфейс не влезет), а растим высоту: иначе FIT
+    // вписывал 16:9 с чёрными полосами сверху и снизу. Миру это не мешает —
+    // камера покажет над землёй больше неба.
+    CFG.VIEW_W = CFG.VIEW_W_MIN;
+    CFG.VIEW_H = Math.min(CFG.VIEW_H_MAX, Math.round(CFG.VIEW_W_MIN * (short / long)));
   }
 
   // Рамка: те же отступы в логических пикселях.
-  const k = CFG.VIEW_BASE / short;
+  // Логических пикселей на CSS-пиксель: по стороне, которая зафиксирована
+  const k = portrait ? CFG.VIEW_W / safeW : CFG.VIEW_H / safeH;
   CFG.FRAME = {
     left: Math.round(i.left * k), top: 0,
     right: Math.round(i.right * k), bottom: Math.round(i.bottom * k),
