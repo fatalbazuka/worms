@@ -4,8 +4,10 @@ import MenuScene from './scenes/MenuScene.js';
 import GameScene from './scenes/GameScene.js';
 import { initTelegram, startRoom, screenInsets } from './platform/telegram.js';
 import { loadCloudProfile } from './platform/player.js';
+import { applyUiClass } from './platform/device.js';
 
 initTelegram();
+applyUiClass();
 
 // Логическая ширина подгоняется под пропорции экрана ДО создания игры:
 // иначе на вытянутом телефоне 16:9 вписывается с чёрными полями по бокам

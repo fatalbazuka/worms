@@ -14,6 +14,8 @@ import {
 } from '../platform/telegram.js';
 import { leagueOf, nextLeague, leagueProgress, toNextLeague, leagueLabel } from '../platform/league.js';
 import { BOT_LEVELS } from '../ai/Bot.js';
+import { isDesktop, setUiMode } from '../platform/device.js';
+import { sfx } from '../audio/Sfx.js';
 
 /**
  * Меню.
@@ -173,7 +175,7 @@ export default class MenuScene extends Phaser.Scene {
     img.setAlpha(alpha);
 
     const title = this.add.text(x, hint ? y - 10 : y, label,
-      font(hint ? 20 : 22, 800, enabled ? UI.text : UI.textDim)).setOrigin(0.5).setAlpha(alpha);
+      font(hint ? 20 : h < 50 ? 17 : 22, 800, enabled ? UI.text : UI.textDim)).setOrigin(0.5).setAlpha(alpha);
     this.items.push(img, title);
     into?.push(img, title);
     if (hint) {
@@ -254,10 +256,22 @@ export default class MenuScene extends Phaser.Scene {
         () => addToHomeScreen(), { w: 228, h: 50 });
     }
 
+    // Настройки в правом нижнем углу: схема управления и звук. Схема
+    // выбирается сама по устройству, но ноутбук с сенсорным экраном или
+    // планшет с мышью игрок переключит сам — выбор запоминается.
+    const desktop = isDesktop();
+    this._button('ui-mode', this.W - 130, this.bottomY(62),
+      desktop ? 'Управление: ПК' : 'Управление: сенсор', '',
+      () => { setUiMode(desktop ? 'touch' : 'desktop'); this.showRoot(); }, { w: 228, h: 44 });
+    this._button('sound', this.W - 330, this.bottomY(62),
+      sfx.muted ? 'Звук: выкл' : 'Звук: вкл', '',
+      () => { sfx.setMuted(!sfx.muted); this.showRoot(); }, { w: 156, h: 44 });
+
     // Пять тапов по подписи — диагностика экрана (index.html): что видит
     // страница на самом деле, когда с телефона приходит «не весь экран»
     const foot = this.add.text(this.W - 16, this.bottomY(14),
-      'бой — в ландшафте · звука нет', font(11, 700, UI.textDim)).setOrigin(1, 1);
+      desktop ? 'мышь и клавиатура · в бою F1 — подсказка' : 'бой — в ландшафте',
+      font(11, 700, UI.textDim)).setOrigin(1, 1);
     foot.setInteractive();
     foot.on('pointerdown', () => {
       this.diagTaps = (this.diagTaps ?? 0) + 1;

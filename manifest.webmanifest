@@ -1,7 +1,7 @@
 {
   "name": "Worms Prototype",
   "short_name": "Worms",
-  "description": "Прототип пошаговой артиллерийской игры: хотсит на одном устройстве",
+  "description": "Пошаговая артиллерия: быстрая игра, кампания с ботами и бой вдвоём по сети",
   "start_url": "./",
   "scope": "./",
   "display": "fullscreen",

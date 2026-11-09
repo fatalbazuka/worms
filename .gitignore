@@ -5,3 +5,8 @@ node_modules/
 
 # Рабочие копии саб-агентов
 .claude/worktrees/
+
+# Сборка и локальные настройки развёртывания
+dist/
+.env
+__pycache__/

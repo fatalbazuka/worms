@@ -1,6 +1,7 @@
 import { CFG, DEPTH } from '../config.js';
 import { has } from '../core/assets.js';
 import { font } from './theme.js';
+import { isDesktop } from '../platform/device.js';
 
 /**
  * Прицеливание и протяжка камеры.
@@ -33,6 +34,11 @@ export class AimController {
     scene.rig.world(this.info);
     this.info.setVisible(false);
 
+    // На ПК своя схема: прицел — курсором, сила — удержанием левой кнопки,
+    // карта тянется правой или средней. Свайп по бойцу там не нужен.
+    this.desktop = isDesktop();
+    if (this.desktop) scene.input.mouse?.disableContextMenu();
+
     scene.input.on('pointerdown', this.onDown, this);
     scene.input.on('pointermove', this.onMove, this);
     scene.input.on('pointerup', this.onUp, this);
@@ -48,6 +54,7 @@ export class AimController {
 
   onDown(pointer) {
     if (this.scene.hud.isOverUI(pointer) || this.scene.rig.pinching) return;
+    if (this.desktop) { this._mouseDown(pointer); return; }
 
     const w = this.worm;
     const canAim = this.scene.canPlayerAct() && w && w.alive;
@@ -68,6 +75,7 @@ export class AimController {
   }
 
   onMove(pointer) {
+    if (this.desktop && this.mode !== 'pan') this.aimAtPointer(pointer);
     if (!this.mode || !pointer.isDown) return;
 
     if (this.mode === 'pan') {
@@ -83,6 +91,7 @@ export class AimController {
 
   onUp() {
     this.scene.rig.panEnd();
+    if (this.mode === 'charge') this.scene.mouseFire = false;
     if (this.mode === 'aim') {
       const shot = this.computeShot();
       if (shot) {
@@ -105,7 +114,42 @@ export class AimController {
     this.info.setVisible(false);
   }
 
+  // ------------------------------------------------------- мышь на ПК
+
+  /**
+   * Левая кнопка в свой ход — набор силы (отпустил — выстрел), в чужой —
+   * протяжка карты. Правая и средняя тянут карту всегда.
+   */
+  _mouseDown(pointer) {
+    const left = pointer.leftButtonDown?.() ?? true;
+    const w = this.worm;
+    if (left && this.scene.canPlayerAct() && w && w.alive) {
+      this.aimAtPointer(pointer);
+      this.mode = 'charge';
+      this.scene.mouseFire = true;
+      return;
+    }
+    this.mode = 'pan';
+    this.scene.rig.panStart(pointer);
+  }
+
+  /** Боец смотрит на курсор: разворот и угол — как если бы целился рукой. */
+  aimAtPointer(pointer) {
+    const scene = this.scene;
+    const w = this.worm;
+    if (!w || !w.alive || !scene.canPlayerAct()) return;
+    if (scene.hud.isOverUI(pointer)) return;
+    const o = this.origin();
+    const p = scene.rig.worldPoint(pointer);
+    const dx = p.x - o.x, dy = p.y - o.y;
+    if (Math.hypot(dx, dy) < 12) return;   // курсор на самом бойце — угол не определён
+    if (Math.abs(dx) > 3) w.facing = dx >= 0 ? 1 : -1;
+    scene.aimAngle = Phaser.Math.Clamp(Math.atan2(-dy, Math.abs(dx)),
+      -CFG.AIM_ANGLE_LIMIT, CFG.AIM_ANGLE_LIMIT);
+  }
+
   cancel() {
+    if (this.mode === 'charge') this.scene.mouseFire = false;
     this.mode = null;
     this.dragX = 0; this.dragY = 0;
     this.gfx.clear();
@@ -175,7 +219,7 @@ export class AimController {
 
     const deg = Math.round((scene.aimAngle * 180) / Math.PI);
     this.info.setText(`${deg}°  ${Math.round(charge * 100)}%`);
-    this.info.setPosition(o.x, o.y - 42);
+    this.info.setPosition(o.x, o.y - 58);
     this.info.setVisible(true);
   }
 
@@ -227,7 +271,7 @@ export class AimController {
     const pct = Math.round((shot.power / CFG.AIM_MAX_POWER) * 100);
     const deg = Math.round((shot.angle * 180) / Math.PI);
     this.info.setText(`${deg}°  ${pct}%`);
-    this.info.setPosition(o.x, o.y - 42);
+    this.info.setPosition(o.x, o.y - 58);
     this.info.setVisible(true);
   }
 

@@ -1,0 +1,47 @@
+# Развёртывание на своём сервере.
+#
+#   cp .env.example .env      # вписать домен и, если нужно, ключи
+#   docker compose up -d --build                  # только игра на порту HTTP_PORT
+#   docker compose --profile https up -d --build  # + Caddy с HTTPS от Let's Encrypt
+#
+# Подробно — DEPLOY.md.
+services:
+  web:
+    build: .
+    image: worms:latest
+    restart: unless-stopped
+    environment:
+      SUPABASE_URL: ${SUPABASE_URL:-}
+      SUPABASE_ANON_KEY: ${SUPABASE_ANON_KEY:-}
+      SUPABASE_LEGACY_KEY: ${SUPABASE_LEGACY_KEY:-}
+      TELEGRAM_BOT: ${TELEGRAM_BOT:-}
+      TELEGRAM_APP: ${TELEGRAM_APP:-}
+      WORMS_UI: ${WORMS_UI:-}
+    # Порт наружу. С профилем https лучше оставить 127.0.0.1:8080:80 —
+    # тогда игра доступна только через Caddy.
+    ports:
+      - "${HTTP_BIND:-0.0.0.0}:${HTTP_PORT:-8080}:80"
+
+  # Обратный прокси с автоматическим сертификатом. Нужен домен, который
+  # смотрит на этот сервер, и открытые порты 80 и 443. Без HTTPS Telegram
+  # Mini App не откроется, а браузер не даст полный экран и звук на части
+  # устройств.
+  caddy:
+    image: caddy:2-alpine
+    profiles: ["https"]
+    restart: unless-stopped
+    depends_on: [web]
+    environment:
+      DOMAIN: ${DOMAIN:-localhost}
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+
+volumes:
+  caddy_data:
+  caddy_config:

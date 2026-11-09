@@ -1,13 +1,22 @@
 {
   "name": "worms-prototype",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
-  "description": "Прототип пошаговой артиллерийской игры в духе Worms: локальный хотсит, самописная физика, разрушаемый ландшафт",
+  "description": "Пошаговая артиллерийская игра в духе Worms для браузера и Telegram: мышь и клавиатура на ПК, тач на телефоне, сетевая игра, разрушаемый ландшафт",
   "type": "module",
   "scripts": {
     "dev": "npx --yes serve -l 5173 .",
     "start": "npx --yes serve -l 5173 .",
+    "build": "node tools/build.mjs",
     "test": "node tests/run.mjs",
-    "assets": "python3 tools/build_assets.py"
+    "assets": "python3 tools/build_assets.py",
+    "docker:build": "docker build -t worms .",
+    "docker:run": "docker run --rm -p 8080:80 worms"
+  },
+  "devDependencies": {
+    "playwright": "^1.47.0"
+  },
+  "engines": {
+    "node": ">=18"
   }
 }

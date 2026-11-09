@@ -13,7 +13,8 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
 <meta name="apple-mobile-web-app-title" content="Worms" />
 <link rel="manifest" href="./manifest.webmanifest" />
-<title>Worms Prototype</title>
+<title>Worms — пошаговая артиллерия</title>
+<meta name="description" content="Пошаговая артиллерийская игра в браузере: быстрая игра, кампания с ботами и бой вдвоём по сети." />
 <style>
   /* Шрифт интерфейса. Кириллица и латиница отдельными подмножествами:
      браузер тянет только нужное. Системный моноширинный, который был
@@ -101,6 +102,10 @@
   @media (orientation: portrait) and (max-width: 900px) {
     body.in-battle #rotate { display: flex; }
   }
+  /* На ПК подсказка про узкое окно, а не про поворот телефона */
+  .desktop-only { display: none; }
+  body.ui-desktop .desktop-only { display: block; }
+  body.ui-desktop .touch-only, body.ui-desktop #rotate .phone { display: none; }
 </style>
 </head>
 <body>
@@ -108,7 +113,8 @@
 <div id="safe-probe"></div>
 <div id="rotate">
   <div class="phone"></div>
-  <div>Поверни телефон горизонтально</div>
+  <div class="touch-only">Поверни телефон горизонтально</div>
+  <div class="desktop-only">Окно слишком узкое — растяни его по ширине</div>
 </div>
 <div id="fatal"></div>
 <div id="diag"></div>
@@ -172,39 +178,64 @@
   })();
 </script>
 
-<!-- Telegram WebApp SDK: no-op в обычном браузере -->
-<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<!-- Настройки развёртывания: адрес Supabase, имя бота. На своём сервере
+     файл генерируется из переменных окружения (см. deploy/). -->
+<script src="./env.js"></script>
 
-<!-- Phaser 3 через CDN, с фолбэком на второй хост -->
+<!-- Загрузка: Telegram SDK (только внутри Telegram) → Phaser → игра.
+     Phaser берётся со своего же сервера, CDN — запасной путь. -->
 <script>
-  (function loadPhaser() {
-    var sources = [
+  (function boot() {
+    // Telegram всегда передаёт параметры запуска в адресе (#tgWebAppData…),
+    // а после перезагрузки SDK хранит их в sessionStorage. В обычном
+    // браузере SDK не нужен вовсе: он лишь сыплет ошибками в консоль.
+    function insideTelegram() {
+      if (window.Telegram && window.Telegram.WebApp) return false;   // уже есть (тест)
+      if (/tgWebApp/.test(location.hash)) return true;
+      if (window.TelegramWebviewProxy) return true;
+      try { if (sessionStorage.getItem('__telegram__initParams')) return true; } catch (e) { /* — */ }
+      return false;
+    }
+
+    var phaser = [
+      './vendor/phaser.min.js',
       'https://cdn.jsdelivr.net/npm/phaser@3.80.1/dist/phaser.min.js',
       'https://unpkg.com/phaser@3.80.1/dist/phaser.min.js',
-      'https://cdnjs.cloudflare.com/ajax/libs/phaser/3.80.1/phaser.min.js',
-      './vendor/phaser.min.js'   // локальная копия на случай, если CDN недоступен
     ];
-    var i = 0;
-    function next() {
-      if (i >= sources.length) {
-        var el = document.getElementById('fatal');
-        el.style.display = 'flex';
-        el.textContent = 'Не удалось загрузить Phaser 3 ни с одного CDN. Проверьте сеть.';
-        return;
-      }
+
+    function load(src, ok, fail) {
       var s = document.createElement('script');
-      s.src = sources[i++];
-      s.onload = boot;
-      s.onerror = next;
+      s.src = src;
+      s.onload = ok;
+      s.onerror = fail;
       document.head.appendChild(s);
     }
-    function boot() {
+
+    function loadPhaser(i) {
+      if (window.Phaser) return start();
+      if (i >= phaser.length) {
+        var el = document.getElementById('fatal');
+        el.style.display = 'flex';
+        el.textContent = 'Не удалось загрузить Phaser 3. Проверьте сеть и обновите страницу.';
+        return;
+      }
+      load(phaser[i], start, function () { loadPhaser(i + 1); });
+    }
+
+    function start() {
       var m = document.createElement('script');
       m.type = 'module';
       m.src = './src/main.js';
       document.body.appendChild(m);
     }
-    next();
+
+    // Без SDK игра всё равно запустится — как в обычном браузере
+    if (insideTelegram()) {
+      load('https://telegram.org/js/telegram-web-app.js',
+        function () { loadPhaser(0); }, function () { loadPhaser(0); });
+    } else {
+      loadPhaser(0);
+    }
   })();
 </script>
 </body>

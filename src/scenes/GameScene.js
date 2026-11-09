@@ -27,6 +27,7 @@ import { reportResult, serverAvailable } from '../net/server.js';
 import { leagueOf, nextLeague, toNextLeague } from '../platform/league.js';
 import { OffscreenMarkers } from '../ui/OffscreenMarkers.js';
 import { CameraRig } from '../ui/CameraRig.js';
+import { isDesktop } from '../platform/device.js';
 
 export default class GameScene extends Phaser.Scene {
   constructor() { super('Game'); }
@@ -109,6 +110,8 @@ export default class GameScene extends Phaser.Scene {
     // а Telegram держит ландшафт. Меню всего этого не касается.
     globalThis.document?.body.classList.add('in-battle');
     setBattle(true);
+    // На ПК над полем — перекрестие: сразу видно, что курсор и есть прицел
+    if (isDesktop()) this.input.setDefaultCursor('crosshair');
   }
 
   /** Пересобрать всё, что считалось от размера экрана. */
@@ -476,13 +479,59 @@ export default class GameScene extends Phaser.Scene {
       Phaser.Input.Keyboard.KeyCodes.DOWN, Phaser.Input.Keyboard.KeyCodes.LEFT,
       Phaser.Input.Keyboard.KeyCodes.RIGHT,
     ]);
-    kb.on('keydown', (e) => {
-      const n = parseInt(e.key, 10);
-      if (!Number.isNaN(n) && n >= 1) this.turn.setWeaponIndex(n - 1);
-      if (e.key === 'r' || e.key === 'R') {
-        if (this.turn.state === STATE.OVER) this.scene.restart();
-      }
-    });
+    // Tab и F1 у браузера заняты (фокус, справка) — в бою они наши
+    kb.addCapture([
+      Phaser.Input.Keyboard.KeyCodes.TAB, Phaser.Input.Keyboard.KeyCodes.F1,
+    ]);
+    kb.on('keydown', (e) => this._hotkey(e));
+  }
+
+  /**
+   * Горячие клавиши. Оружие меняется только в свой ход: раньше цифры
+   * работали всегда, и в сетевой партии можно было «переключить» ствол
+   * сопернику прямо посреди его хода.
+   */
+  _hotkey(e) {
+    const hud = this.hud;
+    const key = e.key;
+    // Подсказка закрывается любой клавишей, сама клавиша при этом не теряется
+    if (hud.helpVisible && key !== 'F1' && key !== 'h' && key !== 'H' && key !== 'р' && key !== 'Р') {
+      hud.setHelp(false);
+    }
+    if (key === 'r' || key === 'R' || key === 'к' || key === 'К') {
+      if (this.turn.state === STATE.OVER) this.scene.restart();
+      return;
+    }
+    const code = e.code;
+    if (code === 'F1' || code === 'KeyH') { hud.toggleHelp(); return; }
+    if (code === 'KeyM') { hud.toggleSound(); return; }
+    if (code === 'KeyF') { this.focusCamera(); return; }
+    if (code === 'KeyV') { this.rig.toggleOverview(); return; }
+    if (code === 'Escape') {
+      if (hud.helpVisible) hud.setHelp(false);
+      return;   // арсенал закрывается сам (Inventory)
+    }
+
+    const mine = this.canPlayerAct();
+    if (code === 'Tab') { if (mine || hud.inventory?.isOpen) hud.inventory?.toggle(); return; }
+    if (!mine) return;
+    const digit = /^Digit(\d)$/.exec(code);
+    if (digit) {
+      const n = Number(digit[1]);
+      this.turn.setWeaponIndex(n === 0 ? 9 : n - 1);
+      return;
+    }
+    if (code === 'KeyQ' || code === 'KeyE') this._cycleWeapon(code === 'KeyE' ? 1 : -1);
+  }
+
+  /** Соседний ствол, у которого остались патроны. */
+  _cycleWeapon(dir) {
+    const n = WEAPONS.length;
+    let i = this.turn.weaponIndex;
+    for (let k = 0; k < n; k++) {
+      i = (i + dir + n) % n;
+      if (this.turn.ammoOf(i) > 0) { this.turn.setWeaponIndex(i); return; }
+    }
   }
 
   // ------------------------------------------------------------------ цикл
@@ -654,7 +703,7 @@ export default class GameScene extends Phaser.Scene {
     // Сила: держим «Огонь» — шкала набирается, отпустили — выстрел.
     // Состояние читаем опросом, а не событиями: так тач-кнопка и пробел
     // не могут разъехаться по порядку событий.
-    const pressed = this.moveInput.fire || k.fire.isDown;
+    const pressed = this.moveInput.fire || k.fire.isDown || this.mouseFire;
     if (pressed && !this.charging) this.beginCharge();
     else if (!pressed && this.charging) this.releaseCharge();
   }
@@ -713,6 +762,7 @@ export default class GameScene extends Phaser.Scene {
   resetAim() {
     this.aimAngle = CFG.AIM_ANGLE_START;
     this.cancelCharge();
+    this.mouseFire = false;
     this.remoteAim = false;
     this.remoteCharge = 0;
     this._lastMove = '';
@@ -1147,6 +1197,8 @@ export default class GameScene extends Phaser.Scene {
     this.game.events.off('worms-resize', this.relayout, this);
     globalThis.document?.body.classList.remove('in-battle');
     setBattle(false);
+    this.input?.setDefaultCursor?.('default');
+    this.mouseFire = false;
     this.mines = [];
     this.aim?.destroy();
     this.crates = [];

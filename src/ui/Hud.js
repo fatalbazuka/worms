@@ -3,6 +3,8 @@ import { WEAPONS } from '../weapons/index.js';
 import { has as hasAsset } from '../core/assets.js';
 import { UI, font, ensureButton, ensureRoundButton, ensureIcon } from './theme.js';
 import { Inventory } from './Inventory.js';
+import { isDesktop } from '../platform/device.js';
+import { sfx } from '../audio/Sfx.js';
 
 export const TOP_H = 62;
 
@@ -34,14 +36,25 @@ export class Hud {
       return scene.rig.ui(o.setScrollFactor(0).setDepth(d));
     };
 
+    this.desktop = isDesktop();
+
     // Инвентарь создаётся до плашки оружия: она его открывает
     this.inventory = new Inventory(scene);
     this._buildTopBar(W);
-    // Оружие — после служебных кнопок: на узком экране плашка уступает
-    // им место, а для этого надо знать, где они кончились
-    this._buildControls(W, H);
-    this._buildHelp(W, H);
-    this._buildWeapons(W, H);
+    if (this.desktop) {
+      // На ПК крупные кнопки под пальцы не нужны: ходьба, прицел и выстрел
+      // — мышью и клавиатурой, внизу только плашка оружия и служебная полоса
+      this._buildDesktopBar(W, H);
+      this._buildHelp(W, H);
+      this._buildWeapons(W, H);
+      this._buildPowerBar();
+    } else {
+      // Оружие — после служебных кнопок: на узком экране плашка уступает
+      // им место, а для этого надо знать, где они кончились
+      this._buildControls(W, H);
+      this._buildHelp(W, H);
+      this._buildWeapons(W, H);
+    }
 
     scene.input.on('pointerup', this._releaseAll, this);
     scene.input.on('pointerupoutside', this._releaseAll, this);
@@ -203,14 +216,84 @@ export class Hud {
     };
   }
 
+  /**
+   * Нижняя полоса для мыши: маленькие кнопки слева с подсказкой при
+   * наведении (в ней же горячая клавиша) и памятка по управлению справа.
+   */
+  _buildDesktopBar(W, H) {
+    const s = this.scene;
+    const SB = 50, step = 58;
+    const sy = H - SB - 16;
+    let sx = 20;
+    this.tip = this.fix(s.add.text(0, 0, '', font(13, 800))
+      .setOrigin(0, 1).setPadding(8, 5, 8, 5)
+      .setBackgroundColor('rgba(16,19,26,0.92)'), DEPTH.HUD + 30).setVisible(false);
+
+    const service = (icon, tip, onTap) => {
+      const x = sx;
+      const img = this._tap(x, sy, SB, icon, onTap);
+      img.on('pointerover', () => {
+        this.tip.setText(typeof tip === 'function' ? tip() : tip).setPosition(x, sy - 8).setVisible(true);
+      });
+      img.on('pointerout', () => this.tip.setVisible(false));
+      sx += step;
+      return img;
+    };
+
+    service('overview', 'Обзор карты · V', () => s.rig.toggleOverview());
+    service('focus', 'Камера к бойцу · F', () => s.focusCamera());
+    this.soundBtn = service(sfx.muted ? 'mute' : 'sound',
+      () => (sfx.muted ? 'Включить звук · M' : 'Выключить звук · M'), () => this.toggleSound());
+    service('help', 'Управление · F1', () => this.toggleHelp());
+    service('home', 'В меню', () => s.toMenu());
+    if (s.scale.fullscreen.available) {
+      service('fullscreen', 'Полный экран · F11', () => {
+        if (s.scale.isFullscreen) s.scale.stopFullscreen();
+        else s.scale.startFullscreen();
+      });
+    }
+    if (s.match?.mode === 'online') service('link', 'Позвать второго по ссылке', () => s.shareInvite());
+    this.serviceEnd = sx - step + SB;
+
+    this.netText = this.fix(s.add.text(20, sy - 8, '', font(13, 800, UI.accent))
+      .setOrigin(0, 1), DEPTH.HUD + 1);
+
+    // Памятка на подложке: полоса под ней пёстрая, голый текст тонул
+    this.fix(s.add.text(W - 18, H - 16, [
+      'мышь — прицел · ЛКМ держать — сила, отпустить — выстрел',
+      'A/D — ходьба · Enter — прыжок · ПКМ — двигать карту · колесо — зум',
+      'Tab — арсенал · 1–9, Q/E — оружие · F1 — все клавиши',
+    ].join('\n'), font(12, 700, UI.textDim)).setOrigin(1, 1).setAlign('right')
+      .setLineSpacing(3).setPadding(12, 7, 12, 7)
+      .setBackgroundColor('rgba(16,19,26,0.82)'));
+  }
+
+  /** Переключить звук; иконка на кнопке меняется вместе с ним. */
+  toggleSound() {
+    sfx.setMuted(!sfx.muted);
+    if (!this.soundBtn) return;
+    const size = this.soundBtn.plateSize;
+    const key = ensureIcon(this.scene, sfx.muted ? 'mute' : 'sound', Math.round(size * 0.62));
+    this.soundBtn.iconImage?.setTexture(key);
+    if (this.tip?.visible) this.tip.setText(sfx.muted ? 'Включить звук · M' : 'Выключить звук · M');
+  }
+
+  /** Шкала силы над плашкой оружия: на ПК кнопки «Огонь» с дугой нет. */
+  _buildPowerBar() {
+    const sl = this.slot;
+    this.powerBar = { x: sl.x, y: sl.y - 16, w: sl.w, h: 10 };
+    this.chargeGfx = this.fix(this.scene.add.graphics(), DEPTH.HUD + 2);
+  }
+
   _plate(x, y, size, iconName) {
     const s = this.scene;
     const key = `ui-sq-${size}`;
     ensureButton(s, key, size, size, 'normal');
     const img = this.fix(s.add.image(x + size / 2, y + size / 2, key));
     img.setInteractive({ useHandCursor: true });
+    img.plateSize = size;
     const iconKey = ensureIcon(s, iconName, Math.round(size * 0.62));
-    if (iconKey) this.fix(s.add.image(x + size / 2, y + size / 2, iconKey), DEPTH.HUD + 1);
+    if (iconKey) img.iconImage = this.fix(s.add.image(x + size / 2, y + size / 2, iconKey), DEPTH.HUD + 1);
     this.uiRects.push({ x, y, w: size, h: size });
     return img;
   }
@@ -253,6 +336,7 @@ export class Hud {
   _tap(x, y, size, iconName, onTap) {
     const img = this._plate(x, y, size, iconName);
     this._register(img, onTap, null);
+    return img;
   }
 
   /** Круглая кнопка-удержание: то же, что _hold, но формой под «Огонь». */
@@ -310,15 +394,76 @@ export class Hud {
 
   _buildHelp(W, H) {
     const s = this.scene;
+    if (!this.desktop) this._buildTouchService(W, H);
+
+    const lines = this.desktop ? [
+      'мышь — прицел: боец смотрит туда, где курсор',
+      'ЛКМ или Пробел — держать: копится сила; отпустил — выстрел',
+      'W/S или ↑/↓ — точная подстройка угла, прямо на заряде',
+      'A/D или ←/→ — ходьба · Enter — прыжок',
+      'ПКМ или средняя кнопка — тянуть карту · колесо — зум',
+      '1–9 или Q/E — оружие · Tab — арсенал',
+      'F — камера к бойцу · V — обзор карты · M — звук',
+      'F1 или H — эта подсказка · Esc — закрыть',
+    ] : [
+      'ОГОНЬ — держи, набирается сила; отпустил — выстрел',
+      'вверх/вниз слева — угол прицела, правится прямо на заряде',
+      'влево/вправо слева — ходьба, прыжок — круг у «ОГНЯ»',
+      'тянуть фон — камера, два пальца — приблизить',
+      'кнопки слева сверху — обзор карты и возврат к бойцу',
+      'свайп прямо по бойцу — быстрый выстрел',
+      'маленькие кнопки внизу — подсказка, звук, меню, полный экран',
+      ...(s.match?.mode === 'online' ? ['звенья цепи — позвать второго по ссылке'] : []),
+    ];
+    const w = this.desktop ? 620 : 560, h = lines.length * 27 + 96;
+    const x = Math.round((W - w) / 2), y = Math.round((H - h) / 2);
+
+    ensureButton(s, 'ui-help', w, h, 'normal');
+    this.helpPanel = [
+      this.fix(s.add.image(x + w / 2, y + h / 2, 'ui-help'), DEPTH.HUD + 20),
+      this.fix(s.add.text(x + w / 2, y + 18, 'УПРАВЛЕНИЕ', font(19, 800, UI.accent))
+        .setOrigin(0.5, 0), DEPTH.HUD + 21),
+      this.fix(s.add.text(x + w / 2, y + h - 24, this.desktop
+        ? 'клик или любая клавиша — закрыть'
+        : 'коснись экрана, чтобы закрыть',
+        font(12, 700, UI.textDim)).setOrigin(0.5, 0.5), DEPTH.HUD + 21),
+    ];
+    lines.forEach((line, i) => {
+      this.helpPanel.push(this.fix(
+        s.add.text(x + 30, y + 56 + i * 27, `·  ${line}`, font(14, 700)), DEPTH.HUD + 21,
+      ));
+    });
+    this.setHelp(true);
+
+    // Подсказка закрывается любым касанием — искать кнопку не нужно.
+    // Обработчик именованный: при пересборке HUD его надо снять, иначе
+    // старый останется висеть и будет закрывать уже новую подсказку.
+    // Нажатие, которым закрыли подсказку, дальше не идёт: иначе на ПК тот
+    // же клик начинал бы набор силы, а на телефоне — протяжку камеры.
+    this._closeHelp = (pointer) => {
+      if (!this.helpVisible) return;
+      this.setHelp(false);
+      this._swallowDown = pointer?.downTime ?? null;
+    };
+    this.scene.input.on('pointerdown', this._closeHelp);
+  }
+
+  _buildTouchService(W, H) {
+    const s = this.scene;
     // Редкие кнопки собраны в одну полосу между блоком ходьбы и панелью
     // оружия: маленькие, одинаковые, под большой палец не просятся.
     // Полоса начинается за колонкой прицела и обязана кончиться до оружия.
     const SB = 62, step = 70;
     let sx = 328;   // за колонкой прицела: 24 + 3·87 + 2·14 + 16
     const sy = H - SB - 16;
-    const service = (icon, onTap) => { this._tap(sx, sy, SB, icon, onTap); sx += step; };
+    const service = (icon, onTap) => {
+      const img = this._tap(sx, sy, SB, icon, onTap);
+      sx += step;
+      return img;
+    };
 
     service('help', () => this.toggleHelp());
+    this.soundBtn = service(sfx.muted ? 'mute' : 'sound', () => this.toggleSound());
     service('home', () => s.toMenu());
     // Полного экрана нет в Safari на iPhone — там кнопку не показываем
     if (s.scale.fullscreen.available) {
@@ -336,40 +481,6 @@ export class Hud {
     // партии пуста — обычной игре она не мешает
     this.netText = this.fix(s.add.text(328, sy - 8, '', font(13, 800, UI.accent))
       .setOrigin(0, 1), DEPTH.HUD + 1);
-
-    const lines = [
-      'ОГОНЬ — держи, набирается сила; отпустил — выстрел',
-      'вверх/вниз слева — угол прицела, правится прямо на заряде',
-      'влево/вправо слева — ходьба, прыжок — круг у «ОГНЯ»',
-      'тянуть фон — камера, два пальца — приблизить',
-      'кнопки слева сверху — обзор карты и возврат к бойцу',
-      'свайп прямо по бойцу — быстрый выстрел',
-      'маленькие кнопки внизу — подсказка, меню, полный экран',
-      ...(s.match?.mode === 'online' ? ['звенья цепи — позвать второго по ссылке'] : []),
-    ];
-    const w = 560, h = lines.length * 27 + 96;
-    const x = Math.round((W - w) / 2), y = Math.round((H - h) / 2);
-
-    ensureButton(s, 'ui-help', w, h, 'normal');
-    this.helpPanel = [
-      this.fix(s.add.image(x + w / 2, y + h / 2, 'ui-help'), DEPTH.HUD + 20),
-      this.fix(s.add.text(x + w / 2, y + 18, 'УПРАВЛЕНИЕ', font(19, 800, UI.accent))
-        .setOrigin(0.5, 0), DEPTH.HUD + 21),
-      this.fix(s.add.text(x + w / 2, y + h - 24, 'нажми «?» справа сверху, чтобы закрыть',
-        font(12, 700, UI.textDim)).setOrigin(0.5, 0.5), DEPTH.HUD + 21),
-    ];
-    lines.forEach((line, i) => {
-      this.helpPanel.push(this.fix(
-        s.add.text(x + 30, y + 56 + i * 27, `·  ${line}`, font(14, 700)), DEPTH.HUD + 21,
-      ));
-    });
-    this.setHelp(true);
-
-    // Подсказка закрывается любым касанием — искать кнопку не нужно.
-    // Обработчик именованный: при пересборке HUD его надо снять, иначе
-    // старый останется висеть и будет закрывать уже новую подсказку.
-    this._closeHelp = () => { if (this.helpVisible) this.setHelp(false); };
-    this.scene.input.on('pointerdown', this._closeHelp);
   }
 
   setHelp(on) {
@@ -406,6 +517,7 @@ export class Hud {
     const px = pointer.x - CFG.FRAME.left, py = pointer.y - CFG.FRAME.top;
     if (py < TOP_H) return true;
     if (this.helpVisible) return true;   // подсказка перекрывает всё поле
+    if (pointer.isDown && this._swallowDown != null && pointer.downTime === this._swallowDown) return true;
     if (this.inventory?.isOpen) return true;   // и арсенал тоже
     for (const r of this.uiRects) {
       // Круглые кнопки и проверяются по кругу: по прямоугольнику углы
@@ -505,6 +617,13 @@ export class Hud {
     // Свой заряд или заряд соперника в его ход — дуга одна и та же
     const c = Phaser.Math.Clamp(Math.max(scene.charge, scene.remoteCharge ?? 0), 0, 1);
     if (c <= 0) return;
+    const color = c > 0.85 ? 0xff6b6b : c > 0.55 ? 0xffa34d : 0xffd166;
+    if (this.powerBar) {
+      const b = this.powerBar;
+      g.fillStyle(0x11151d, 0.92).fillRoundedRect(b.x - 2, b.y - 2, b.w + 4, b.h + 4, 5);
+      g.fillStyle(color, 1).fillRoundedRect(b.x, b.y, Math.max(4, b.w * c), b.h, 4);
+      return;
+    }
     g.lineStyle(7, c > 0.85 ? 0xff6b6b : c > 0.55 ? 0xffa34d : 0xffd166, 1);
     g.beginPath();
     g.arc(this.chargeCx, this.chargeCy, this.chargeR,
