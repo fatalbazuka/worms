@@ -240,6 +240,7 @@ export class AimController {
   }
 
   _drawTrajectory(sx, sy, vx, vy, weapon) {
+    if (weapon.targeted) { this._drawTarget(vx, vy, weapon); return; }
     const pts = this.simulate(sx, sy, vx, vy, weapon);
     for (let i = 0; i < pts.length; i++) {
       const a = 0.95 - (i / CFG.TRAJ_POINTS) * 0.6;
@@ -247,6 +248,43 @@ export class AimController {
       this.gfx.fillStyle(weapon.color, a);
       this.gfx.fillCircle(pts[i].x, pts[i].y, r);
     }
+  }
+
+  /**
+   * Оружие с целью (авиаудар, телепорт): вместо траектории — метка там,
+   * куда придётся удар или где появится боец. Точку считает само оружие,
+   * той же функцией, что и при выстреле, — метка не врёт.
+   */
+  _drawTarget(vx, vy, weapon) {
+    const w = this.worm;
+    if (!w) return;
+    const t = weapon.targetPoint(this.scene, w, vx, vy);
+    const g = this.gfx;
+    const c = weapon.color;
+    if (weapon.id === 'teleport') {
+      // Силуэт бойца в точке появления; над водой — красный: утонет
+      const col = t.water ? 0xff6b6b : c;
+      g.lineStyle(2, col, 0.9);
+      g.strokeRoundedRect(t.x - CFG.WORM_W / 2, t.y - CFG.WORM_H, CFG.WORM_W, CFG.WORM_H, 8);
+      g.fillStyle(col, 0.18);
+      g.fillRoundedRect(t.x - CFG.WORM_W / 2, t.y - CFG.WORM_H, CFG.WORM_W, CFG.WORM_H, 8);
+      for (let i = 1; i <= 6; i++) {
+        const k = i / 7;
+        g.fillStyle(c, 0.25 + k * 0.5);
+        g.fillCircle(w.x + (t.x - w.x) * k, w.centerY + (t.y - CFG.WORM_H / 2 - w.centerY) * k, 2.2);
+      }
+      return;
+    }
+    // Авиаудар: пунктир сверху до земли и полоса накрытия
+    const top = Math.max(0, this.scene.rig.viewTop);
+    for (let y = top; y < t.y - 8; y += 18) {
+      g.fillStyle(c, 0.55);
+      g.fillRect(t.x - 1, y, 2, 10);
+    }
+    const half = ((weapon.missiles ?? 5) - 1) / 2 * (weapon.spacing ?? 26) + 20;
+    g.lineStyle(3, c, 0.85);
+    g.lineBetween(t.x - half, t.y + 2, t.x + half, t.y + 2);
+    g.strokeCircle(t.x, t.y - 6, 10);
   }
 
   _drawSwipe() {

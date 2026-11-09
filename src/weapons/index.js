@@ -1,4 +1,7 @@
-import { Weapon, ClusterWeapon, PlacedWeapon, InstantWeapon, BatWeapon, MineWeapon } from './Weapon.js';
+import {
+  Weapon, ClusterWeapon, PlacedWeapon, InstantWeapon, BatWeapon, MineWeapon,
+  AirstrikeWeapon, TeleportWeapon,
+} from './Weapon.js';
 
 /**
  * Реестр оружия. Порядок = порядок кнопок в HUD и клавиш 1..N.
@@ -29,6 +32,18 @@ const SHARD = new Weapon({
   spriteKey: 'proj_bomblet',
   projectile: { radius: 3, windScale: 0.4, trail: false },
   explosion: { radius: 18, damageRadius: 34, damage: 14, knockback: 150, shake: 0.002 },
+});
+
+/** Ракета авиаудара: падает почти отвесно, ветер её едва сносит. */
+const AIR_MISSILE = new Weapon({
+  id: 'airmissile',
+  name: 'Ракета',
+  icon: '·',
+  color: 0x9fd2ff,
+  spriteKey: 'proj_airmissile',
+  rotational: true,
+  projectile: { radius: 4, windScale: 0.2, gravityScale: 0.6 },
+  explosion: { radius: 30, damageRadius: 56, damage: 26, knockback: 240, shake: 0.005 },
 });
 
 export const WEAPONS = [
@@ -198,7 +213,40 @@ export const WEAPONS = [
     range: 60,
     explosion: { radius: 0, damageRadius: 46, damage: 24, knockback: 700, shake: 0.004 },
   }),
+
+  // Авиаудар: пять ракет почти отвесно на точку впереди. Сторона — куда
+  // смотрит ствол, дальность — сила заряда. За холмом от него не укрыться.
+  new AirstrikeWeapon({
+    id: 'airstrike',
+    name: 'Авиаудар',
+    icon: '✈',
+    color: 0x9fd2ff,
+    iconKey: 'icon_airstrike',
+    category: 'авиация',
+    startAmmo: 0,
+    crateAmmo: 1,
+    reach: 1500,
+    missiles: 5,
+    spacing: 28,
+    missileWeapon: AIR_MISSILE,
+  }),
+
+  // Телепорт: туда, куда смотрит ствол, на расстояние по силе заряда.
+  // Уйти из-под обстрела, забраться на скалу, встать за спину — и ход
+  // на этом кончается.
+  new TeleportWeapon({
+    id: 'teleport',
+    name: 'Телепорт',
+    icon: '◌',
+    color: 0x9fd2ff,
+    iconKey: 'icon_teleport',
+    category: 'снаряжение',
+    startAmmo: 1,
+    crateAmmo: 1,
+    reach: 900,
+    explosion: { radius: 0, damageRadius: 0, damage: 0, knockback: 0, shake: 0 },
+  }),
 ];
 
 export const WEAPONS_BY_ID = Object.fromEntries(WEAPONS.map((w) => [w.id, w]));
-export { BOMBLET };
+export { BOMBLET, AIR_MISSILE };
