@@ -1,84 +1,78 @@
 # Развёртывание на своём сервере
 
-Игра — чистая статика: HTML, JS-модули, картинки. Сборщика кода нет,
-базы на сервере нет. Сетевая игра идёт через Supabase Realtime (облако),
-рейтинг — через Edge Function в том же Supabase. Твоему серверу нужно
-только отдавать файлы по HTTPS.
+Из чего состоит:
 
-Ниже три способа, от простого к ручному. Для всех нужен домен, который
-смотрит на сервер (A-запись), если нужен HTTPS, — а он нужен: Telegram
-Mini App открывается только по HTTPS, и без него браузеры не дают части
-возможностей (полный экран на некоторых устройствах, буфер обмена для
-ссылки-приглашения).
+| Часть  | Что это                                              | Где живёт                    |
+|--------|------------------------------------------------------|------------------------------|
+| `web`  | nginx: раздаёт игру, проксирует `/api` в `api`       | контейнер, без состояния     |
+| `api`  | аккаунты и рейтинг: Node 22 + SQLite, без зависимостей | контейнер, база в томе `worms_data` |
+| `caddy`| HTTPS: сам получает и продлевает сертификат          | контейнер, сертификаты в томе `caddy_data` |
 
-## Что нужно на сервере
+Сетевые ходы идут через Supabase Realtime (облако, уже прописано в коде),
+серверу для этого ничего не нужно.
 
-* Linux с Docker и плагином compose (`docker compose version`);
-* открытые порты 80 и 443 (для способа 1);
-* домен, указывающий на сервер.
+HTTPS обязателен: Telegram Mini App открывается только по HTTPS, а
+браузеры без него не дают части возможностей.
 
-## Настройки
+## Что нужно
 
-Всё задаётся переменными в `.env` (образец — `.env.example`):
+* Linux-сервер с Docker и плагином compose (`docker compose version`);
+* открытые порты 80 и 443;
+* домен с A-записью на IP сервера.
+
+## Настройки — файл `.env`
+
+Образец — `.env.example`.
 
 | Переменная            | Что это                                                        |
 |-----------------------|----------------------------------------------------------------|
 | `DOMAIN`              | домен для HTTPS, например `worms.example.com`                  |
-| `HTTP_BIND`, `HTTP_PORT` | где слушает контейнер игры (по умолчанию `0.0.0.0:8080`)    |
-| `SUPABASE_URL`        | адрес проекта Supabase для сетевой игры                        |
-| `SUPABASE_ANON_KEY`   | publishable/anon-ключ того же проекта                          |
-| `SUPABASE_LEGACY_KEY` | старый anon-ключ (JWT) — запасной, можно не задавать           |
-| `TELEGRAM_BOT`        | имя бота без `@` — для ссылок-приглашений `t.me/бот?startapp=` |
+| `HTTP_BIND`, `HTTP_PORT` | где слушает контейнер игры; с Caddy — `127.0.0.1` и `8080`  |
+| `TELEGRAM_BOT_TOKEN`  | **секрет**, токен бота от @BotFather: игроки из Telegram входят в аккаунт сами. Уходит только в контейнер `api`. Пусто — вход только по нику и паролю |
+| `TELEGRAM_BOT`        | имя бота без `@` — для ссылок-приглашений `t.me/бот?startapp=`  |
 | `TELEGRAM_APP`        | короткое имя Mini App, если он заведён через `/newapp`         |
-| `WORMS_UI`            | `desktop` или `touch` — навязать интерфейс всем; пусто — по устройству |
+| `SUPABASE_URL`, `SUPABASE_ANON_KEY` | свой проект Supabase для сетевой игры; пусто — прописанный в коде |
+| `WORMS_UI`            | `desktop` или `touch` — навязать интерфейс; пусто — по устройству |
+| `WORMS_API`           | адрес API для браузера; пусто — `/api` на этом же домене       |
 
-Пустая переменная — значение по умолчанию из кода (`src/net/supabase.js`,
-`src/platform/telegram.js`). Значения попадают в `env.js`, который
-отдаётся браузеру, поэтому **ключ `service_role` сюда класть нельзя** —
-только публичный anon/publishable.
+Всё, кроме `TELEGRAM_BOT_TOKEN`, попадает в `env.js`, который видит любой
+игрок, — секретов туда не класть. `env.js` пишется при каждом старте
+контейнера: поменял `.env` — `docker compose up -d`.
 
-`env.js` пишется заново при каждом старте контейнера: поменял `.env` —
-`docker compose up -d`, пересобирать образ не нужно.
-
-## Способ 1. Docker + автоматический HTTPS (рекомендую)
+## Установка (Docker + автоматический HTTPS)
 
 ```bash
 git clone https://github.com/fatalbazuka/worms.git
 cd worms
 cp .env.example .env
-nano .env          # DOMAIN=…, HTTP_BIND=127.0.0.1, при желании TELEGRAM_BOT=…
+nano .env     # DOMAIN=…, HTTP_BIND=127.0.0.1, по желанию TELEGRAM_BOT и TELEGRAM_BOT_TOKEN
 docker compose --profile https up -d --build
 ```
-
-Поднимутся два контейнера: `web` (nginx с игрой) и `caddy` (обратный
-прокси). Caddy сам получит сертификат Let's Encrypt для `DOMAIN` и будет
-его продлевать; сертификаты лежат в томе `caddy_data` и переживают
-перезапуски. `HTTP_BIND=127.0.0.1` прячет порт 8080 от внешнего мира —
-игра доступна только через Caddy.
 
 Проверка:
 
 ```bash
-docker compose ps                     # оба Up, web — healthy
-curl -I https://$DOMAIN/              # 200, text/html
-curl https://$DOMAIN/env.js           # твои настройки
+docker compose --profile https ps          # api, web — healthy; caddy — Up
+curl https://$DOMAIN/api/health            # {"ok":true}
+curl -I https://$DOMAIN/                   # 200, text/html
 ```
 
-## Способ 2. Docker за уже работающим nginx/Traefik
+Открыть `https://ДОМЕН/` → «Аккаунт» → ник и пароль → «Создать аккаунт».
 
-Если на сервере уже есть обратный прокси с сертификатами:
+## Если на сервере уже есть nginx или Traefik
+
+Caddy не нужен: `HTTP_BIND=127.0.0.1`, `HTTP_PORT=8080`, и
 
 ```bash
-cp .env.example .env    # HTTP_BIND=127.0.0.1, HTTP_PORT=8080
-docker compose up -d --build
+docker compose up -d --build        # без --profile https
 ```
 
-И в существующем nginx:
+В своём nginx:
 
 ```nginx
 server {
     server_name worms.example.com;
-    # … твои listen 443 ssl и сертификаты …
+    # … listen 443 ssl и сертификаты …
     location / {
         proxy_pass http://127.0.0.1:8080;
         proxy_set_header Host $host;
@@ -88,64 +82,89 @@ server {
 }
 ```
 
-Без compose то же самое одной командой:
+`/api` контейнер `web` проксирует сам.
+
+## Без Docker
+
+Нужен Node 22.13+ и nginx.
 
 ```bash
-docker build -t worms .
-docker run -d --name worms --restart unless-stopped \
-  -p 127.0.0.1:8080:80 -e TELEGRAM_BOT=имя_бота worms
+sudo useradd --system --home /opt/worms worms
+sudo git clone https://github.com/fatalbazuka/worms.git /opt/worms
+sudo mkdir -p /var/lib/worms && sudo chown worms: /var/lib/worms
+sudo cp /opt/worms/deploy/worms-api.service /etc/systemd/system/
+sudo systemctl enable --now worms-api          # API на 127.0.0.1:3000
+
+cd /opt/worms && sudo npm run build            # игра → dist/
+sudo rsync -a --delete dist/ /var/www/worms/
+sudo cp deploy/nginx-site.conf /etc/nginx/sites-available/worms   # поправить server_name
+sudo ln -s ../sites-available/worms /etc/nginx/sites-enabled/
+sudo certbot --nginx -d worms.example.com
+sudo nginx -t && sudo systemctl reload nginx
 ```
 
-## Способ 3. Без Docker: nginx на самом сервере
+Токен бота — строкой `Environment=TELEGRAM_BOT_TOKEN=…` в юните (или
+`EnvironmentFile=`).
+
+## Копии базы
+
+База — один файл SQLite в томе `worms_data`. Снимок на ходу, без остановки:
 
 ```bash
-npm run build                        # на своей машине; Node 18+
-rsync -a --delete dist/ user@server:/var/www/worms/
+docker compose exec api node server/backup.mjs
+# → /data/backups/worms-<время>.db, хранятся последние 14
 ```
 
-Переменные из таблицы выше можно передать сборке:
-`TELEGRAM_BOT=имя_бота npm run build`. Пример сайта для nginx —
-`deploy/nginx-site.conf`: в нём правильные типы файлов, кэш (код — с
-перепроверкой, Phaser — навсегда) и `frame-ancestors` для Telegram.
-Сертификат — `certbot --nginx -d worms.example.com`.
+Раз в сутки по cron (`crontab -e`):
+
+```
+17 4 * * * cd /путь/к/worms && docker compose exec -T api node server/backup.mjs >/dev/null
+```
+
+Забрать копию с сервера:
+`docker compose cp api:/data/backups ./backups`.
+
+Восстановить из копии (`./backups/worms-…db` на сервере):
+
+```bash
+docker compose stop api
+docker compose run --rm --no-deps -v "$PWD/backups:/restore:ro" api \
+  node server/restore.mjs /restore/worms-<время>.db
+docker compose start api
+```
+
+Скрипт сначала проверяет копию и только потом ставит её на место; прежняя
+база не удаляется, а переименовывается в `worms.db.before-restore-<время>`.
 
 ## Обновление
 
 ```bash
 git pull
-docker compose --profile https up -d --build    # или без --profile, если без Caddy
+docker compose --profile https up -d --build
 ```
 
-Код игры отдаётся с `must-revalidate`, поэтому игроки получат новую версию
-при следующем открытии страницы, без «очистите кэш».
+База и сертификаты в томах — при обновлении не трогаются. Схема базы
+обновляется сама при старте `api` (миграции в `server/db.mjs`). Код игры
+отдаётся с перепроверкой, игроки получат новую версию при следующем
+открытии страницы.
+
+**Не делать** `docker compose down -v` — `-v` удаляет тома вместе с базой.
 
 ## Telegram
 
-Если игра должна жить и как Mini App: в `@BotFather` → Bot Settings →
-Configure Mini App → указать `https://ДОМЕН/`, и вписать имя бота в
-`TELEGRAM_BOT`. Подробнее — раздел «Деплой» в README.
+Если игра живёт и как Mini App: @BotFather → Bot Settings → Configure
+Mini App → `https://ДОМЕН/`; имя бота — в `TELEGRAM_BOT`, токен — в
+`TELEGRAM_BOT_TOKEN`. Тогда игрок из Telegram сразу в аккаунте под своим
+именем, без пароля.
 
-SDK Telegram грузится только когда страница открыта внутри Telegram; в
-обычном браузере его нет вовсе, и игра идёт как обычный сайт.
+## Что внутри
 
-## Supabase
-
-Сетевая игра использует только Broadcast-каналы Realtime — таблиц не
-читает и не пишет. Если хочешь свой проект вместо прописанного в коде:
-создай его на supabase.com, возьми из Settings → API адрес и
-publishable-ключ и впиши в `SUPABASE_URL` / `SUPABASE_ANON_KEY`. Для
-рейтинга дополнительно нужны таблицы из `docs/rating.sql` и функция
-`supabase/functions/worms-result` (`supabase functions deploy worms-result`).
-
-Без Supabase игра работает: быстрая игра и кампания — полностью, онлайн —
-нет.
-
-## Что внутри образа
-
-* `nginx:1.27-alpine`, конфиг — `deploy/nginx.conf`;
-* только файлы для браузера: `index.html`, `env.js`, `manifest.webmanifest`,
-  `src/`, `vendor/`, `assets/` без исходных рипов — около 2,5 МБ;
-* `deploy/40-worms-env.sh` пишет `env.js` при старте;
-* `/healthz` — проверка живости для Docker и мониторинга;
-* gzip, заголовки `Cache-Control` по типу файлов, CSP `frame-ancestors`
-  (встраивание только в Telegram), `nosniff`; скрытые файлы не отдаются.
+* `web` — `nginx:1.27-alpine`, конфиг `deploy/nginx.conf`: gzip, кэш по
+  типу файлов, CSP `frame-ancestors` (встраивание только в Telegram),
+  `nosniff`, скрытые файлы не отдаются, `/healthz`. Внутри только файлы
+  для браузера, около 2,5 МБ.
+* `api` — `node:22-alpine`, работает от пользователя `node`, порт наружу
+  не открыт. Пароли — scrypt, токены в базе — только хэшами, ограничитель
+  перебора паролей и массовой регистрации. `/api/health` — проверка
+  живости.
+* `caddy` — `caddy:2-alpine`, конфиг `deploy/Caddyfile`.

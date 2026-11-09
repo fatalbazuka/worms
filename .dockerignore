@@ -13,3 +13,5 @@ supabase
 .env
 .env.*
 !.env.example
+data
+backups

@@ -10,3 +10,4 @@ tests/
 Dockerfile
 docker-compose.yml
 .env.example
+server/

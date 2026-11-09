@@ -6,7 +6,8 @@ import { quickMatch, campaignMatch, onlineMatch } from '../core/match.js';
 import { randomRoom, copyText } from '../net/transport.js';
 import { Lobby } from '../net/lobby.js';
 import { pendingSession, forgetSession } from '../net/session.js';
-import { syncMe, fetchTop, myRank } from '../net/server.js';
+import { syncMe, fetchTop, myRank, loggedIn, onAccountChange } from '../net/server.js';
+import { openAccountDialog, closeAccountDialog } from '../ui/AccountDialog.js';
 import { makeTransport } from '../net/connect.js';
 import { player, setName } from '../platform/player.js';
 import {
@@ -72,9 +73,16 @@ export default class MenuScene extends Phaser.Scene {
     const offHome = onHomeScreenChange(() => {
       if (this.section === this.showRoot) this.showRoot();
     });
+    // Вошли, вышли, сменили ник, сервер прислал свежий рейтинг — разделы с
+    // профилем перерисовываются
+    const offAccount = onAccountChange(() => {
+      if ([this.showRoot, this.showOnline, this.showTop].includes(this.section)) this.section.call(this);
+    });
     this.events.once('shutdown', () => {
       this.game.events.off('worms-resize', this._relayout, this);
       offHome();
+      offAccount();
+      closeAccountDialog();
     });
   }
 
@@ -238,14 +246,24 @@ export default class MenuScene extends Phaser.Scene {
     this._button('online', cx, y0 + step * 2, 'Онлайн', 'игра вдвоём по ссылке',
       () => this.showOnline());
 
+    // Аккаунт: ник и пароль, нужен для общего рейтинга
+    const me = player();
+    if (loggedIn()) {
+      this._button('account', cx, y0 + step * 3, me.name,
+        `рейтинг ${me.rating}${me.rank ? ` · место ${me.rank}` : ''} · профиль`, () => this.openAccount());
+    } else {
+      this._button('account', cx, y0 + step * 3, 'Аккаунт',
+        'войти или создать — для общего рейтинга', () => this.openAccount());
+    }
+
     // Партия оборвалась (Telegram перезапустился, погас экран), а мы
     // открылись без ссылки: предлагаем вернуться, пока соперник ждёт
     const pending = pendingSession();
     if (pending && Date.now() - pending.at < 15 * 60 * 1000) {
-      this._button('resume', cx, y0 + step * 3, 'Вернуться в бой',
+      this._button('resume', cx, y0 + step * 4, 'Вернуться в бой',
         `комната ${pending.room} · соперник ждёт`, () => this.startOnline(pending.room),
         { variant: 'primary' });
-      this._button('resume-no', cx + 300, y0 + step * 3, '✕', '',
+      this._button('resume-no', cx + 300, y0 + step * 4, '✕', '',
         () => { forgetSession(pending.room); this.showRoot(); }, { w: 56, h: 56 });
     }
 
@@ -378,13 +396,20 @@ export default class MenuScene extends Phaser.Scene {
 
     this._leagueBar(cx, 132, me.rating);
 
-    // Профиль: имя можно поменять, если игра открыта не в Telegram —
-    // там имя и так своё, и подменять его незачем.
-    if (!me.telegram) {
-      this._button('rename', cx, 176, 'Сменить имя', '', () => {
+    // Профиль. С аккаунтом — окно профиля (там и смена ника); без него —
+    // вход и смена имени, которое увидит соперник. В Telegram имя своё.
+    if (loggedIn()) {
+      this._button('profile', cx, 176, `${me.name} · профиль`, '', () => this.openAccount(), { w: 300, h: 46 });
+    } else if (me.telegram) {
+      this._button('login', cx, 176, 'Войти в аккаунт', '', () => this.openAccount(),
+        { w: 256, h: 46, variant: 'primary' });
+    } else {
+      this._button('login', cx - 136, 176, 'Войти в аккаунт', '', () => this.openAccount(),
+        { w: 256, h: 46, variant: 'primary' });
+      this._button('rename', cx + 136, 176, 'Сменить имя', '', () => {
         const v = globalThis.prompt?.('Имя в бою:', me.name);
         if (v) { setName(v); this.showOnline(); }
-      }, { w: 260, h: 46 });
+      }, { w: 256, h: 46 });
     }
     this.items.push(this.add.text(cx, 212,
       `побед ${me.wins} · поражений ${me.losses}`, font(12, 700, UI.textDim))
@@ -409,8 +434,8 @@ export default class MenuScene extends Phaser.Scene {
   }
 
   /**
-   * Таблица лидеров с сервера. Видна всем, но попасть в неё можно только
-   * из Telegram: сервер знает лишь тех, чью личность подтвердил.
+   * Таблица лидеров с сервера. Видна всем, попасть в неё — сыграть бой по
+   * сети с аккаунтом против соперника с аккаунтом.
    */
   showTop() {
     this.section = this.showTop;
@@ -420,6 +445,9 @@ export default class MenuScene extends Phaser.Scene {
     const note = this.add.text(cx, 150, 'загружаю…', font(14, 700, UI.textDim)).setOrigin(0.5, 0);
     this.items.push(note);
     this._back(() => this.showOnline());
+    if (!loggedIn()) {
+      this._button('login', this.W - 130, this.bottomY(46), 'Войти', '', () => this.openAccount(), { w: 200, h: 50 });
+    }
 
     fetchTop(20).then((rows) => {
       if (this.section !== this.showTop) return;
@@ -438,7 +466,7 @@ export default class MenuScene extends Phaser.Scene {
     const x0 = cx - 300, top = 146, step = 32;
     const maxRows = Math.max(3, Math.floor((this.bottomY(70) - top) / step));
     if (!rows.length) {
-      this.items.push(this.add.text(cx, top, 'пока пусто — сыграй первый бой из Telegram',
+      this.items.push(this.add.text(cx, top, 'пока пусто — сыграй первый бой по сети с аккаунтом',
         font(14, 700, UI.textDim)).setOrigin(0.5, 0));
       return;
     }
@@ -454,9 +482,14 @@ export default class MenuScene extends Phaser.Scene {
         font(13, 700, UI.textDim)).setOrigin(1, 0));
     });
     const rank = myRank(rows);
-    const foot = rank ? `ты на ${rank} месте` : me.telegram
-      ? 'тебя пока нет в таблице — доиграй бой' : 'в таблицу попадают игроки из Telegram';
+    const foot = rank ? `ты на ${rank} месте` : loggedIn()
+      ? 'тебя пока нет в таблице — доиграй бой по сети' : 'в таблицу попадают игроки с аккаунтом';
     this.items.push(this.add.text(cx, this.bottomY(74), foot, font(12, 700, UI.textDim)).setOrigin(0.5, 1));
+  }
+
+  /** Окно аккаунта: вход и регистрация или профиль. */
+  openAccount() {
+    openAccountDialog({ onTop: () => this.showTop() });
   }
 
   /** Своя открытая игра: комната случайная, стол виден в лобби. */

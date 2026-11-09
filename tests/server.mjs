@@ -1,15 +1,14 @@
 /**
- * Сервер рейтинга без сервера: чистые части Edge Function под Node.
+ * Чистые части сервера рейтинга: подпись Telegram и Эло.
  *
  *   node tests/server.mjs
  *
- * Проверка подписи Telegram (verify.js) и Эло (elo.js) — те же файлы, что
- * уходят в Deno; здесь они гоняются на WebCrypto Node. Сервер целиком тут
- * не поднимается: сеть из тестов закрыта, а логику отчётов держат простые
- * правила, которые проверяются глазами в index.ts.
+ * Проверка подписи Telegram (server/lib/telegram.js) и Эло
+ * (server/lib/elo.js). Сервер целиком, с базой и HTTP, проверяет
+ * tests/api.mjs.
  */
-import { verifyInitData, signInitData, displayName } from '../supabase/functions/worms-result/verify.js';
-import { eloDelta, settle, MIN_RATING } from '../supabase/functions/worms-result/elo.js';
+import { verifyInitData, signInitData, displayName } from '../server/lib/telegram.js';
+import { eloDelta, settle, MIN_RATING } from '../server/lib/elo.js';
 import { eloDelta as clientElo } from '../src/platform/player.js';
 
 const failures = [];

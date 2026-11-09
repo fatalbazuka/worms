@@ -10,3 +10,7 @@ node_modules/
 dist/
 .env
 __pycache__/
+
+# База для локальной разработки
+data/
+backups/

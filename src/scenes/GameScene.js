@@ -638,10 +638,14 @@ export default class GameScene extends Phaser.Scene {
   /**
    * Итог — серверу. Локальный расчёт уже на экране как предварительный;
    * ответ сервера дописывает строку: засчитано, ждём соперника или бой без
-   * рейтинга. Только в Telegram: анонима сервер подтвердить не может.
+   * рейтинга. Только для вошедших в аккаунт: анонима сервер не знает.
    */
   _reportToServer(won, ratingText, leagueText) {
-    if (!serverAvailable() || !this.net?.opponent?.id) return;
+    if (!this.net?.opponent?.id) return;
+    if (!serverAvailable()) {
+      ratingText.setText(`${ratingText.text} · без аккаунта бой не в рейтинге`);
+      return;
+    }
     const me = player();
     const before = me.rating;
     ratingText.setText(`${ratingText.text} · отправляю…`);
@@ -656,7 +660,7 @@ export default class GameScene extends Phaser.Scene {
         } else if (res?.status === 'pending') {
           ratingText.setText(`${base} · ждём отчёт соперника`);
         } else if (res?.status === 'unrated') {
-          ratingText.setText(`${base} · без рейтинга: соперник не из Telegram`);
+          ratingText.setText(`${base} · без рейтинга: у соперника нет аккаунта`);
         } else if (res?.status === 'disputed') {
           ratingText.setText(`${base} · итоги разошлись, бой не засчитан`);
         } else {

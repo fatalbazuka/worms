@@ -8,7 +8,9 @@
  *   rsync -a --delete dist/ user@server:/var/www/worms/
  *
  * Переменные те же, что у контейнера: SUPABASE_URL, SUPABASE_ANON_KEY,
- * SUPABASE_LEGACY_KEY, TELEGRAM_BOT, TELEGRAM_APP, WORMS_UI.
+ * SUPABASE_LEGACY_KEY, TELEGRAM_BOT, TELEGRAM_APP, WORMS_UI, WORMS_API.
+ * Аккаунты и рейтинг — отдельный процесс: node server/index.mjs
+ * (systemd-юнит в deploy/worms-api.service).
  */
 import { cpSync, mkdirSync, rmSync, writeFileSync, existsSync } from 'node:fs';
 import { dirname, join, relative, sep } from 'node:path';
@@ -46,8 +48,9 @@ const pick = (pairs) => pairs
 const net = pick([['url', env.SUPABASE_URL], ['anonKey', env.SUPABASE_ANON_KEY],
   ['legacyKey', env.SUPABASE_LEGACY_KEY]]);
 const tg = pick([['bot', env.TELEGRAM_BOT], ['app', env.TELEGRAM_APP]]);
-const ui = ['desktop', 'touch'].includes(env.WORMS_UI)
-  ? `window.WORMS_UI = window.WORMS_UI || ${str(env.WORMS_UI)};\n` : '';
+const ui = (['desktop', 'touch'].includes(env.WORMS_UI)
+  ? `window.WORMS_UI = window.WORMS_UI || ${str(env.WORMS_UI)};\n` : '')
+  + (env.WORMS_API ? `window.WORMS_API = window.WORMS_API || ${str(env.WORMS_API)};\n` : '');
 
 writeFileSync(join(out, 'env.js'), [
   `// Сгенерировано npm run build (${new Date().toISOString()}).`,

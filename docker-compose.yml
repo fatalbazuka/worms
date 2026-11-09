@@ -6,10 +6,12 @@
 #
 # Подробно — DEPLOY.md.
 services:
+  # Игра: nginx раздаёт статику и проксирует /api в контейнер api
   web:
     build: .
     image: worms:latest
     restart: unless-stopped
+    depends_on: [api]
     environment:
       SUPABASE_URL: ${SUPABASE_URL:-}
       SUPABASE_ANON_KEY: ${SUPABASE_ANON_KEY:-}
@@ -17,10 +19,25 @@ services:
       TELEGRAM_BOT: ${TELEGRAM_BOT:-}
       TELEGRAM_APP: ${TELEGRAM_APP:-}
       WORMS_UI: ${WORMS_UI:-}
+      WORMS_API: ${WORMS_API:-}
     # Порт наружу. С профилем https лучше оставить 127.0.0.1:8080:80 —
     # тогда игра доступна только через Caddy.
     ports:
       - "${HTTP_BIND:-0.0.0.0}:${HTTP_PORT:-8080}:80"
+
+  # Аккаунты и рейтинг: Node + SQLite. База — в томе worms_data, она
+  # переживает пересборку и обновления. Наружу порт не открыт: только
+  # через nginx по /api.
+  api:
+    build:
+      context: .
+      dockerfile: server/Dockerfile
+    image: worms-api:latest
+    restart: unless-stopped
+    environment:
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+    volumes:
+      - worms_data:/data
 
   # Обратный прокси с автоматическим сертификатом. Нужен домен, который
   # смотрит на этот сервер, и открытые порты 80 и 443. Без HTTPS Telegram
@@ -43,5 +60,6 @@ services:
       - caddy_config:/config
 
 volumes:
+  worms_data:
   caddy_data:
   caddy_config:

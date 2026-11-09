@@ -19,6 +19,7 @@ js() { printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e "s/'/\\\\'/g"; }
   [ -n "${TELEGRAM_BOT:-}" ] && echo "  bot: '$(js "$TELEGRAM_BOT")',"
   [ -n "${TELEGRAM_APP:-}" ] && echo "  app: '$(js "$TELEGRAM_APP")',"
   echo "}, window.WORMS_TG || {});"
+  [ -n "${WORMS_API:-}" ] && echo "window.WORMS_API = window.WORMS_API || '$(js "$WORMS_API")';"
   case "${WORMS_UI:-}" in
     desktop|touch) echo "window.WORMS_UI = window.WORMS_UI || '$WORMS_UI';" ;;
   esac
