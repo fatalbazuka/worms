@@ -56,6 +56,7 @@ export function campaignMatch(missionId) {
     missionId: m.id,
     seed: m.seed,
     biome: m.biome,
+    shape: m.shape ?? 'island',
     teams: m.teams.map((t) => ({ ...t })),
     rules: { ...m.rules },
   };
