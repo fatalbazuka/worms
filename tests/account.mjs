@@ -114,6 +114,23 @@ const top = await page.waitForFunction(() => {
 }, null, { timeout: 5000 }).then(() => true).catch(() => false);
 check('таблица лидеров открывается и грузится с сервера', top && !(await page.$('.acc-shade')));
 
+// Вход по коду — тоже HTML-окно, а не window.prompt
+await page.evaluate(() => window.__WORMS__.scene.getScene('Menu').askCode());
+await page.waitForSelector('#ask-input');
+await page.keyboard.type('ab');
+await page.keyboard.press('Enter');
+await page.waitForFunction(() => document.querySelector('.acc-err')?.textContent, null, { timeout: 5000 });
+check('короткий код — подсказка, окно не закрылось', /от 4 до 10/.test(await page.textContent('.acc-err')));
+await page.fill('#ask-input', '');
+await page.keyboard.type('zx12ab');
+check('код печатается заглавными', (await page.inputValue('#ask-input')) === 'ZX12AB');
+await page.keyboard.press('Enter');
+const room = await page.waitForFunction(() => {
+  const g = window.__WORMS__;
+  return g.scene.isActive('Game') ? g.scene.getScene('Game').room : null;
+}, null, { timeout: 20000 }).then((h) => h.jsonValue()).catch(() => null);
+check('по коду открывается та самая комната', room === 'ZX12AB', String(room));
+
 check('нет ошибок в консоли', errors.length === 0, errors.slice(0, 3).join(' | '));
 await browser.close();
 if (failures.length) {

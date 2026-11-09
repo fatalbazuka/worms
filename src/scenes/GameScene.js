@@ -29,6 +29,7 @@ import { reportResult, serverAvailable } from '../net/server.js';
 import { leagueOf, nextLeague, toNextLeague } from '../platform/league.js';
 import { OffscreenMarkers } from '../ui/OffscreenMarkers.js';
 import { CameraRig } from '../ui/CameraRig.js';
+import { askText, closeOverlay } from '../ui/Overlay.js';
 import { isDesktop } from '../platform/device.js';
 
 export default class GameScene extends Phaser.Scene {
@@ -269,17 +270,21 @@ export default class GameScene extends Phaser.Scene {
       this.fx.banner(`ссылка скопирована · комната ${this.room}`, '#ffd166', 2600);
       return link;
     }
-    const answer = (globalThis.prompt?.('Код комнаты друга (пусто — создать свою):', '') ?? '')
-      .trim().toUpperCase();
-    const room = answer || randomRoom();
-    const link = this.inviteLink(room);
-    copyText(link);
-    // Перезаход: сессия поднимается на старте сцены. Адрес всегда сайта:
-    // t.me-ссылка внутри игры никуда не ведёт
-    const url = new URL(location.href);
-    url.searchParams.set('room', room);
-    location.href = url.toString();
-    return link;
+    askText({
+      title: 'Игра вдвоём', label: 'Код комнаты друга', placeholder: 'пусто — создать свою',
+      maxLength: 10, upper: true, okText: 'Дальше',
+      validate: (v) => (!v || /^[A-Z0-9]{4,10}$/.test(v) ? null : 'код — от 4 до 10 букв и цифр'),
+    }).then((answer) => {
+      if (answer === null) return;
+      const room = answer || randomRoom();
+      copyText(this.inviteLink(room));
+      // Перезаход: сессия поднимается на старте сцены. Адрес всегда сайта:
+      // t.me-ссылка внутри игры никуда не ведёт
+      const url = new URL(location.href);
+      url.searchParams.set('room', room);
+      location.href = url.toString();
+    });
+    return null;
   }
 
   // ------------------------------------------------------------- построение
@@ -1211,6 +1216,7 @@ export default class GameScene extends Phaser.Scene {
     this.game.events.off('worms-resize', this.relayout, this);
     globalThis.document?.body.classList.remove('in-battle');
     setBattle(false);
+    closeOverlay();
     this.input?.setDefaultCursor?.('default');
     this.mouseFire = false;
     this.mines = [];

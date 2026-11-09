@@ -9,7 +9,8 @@ import { isCasualRoom } from '../net/rooms.js';
 import { Lobby } from '../net/lobby.js';
 import { pendingSession, forgetSession } from '../net/session.js';
 import { syncMe, fetchTop, myRank, loggedIn, onAccountChange } from '../net/server.js';
-import { openAccountDialog, closeAccountDialog } from '../ui/AccountDialog.js';
+import { openAccountDialog } from '../ui/AccountDialog.js';
+import { askText, closeOverlay } from '../ui/Overlay.js';
 import { makeTransport } from '../net/connect.js';
 import { player, setName } from '../platform/player.js';
 import {
@@ -84,7 +85,7 @@ export default class MenuScene extends Phaser.Scene {
       this.game.events.off('worms-resize', this._relayout, this);
       offHome();
       offAccount();
-      closeAccountDialog();
+      closeOverlay();
     });
   }
 
@@ -447,8 +448,15 @@ export default class MenuScene extends Phaser.Scene {
       this._button('login', cx - 106, 186, 'Войти в аккаунт', '', () => this.openAccount(),
         { w: 208, h: 44, variant: 'primary' });
       this._button('rename', cx + 106, 186, 'Сменить имя', '', () => {
-        const v = globalThis.prompt?.('Имя в бою:', me.name);
-        if (v) { setName(v); this.showOnline(); }
+        askText({
+          title: 'Имя в бою', value: me.name, maxLength: 20, okText: 'Сохранить',
+          note: 'Так тебя увидит соперник. Чтобы имя и рейтинг были закреплены за тобой, '
+            + 'заведи аккаунт — это ник и пароль.',
+          validate: (v) => (v.length >= 2 ? null : 'хотя бы две буквы'),
+        }).then((v) => {
+          if (v) setName(v);
+          if (this.section === this.showOnline) this.showOnline();
+        });
       }, { w: 208, h: 44 });
     }
     this.items.push(this.add.text(cx, 214,
@@ -710,9 +718,12 @@ export default class MenuScene extends Phaser.Scene {
   }
 
   askCode() {
-    const raw = globalThis.prompt?.('Код комнаты:', '') ?? '';
-    const code = raw.trim().toUpperCase();
-    if (code) this.startOnline(code);
+    askText({
+      title: 'Войти по коду', label: 'Код комнаты', placeholder: 'например, K7QX2M',
+      maxLength: 10, upper: true, okText: 'Войти',
+      note: 'Код показывает тот, кто создал игру. Ссылка-приглашение работает и без него.',
+      validate: (v) => (/^[A-Z0-9]{4,10}$/.test(v) ? null : 'код — от 4 до 10 букв и цифр'),
+    }).then((code) => { if (code) this.startOnline(code); });
   }
 
   /**

@@ -211,6 +211,9 @@ export class AimController {
       o.x + d.x * (CFG.AIM_RAY_LEN - 12), o.y + d.y * (CFG.AIM_RAY_LEN - 12));
 
     if (!(charge > 0)) { this.info.setVisible(false); return; }
+    // Пошёл заряд — стрелка «чей ход» своё сказала, а над головой теперь
+    // подпись угла и силы: вдвоём они налезали друг на друга
+    if (this.worm?.marker?.visible) this.worm.setActiveMarker(false);
 
     const speed = charge * CFG.AIM_MAX_POWER;
     const sx = o.x + d.x * CFG.MUZZLE_OFFSET;
@@ -289,6 +292,7 @@ export class AimController {
 
   _drawSwipe() {
     if (this.crosshair) this.crosshair.setVisible(false);
+    if (this.worm?.marker?.visible) this.worm.setActiveMarker(false);
     const shot = this.computeShot();
     if (!shot) { this.info.setVisible(false); return; }
 

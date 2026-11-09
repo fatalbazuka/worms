@@ -75,23 +75,31 @@ page.on('console', (m) => {
   const k = t.includes('websocket?apikey=') && t.match(/apikey=([^&]+)/);
   if (k) attempts.push(k[1].slice(0, 16));
 });
+// Сами открытия сокета: их видно, даже когда сеть не пускает и соединение
+// молча висит, — по консоли тогда не понять, пытался ли клиент вообще
+const sockets = [];
+page.on('websocket', (ws) => sockets.push(ws.url()));
 
 await page.goto(`${BASE}/?biome=forest&room=WIRING`, { waitUntil: 'domcontentloaded' });
 await page.waitForFunction(() => window.__WORMS__?.scene.getScene('Game')?.turn?.activeWorm && !window.__WORMS__.scene.getScene('Game').landing(),
   null, { timeout: 40000 });
 await page.waitForTimeout(9000);
 const early = attempts.length;
+const earlySockets = sockets.length;
 await page.waitForTimeout(9000);
 
 check('клиент supabase-js загружен',
   await page.evaluate(() => !!globalThis.supabase?.createClient));
 check('клиент взят локально, а не с CDN', external.length === 0,
   external.slice(0, 2).join(', ') || 'внешних загрузок клиента нет');
-check('адрес проекта подставлен в сокет', attempts.length > 0 || await page.evaluate(
-  () => window.__WORMS__.scene.getScene('Game').net?.connected === true),
-  attempts.join(', ') || 'подключились с первой попытки');
-check('после отказа нет шторма переподключений', attempts.length === early,
-  `${early} → ${attempts.length}`);
+const projectHost = (cfgSrc.match(/url:\s*'https:\/\/([^']+)'/) ?? [])[1] ?? '';
+const realtime = sockets.filter((u) => u.includes('/realtime/v1/websocket'));
+check('адрес проекта подставлен в сокет',
+  realtime.length > 0 && realtime.every((u) => u.includes(projectHost) && /apikey=/.test(u)),
+  realtime[0]?.replace(/apikey=[^&]+/, 'apikey=…') ?? `сокетов к Realtime нет (всего ${sockets.length})`);
+check('после отказа нет шторма переподключений',
+  attempts.length === early && realtime.length <= Math.max(earlySockets, 1) + 2,
+  `ошибок ${early} → ${attempts.length}, сокетов ${earlySockets} → ${sockets.length}`);
 
 const state = await page.evaluate(() => {
   const s = window.__WORMS__.scene.getScene('Game');
