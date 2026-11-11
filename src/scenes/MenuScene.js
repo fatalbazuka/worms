@@ -488,34 +488,40 @@ export default class MenuScene extends Phaser.Scene {
    * Таблица лидеров с сервера. Видна всем, попасть в неё — сыграть бой по
    * сети с аккаунтом против соперника с аккаунтом.
    */
-  showTop() {
+  showTop(kind = this.topKind ?? 'rating') {
     this.section = this.showTop;
+    this.topKind = kind;
     this._clear();
-    this._title('Топ игроков', 'рейтинг по подтверждённым боям');
+    this._title('Топ игроков', kind === 'tourney' ? 'по победам в турнирах' : 'рейтинг по подтверждённым боям');
     const cx = this.W / 2;
-    const note = this.add.text(cx, 150, 'загружаю…', font(14, 700, UI.textDim)).setOrigin(0.5, 0);
+    const tab = (key, label, k) => this._button(key, cx + (k === 'tourney' ? 106 : -106), 160, label, '',
+      () => this.showTop(k), { w: 208, h: 40, variant: kind === k ? 'active' : 'normal' });
+    tab('top-rating', 'Рейтинг', 'rating');
+    tab('top-tourney', 'Турниры', 'tourney');
+    const note = this.add.text(cx, 204, 'загружаю…', font(14, 700, UI.textDim)).setOrigin(0.5, 0);
     this.items.push(note);
     this._back(() => this.showOnline());
 
-    fetchTop(20).then((rows) => {
-      if (this.section !== this.showTop) return;
+    fetchTop(20, kind).then((rows) => {
+      if (this.section !== this.showTop || this.topKind !== kind) return;
       this.topRows = rows;
       note.destroy();
-      this._renderTop(rows);
+      this._renderTop(rows, kind);
     }).catch((e) => {
       if (this.section !== this.showTop) return;
       note.setText(`сервер недоступен: ${e.message}`);
     });
   }
 
-  _renderTop(rows) {
+  _renderTop(rows, kind = 'rating') {
     const cx = this.W / 2;
     const me = player();
-    const x0 = cx - 300, top = 146, step = 32;
+    const x0 = cx - 300, top = 200, step = 32;
     const maxRows = Math.max(3, Math.floor((this.bottomY(70) - top) / step));
     if (!rows.length) {
-      this.items.push(this.add.text(cx, top, 'пока пусто — сыграй первый бой по сети на рейтинг',
-        font(14, 700, UI.textDim)).setOrigin(0.5, 0));
+      this.items.push(this.add.text(cx, top, kind === 'tourney'
+        ? 'пока ни одного чемпиона — турниры впереди' : 'пока пусто — сыграй первый бой по сети на рейтинг',
+      font(14, 700, UI.textDim)).setOrigin(0.5, 0));
       return;
     }
     rows.slice(0, maxRows).forEach((r, i) => {
@@ -526,16 +532,16 @@ export default class MenuScene extends Phaser.Scene {
       this.items.push(this.add.text(x0 + 40, y, r.name, font(15, 800, color)).setOrigin(0, 0));
       this.items.push(this.add.text(x0 + 330, y, leagueLabel(r.rating),
         font(13, 700, leagueOf(r.rating).text)).setOrigin(0, 0));
-      this.items.push(this.add.text(x0 + 600, y, `${r.wins}–${r.losses}`,
-        font(13, 700, UI.textDim)).setOrigin(1, 0));
+      this.items.push(this.add.text(x0 + 600, y, kind === 'tourney' ? `🏆 ${r.tourney_wins}` : `${r.wins}–${r.losses}`,
+        font(13, 700, kind === 'tourney' ? UI.accent : UI.textDim)).setOrigin(1, 0));
     });
     const rank = myRank(rows);
-    const foot = rank ? `ты на ${rank} месте` : loggedIn()
-      ? 'тебя пока нет в таблице — доиграй бой по сети' : 'открой игру в Telegram, чтобы попасть в таблицу';
+    const foot = rank ? `ты на ${rank} месте` : !loggedIn() ? 'открой игру в Telegram, чтобы попасть в таблицу'
+      : kind === 'tourney' ? 'выиграй турнир — и ты здесь' : 'тебя пока нет в таблице — доиграй бой по сети';
     this.items.push(this.add.text(cx, this.bottomY(74), foot, font(12, 700, UI.textDim)).setOrigin(0.5, 1));
   }
 
-  /** Окно аккаунта: вход и регистрация или профиль. */
+  /** Личный кабинет. */
   openAccount() {
     openAccountDialog({ onTop: () => this.showTop(), onTours: () => this.openTournaments() });
   }
