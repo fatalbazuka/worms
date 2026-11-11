@@ -1,120 +1,86 @@
 #!/usr/bin/env node
 /**
- * Сервер аккаунтов и рейтинга. Node 22+, без единой зависимости: HTTP —
- * node:http, база — node:sqlite, пароли — scrypt из node:crypto.
+ * Сервер игры: аккаунты Telegram, рейтинг, турниры, бот и звёзды.
+ * Node 22+, без единой зависимости: HTTP — node:http, база — node:sqlite.
  *
- *   PORT=3000 DB_PATH=./data/worms.db node server/index.mjs
+ *   PORT=3000 DB_PATH=./data/worms.db TELEGRAM_BOT_TOKEN=… node server/index.mjs
  *
  * Отдаёт /api/*. Если задан STATIC_DIR, заодно раздаёт игру — так можно
  * обойтись одним процессом без nginx (и так гоняются тесты).
  *
  * Переменные:
- *   PORT                — порт (3000; 0 — любой свободный)
- *   HOST                — адрес (0.0.0.0)
+ *   PORT, HOST          — где слушать (3000, 0.0.0.0)
  *   DB_PATH             — файл базы (./data/worms.db)
- *   TELEGRAM_BOT_TOKEN  — токен бота: вход из Telegram без пароля
+ *   TELEGRAM_BOT_TOKEN  — токен бота: вход в игру, команды, звёзды
+ *   ADMIN_TG_IDS        — Telegram ID админов через запятую: турниры, возвраты
+ *   PUBLIC_URL          — адрес игры снаружи (https://домен/worms): вебхук и
+ *                         кнопки «Играть»; без него бот не настраивается
+ *   BOT_TZ              — часовой пояс для «/newtour 20:00» (Europe/Moscow)
+ *   TELEGRAM_API_BASE   — адрес Bot API (для тестов — поддельный Telegram)
+ *   BOT_WEBHOOK_SECRET  — свой секрет вебхука (по умолчанию выводится из токена)
  *   TRUST_PROXY         — 1, если впереди nginx/Caddy: IP клиента из X-Real-IP
  *   STATIC_DIR          — папка с игрой, если раздавать её этим же процессом
  *
  * API (JSON; вход — заголовок Authorization: Bearer <токен>):
- *   POST /api/register {name, password}       → {token, player}
- *   POST /api/login    {name, password}       → {token, player}
- *   POST /api/telegram {initData}             → {token, player}
- *   GET  /api/me                              → {player}
- *   POST /api/rename   {name}                 → {player}
- *   POST /api/logout                          → {ok}
- *   POST /api/result   {room, seed, opponent, won} → {status, delta?, player}
- *   GET  /api/top?limit=20                    → {players: [...]}
- *   GET  /api/health                          → {ok}
+ *   POST /api/telegram {initData}         → {token, player}  вход по подписи Telegram
+ *   GET  /api/me                          → {player}
+ *   GET  /api/me/history                  → {items}          бои: дуэли и турниры
+ *   POST /api/result {room, seed, opponent, won} → итог боя (дуэль или турнир)
+ *   GET  /api/top?kind=rating|tourney     → {players}
+ *   GET  /api/tournaments                 → {items}
+ *   GET  /api/tournaments/:id             → турнир, сетка, мой матч
+ *   POST /api/tournaments/:id/join        → {ok} | {invoice} (платный)
+ *   POST /api/tournaments/:id/leave       → {ok}
+ *   POST /api/tournaments/:id/start       → {ok}             только админ
+ *   POST /api/stars/donate {amount}       → {invoice}
+ *   POST /api/bot/webhook                 ← обновления Telegram
+ *   GET  /api/config, /api/health
  */
 import { createServer } from 'node:http';
-import { readFile, stat } from 'node:fs/promises';
-import { extname, join, normalize, resolve, sep } from 'node:path';
+import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { openDb, tx } from './db.mjs';
-import {
-  cleanName, checkPassword, hashPassword, verifyPassword, DUMMY_HASH,
-  newToken, tokenHash, newPlayerId,
-} from './lib/accounts.js';
-import { verifyInitData, displayName } from './lib/telegram.js';
-import { settle, START_RATING } from './lib/elo.js';
+import { newToken, tokenHash } from './lib/accounts.js';
+import { verifyInitData } from './lib/telegram.js';
+import { settle } from './lib/elo.js';
 import { isCasualRoom } from './lib/rooms.js';
+import { HttpError, limiter, send, readJson, clientIp, serveStatic } from './http.mjs';
+import { createTelegramApi } from './tgapi.mjs';
+import { createPlayers } from './players.mjs';
+import { createTournaments } from './tournaments.mjs';
+import { createBot, webhookSecret } from './bot.mjs';
 
-const BODY_LIMIT = 16 * 1024;
-
-class HttpError extends Error {
-  constructor(status, message, extra = {}) { super(message); this.status = status; this.extra = extra; }
-}
-
-// ------------------------------------------------------------ ограничитель
-
-/**
- * Не больше n событий за окно с одного адреса — от перебора паролей и
- * массовой регистрации. allow() только спрашивает, hit() засчитывает:
- * регистрация считается удачная, вход — неудачный. В памяти процесса:
- * сервер один, этого достаточно.
- */
-function limiter(n, windowMs) {
-  const hits = new Map();
-  const fresh = (key, now) => {
-    const h = hits.get(key);
-    return h && now - h.start <= windowMs ? h : null;
-  };
-  return {
-    allow(key) { return (fresh(key, Date.now())?.count ?? 0) < n; },
-    hit(key) {
-      const now = Date.now();
-      const h = fresh(key, now);
-      if (h) { h.count += 1; return h.count <= n; }
-      hits.set(key, { start: now, count: 1 });
-      if (hits.size > 50000) for (const [k, v] of hits) if (now - v.start > windowMs) hits.delete(k);
-      return true;
-    },
-  };
-}
-
-// --------------------------------------------------------------- приложение
-
-export function createApp({ db, botToken = '', trustProxy = false, staticDir = null, now = () => Date.now() }) {
-  const limits = {
-    register: limiter(10, 60 * 60_000),
-    login: limiter(20, 10 * 60_000),
-    write: limiter(120, 60_000),
-  };
+export function createApp({
+  db, botToken = '', trustProxy = false, staticDir = null, now = () => Date.now(),
+  adminIds = [], publicUrl = '', telegramApiBase = 'https://api.telegram.org', secret = '', tz = 'Europe/Moscow',
+  log = console,
+}) {
+  const admins = new Set(adminIds.map(Number).filter(Boolean));
+  const limits = { write: limiter(120, 60_000) };
+  const api = createTelegramApi({ token: botToken, base: telegramApiBase, log });
+  const players = createPlayers({ db, now, adminIds: admins });
+  let bot = null;
+  const tournaments = createTournaments({
+    db, now,
+    notify: (...a) => bot?.notify(...a),
+    notifyAdmins: (...a) => bot?.notifyAdmins(...a),
+    refund: (chargeId) => bot?.refund(chargeId) ?? false,
+  });
+  bot = createBot({ db, api, players, tournaments, adminIds: admins, publicUrl, tz, now, log });
+  const hookSecret = botToken ? webhookSecret(botToken, secret) : '';
 
   const q = {
-    byId: db.prepare('select * from player where id = ?'),
-    byKey: db.prepare('select * from player where name_key = ?'),
-    byTg: db.prepare('select * from player where tg_id = ?'),
-    insert: db.prepare(`insert into player (id, name, name_key, pass_hash, tg_id, rating, created_at, seen_at)
-                        values (?, ?, ?, ?, ?, ?, ?, ?)`),
-    tgName: db.prepare('update player set name = ?, seen_at = ? where id = ?'),
-    rename: db.prepare('update player set name = ?, name_key = ? where id = ?'),
-    seen: db.prepare('update player set seen_at = ? where id = ?'),
-    score: db.prepare('update player set rating = ?, wins = wins + ?, losses = losses + ? where id = ?'),
-    rank: db.prepare('select count(*) + 1 as rank from player where wins + losses > 0 and rating > ?'),
-    top: db.prepare(`select id, name, rating, wins, losses from player where wins + losses > 0
-                     order by rating desc, wins desc, created_at asc limit ?`),
     sessionAdd: db.prepare('insert into session (token_hash, player_id, created_at, seen_at) values (?, ?, ?, ?)'),
     session: db.prepare('select player_id, seen_at from session where token_hash = ?'),
     sessionSeen: db.prepare('update session set seen_at = ? where token_hash = ?'),
-    sessionDel: db.prepare('delete from session where token_hash = ?'),
+    seen: db.prepare('update player set seen_at = ? where id = ?'),
     match: db.prepare('select * from match where room = ? and seed = ?'),
-    matchAdd: db.prepare(`insert into match (room, seed, p1, p2, p1_claim, created_at)
-                          values (?, ?, ?, ?, ?, ?)`),
+    matchAdd: db.prepare('insert into match (room, seed, p1, p2, p1_claim, created_at) values (?, ?, ?, ?, ?, ?)'),
     matchClose: db.prepare('update match set p2_claim = ?, status = ?, delta = ?, settled_at = ? where id = ?'),
+    won: db.prepare(`update player set rating = ?, wins = wins + 1, streak = streak + 1,
+                     best_streak = max(best_streak, streak + 1) where id = ?`),
+    lost: db.prepare('update player set rating = ?, losses = losses + 1, streak = 0 where id = ?'),
   };
-
-  /** Игрок наружу: без хэшей и служебных полей, с местом в таблице. */
-  function view(p) {
-    if (!p) return null;
-    const played = p.wins + p.losses > 0;
-    return {
-      id: p.id, name: p.name, rating: p.rating, wins: p.wins, losses: p.losses,
-      telegram: p.tg_id != null,
-      rank: played ? q.rank.get(p.rating).rank : null,
-    };
-  }
 
   function issueToken(playerId) {
     const token = newToken();
@@ -128,80 +94,32 @@ export function createApp({ db, botToken = '', trustProxy = false, staticDir = n
     if (!m) throw new HttpError(401, 'нужно войти');
     const h = tokenHash(m[1]);
     const s = q.session.get(h);
-    if (!s) throw new HttpError(401, 'вход устарел — войди заново');
-    const p = q.byId.get(s.player_id);
+    if (!s) throw new HttpError(401, 'вход устарел — открой игру заново');
+    const p = players.byId(s.player_id);
     if (!p) throw new HttpError(401, 'аккаунт не найден');
     const t = now();
-    // Отметка «был в игре» — не чаще раза в час, чтобы не писать на каждый запрос
     if (t - s.seen_at > 3600_000) { q.sessionSeen.run(t, h); q.seen.run(t, p.id); }
-    return { player: p, tokenHash: h };
+    return p;
   }
 
-  // --------------------------------------------------------------- действия
+  // --------------------------------------------------------------- вход
 
-  async function register(body, ip) {
-    if (!limits.register.allow(ip)) throw new HttpError(429, 'слишком много регистраций, подожди немного');
-    const n = cleanName(body.name);
-    if (n.error) throw new HttpError(400, n.error, { field: 'name' });
-    const pw = checkPassword(body.password);
-    if (pw.error) throw new HttpError(400, pw.error, { field: 'password' });
-    if (q.byKey.get(n.key)) throw new HttpError(409, 'этот ник занят', { field: 'name' });
-    const hash = await hashPassword(pw.pass);
-    const t = now();
-    const id = newPlayerId();
-    try {
-      q.insert.run(id, n.name, n.key, hash, null, START_RATING, t, t);
-      limits.register.hit(ip);
-    } catch (e) {
-      // Два одинаковых ника в одну и ту же миллисекунду
-      if (String(e.message).includes('UNIQUE')) throw new HttpError(409, 'этот ник занят', { field: 'name' });
-      throw e;
-    }
-    return { token: issueToken(id), player: view(q.byId.get(id)) };
-  }
-
-  async function login(body, ip) {
-    if (!limits.login.allow(ip)) throw new HttpError(429, 'слишком много попыток, подожди пару минут');
-    const n = cleanName(body.name);
-    const p = n.error ? null : q.byKey.get(n.key);
-    // Неизвестный ник проверяется так же долго, как известный: по времени
-    // ответа нельзя узнать, какие ники заняты
-    const ok = await verifyPassword(String(body.password ?? ''), p?.pass_hash ?? DUMMY_HASH);
-    if (!p || !ok) {
-      limits.login.hit(ip);
-      throw new HttpError(401, 'неверный ник или пароль');
-    }
-    q.seen.run(now(), p.id);
-    return { token: issueToken(p.id), player: view(p) };
-  }
-
-  async function telegram(body) {
+  async function telegramLogin(body) {
     if (!botToken) throw new HttpError(503, 'вход через Telegram не настроен');
     const v = await verifyInitData(String(body.initData ?? ''), botToken, { now: now() });
     if (!v.ok) throw new HttpError(401, v.reason);
-    const tgId = Number(v.user.id);
-    const name = displayName(v.user).slice(0, 32);
-    const id = `tg${tgId}`;
-    const t = now();
-    if (q.byTg.get(tgId)) q.tgName.run(name, t, id);
-    else q.insert.run(id, name, null, null, tgId, START_RATING, t, t);
-    return { token: issueToken(id), player: view(q.byId.get(id)) };
+    const photo = typeof v.user.photo_url === 'string' && /^https:\/\//.test(v.user.photo_url)
+      ? v.user.photo_url.slice(0, 300) : null;
+    const p = players.upsertTg(v.user, photo);
+    return { token: issueToken(p.id), player: players.view(p, { self: true }) };
   }
 
-  function rename(me, body) {
-    if (me.tg_id != null) throw new HttpError(400, 'имя берётся из Telegram');
-    const n = cleanName(body.name);
-    if (n.error) throw new HttpError(400, n.error, { field: 'name' });
-    const other = q.byKey.get(n.key);
-    if (other && other.id !== me.id) throw new HttpError(409, 'этот ник занят', { field: 'name' });
-    q.rename.run(n.name, n.key, me.id);
-    return { player: view(q.byId.get(me.id)) };
-  }
+  // --------------------------------------------------------------- бои
 
   /**
-   * Итог сетевого боя. Первый отчёт открывает запись, второй закрывает:
-   * если стороны согласны, кто победил, обоим пересчитывается Эло; если
-   * нет — спор, рейтинг не трогаем. Повтор того же отчёта ничего не меняет.
+   * Итог сетевого боя. Комната турнира — в турнир. Иначе дуэль на рейтинг:
+   * первый отчёт открывает запись, второй закрывает; согласны — Эло обоим,
+   * нет — спор. Повтор того же отчёта ничего не меняет.
    */
   function result(me, body) {
     const room = String(body.room ?? '').toUpperCase();
@@ -210,81 +128,145 @@ export function createApp({ db, botToken = '', trustProxy = false, staticDir = n
     const claim = body.won ? 'win' : 'loss';
     if (!/^[A-Z0-9]{4,16}$/.test(room) || !Number.isSafeInteger(seed)) throw new HttpError(400, 'плохая комната');
     if (!opponent || opponent === me.id) throw new HttpError(400, 'нет соперника');
+    const view = () => players.view(players.byId(me.id), { self: true });
+
+    const tour = tournaments.report(me.id, room, Boolean(body.won));
+    if (tour) return { ...tour, player: view() };
     // Бой без рейтинга: режим зашит в код комнаты, клиенту здесь не верим
-    if (isCasualRoom(room)) return { status: 'unrated', reason: 'casual', player: view(me) };
-    if (!q.byId.get(opponent)) return { status: 'unrated', player: view(me) };
+    if (isCasualRoom(room)) return { status: 'unrated', reason: 'casual', player: view() };
+    if (!players.byId(opponent)) return { status: 'unrated', player: view() };
 
     return tx(db, () => {
       const t = now();
       let m = q.match.get(room, seed);
       if (!m) {
         q.matchAdd.run(room, seed, me.id, opponent, claim, t);
-        return { status: 'pending', player: view(me) };
+        return { status: 'pending', player: view() };
       }
       const mine = (s) => ({ status: s, delta: m.delta == null ? undefined
-        : (claim === 'win' ? m.delta : -m.delta), player: view(q.byId.get(me.id)) });
+        : (claim === 'win' ? m.delta : -m.delta), player: view() });
       if (m.status !== 'pending') {
         if (m.p1 !== me.id && m.p2 !== me.id) throw new HttpError(403, 'это не ваш бой');
         return mine(m.status);
       }
-      if (m.p1 === me.id) return { status: 'pending', player: view(me) };
+      if (m.p1 === me.id) return { status: 'pending', player: view() };
       if (m.p2 !== me.id || m.p1 !== opponent) throw new HttpError(403, 'это не ваш бой');
 
       if (m.p1_claim === claim) {
         q.matchClose.run(claim, 'disputed', null, t, m.id);
-        return { status: 'disputed', player: view(me) };
+        return { status: 'disputed', player: view() };
       }
       const winnerId = m.p1_claim === 'win' ? m.p1 : m.p2;
       const loserId = winnerId === m.p1 ? m.p2 : m.p1;
-      const w = q.byId.get(winnerId);
-      const l = q.byId.get(loserId);
+      const w = players.byId(winnerId);
+      const l = players.byId(loserId);
       const s = settle(w.rating, l.rating);
-      q.score.run(s.winner, 1, 0, w.id);
-      q.score.run(s.loser, 0, 1, l.id);
+      q.won.run(s.winner, w.id);
+      q.lost.run(s.loser, l.id);
       q.matchClose.run(claim, 'confirmed', s.delta, t, m.id);
       m = q.match.get(room, seed);
       return mine('confirmed');
     });
   }
 
+  function history(me) {
+    const items = [...players.duelHistory(me.id, 20), ...tournaments.historyFor(me.id, 20)]
+      .sort((a, b) => (b.at ?? 0) - (a.at ?? 0))
+      .slice(0, 20);
+    return { items };
+  }
+
   function top(url) {
     const limit = Math.max(1, Math.min(100, Number(url.searchParams.get('limit')) || 20));
-    return { players: q.top.all(limit).map((r) => ({ ...r })) };
+    const rows = url.searchParams.get('kind') === 'tourney' ? players.topTourney(limit) : players.top(limit);
+    return { players: rows };
+  }
+
+  // --------------------------------------------------------------- турниры
+
+  async function joinTour(me, tid) {
+    const r = tournaments.join(tid, me.id);
+    if (r.ok) return { ok: true };
+    if (!r.pay) throw new HttpError(409, r.error);
+    const link = await bot.tourInvoice(me, tournaments.byId(tid));
+    if (!link) throw new HttpError(503, 'оплата звёздами сейчас недоступна');
+    return { invoice: link, fee: r.fee };
+  }
+
+  async function donate(me, body) {
+    const link = await bot.donateInvoice(me, Number(body.amount));
+    if (!link) throw new HttpError(400, 'оплата звёздами недоступна или неизвестная сумма');
+    return { invoice: link };
   }
 
   // --------------------------------------------------------------- маршруты
 
-  async function api(req, url) {
+  async function api_(req, url) {
     const ip = clientIp(req, trustProxy);
-    const route = `${req.method} ${url.pathname}`;
-    if (req.method === 'POST' && !limits.write.hit(ip)) throw new HttpError(429, 'слишком часто');
-    switch (route) {
+    const path = url.pathname;
+    const method = req.method;
+
+    if (method === 'POST' && path === '/api/bot/webhook') {
+      if (!hookSecret || req.headers['x-telegram-bot-api-secret-token'] !== hookSecret) {
+        throw new HttpError(401, 'нет');
+      }
+      await bot.handleUpdate(await readJson(req));
+      return { ok: true };
+    }
+    if (method === 'POST' && !limits.write.hit(ip)) throw new HttpError(429, 'слишком часто');
+
+    const tm = /^\/api\/tournaments\/(\d+)(?:\/(join|leave|start))?$/.exec(path);
+    if (tm) {
+      const tid = Number(tm[1]);
+      const me = auth(req);
+      if (method === 'GET' && !tm[2]) {
+        const t = tournaments.get(tid, me.id);
+        if (!t) throw new HttpError(404, 'турнира нет');
+        return { tournament: t };
+      }
+      if (method === 'POST' && tm[2] === 'join') return joinTour(me, tid);
+      if (method === 'POST' && tm[2] === 'leave') {
+        const r = await tournaments.leave(tid, me.id);
+        if (!r.ok) throw new HttpError(409, r.error);
+        return r;
+      }
+      if (method === 'POST' && tm[2] === 'start') {
+        if (!players.isAdmin(me)) throw new HttpError(403, 'только для админа');
+        const r = tournaments.start(tid);
+        if (!r.ok) throw new HttpError(409, r.error);
+        return r;
+      }
+    }
+
+    switch (`${method} ${path}`) {
       case 'GET /api/health': return { ok: true };
+      case 'GET /api/config': return { bot: bot.username || null, stars: api.enabled };
       case 'GET /api/top': return top(url);
-      case 'POST /api/register': return register(await readJson(req), ip);
-      case 'POST /api/login': return login(await readJson(req), ip);
-      case 'POST /api/telegram': return telegram(await readJson(req));
-      case 'GET /api/me': return { player: view(auth(req).player) };
-      case 'POST /api/rename': { const a = auth(req); return rename(a.player, await readJson(req)); }
-      case 'POST /api/logout': { const a = auth(req); q.sessionDel.run(a.tokenHash); return { ok: true }; }
-      case 'POST /api/result': { const a = auth(req); return result(a.player, await readJson(req)); }
+      case 'POST /api/telegram': return telegramLogin(await readJson(req));
+      case 'GET /api/me': return { player: players.view(auth(req), { self: true }) };
+      case 'GET /api/me/history': return history(auth(req));
+      case 'POST /api/result': { const me = auth(req); return result(me, await readJson(req)); }
+      case 'GET /api/tournaments': {
+        const me = auth(req);
+        return { items: tournaments.list(me.id), admin: players.isAdmin(me) };
+      }
+      case 'POST /api/stars/donate': { const me = auth(req); return donate(me, await readJson(req)); }
       default: throw new HttpError(404, 'нет такого адреса');
     }
   }
 
   const root = staticDir ? resolve(staticDir) : null;
 
-  return async function handle(req, res) {
+  async function handle(req, res) {
     let url;
     try { url = new URL(req.url, 'http://x'); } catch { res.writeHead(400).end(); return; }
     if (url.pathname.startsWith('/api/')) {
       try {
-        const data = await api(req, url);
-        send(res, 200, data);
+        send(res, 200, await api_(req, url));
       } catch (e) {
         if (e instanceof HttpError) send(res, e.status, { error: e.message, ...e.extra });
         else {
-          console.error('[api]', req.method, url.pathname, e);
+          log.error?.('[api]', req.method, url.pathname, e);
           send(res, 500, { error: 'ошибка сервера' });
         }
       }
@@ -292,90 +274,15 @@ export function createApp({ db, botToken = '', trustProxy = false, staticDir = n
     }
     if (root && (req.method === 'GET' || req.method === 'HEAD')) return serveStatic(root, url, req, res);
     res.writeHead(404).end('not found');
-  };
-}
-
-// ------------------------------------------------------------- мелочи HTTP
-
-function send(res, status, data) {
-  const body = JSON.stringify(data);
-  res.writeHead(status, {
-    'Content-Type': 'application/json; charset=utf-8',
-    'Cache-Control': 'no-store',
-    'X-Content-Type-Options': 'nosniff',
-  });
-  res.end(body);
-}
-
-function readJson(req) {
-  return new Promise((resolveBody, reject) => {
-    let size = 0;
-    let tooBig = false;
-    const chunks = [];
-    // Лишнее дочитываем вхолостую, а не рвём соединение: иначе клиент не
-    // увидит ответа 413. Больше мегабайта не пропустит nginx впереди.
-    req.on('data', (c) => {
-      size += c.length;
-      if (size > BODY_LIMIT) {
-        if (!tooBig) { tooBig = true; chunks.length = 0; reject(new HttpError(413, 'слишком большой запрос')); }
-        return;
-      }
-      chunks.push(c);
-    });
-    req.on('end', () => {
-      if (tooBig) return;
-      if (!chunks.length) { resolveBody({}); return; }
-      try {
-        const v = JSON.parse(Buffer.concat(chunks).toString('utf8'));
-        resolveBody(v && typeof v === 'object' ? v : {});
-      } catch { reject(new HttpError(400, 'не JSON')); }
-    });
-    req.on('error', reject);
-  });
-}
-
-function clientIp(req, trustProxy) {
-  if (trustProxy) {
-    const real = req.headers['x-real-ip'];
-    if (real) return String(real);
-    const fwd = req.headers['x-forwarded-for'];
-    if (fwd) return String(fwd).split(',')[0].trim();
   }
-  return req.socket.remoteAddress ?? '?';
-}
 
-const TYPES = {
-  '.html': 'text/html; charset=utf-8',
-  '.js': 'text/javascript; charset=utf-8',
-  '.mjs': 'text/javascript; charset=utf-8',
-  '.json': 'application/json; charset=utf-8',
-  '.webmanifest': 'application/manifest+json',
-  '.css': 'text/css; charset=utf-8',
-  '.png': 'image/png',
-  '.svg': 'image/svg+xml',
-  '.woff2': 'font/woff2',
-  '.txt': 'text/plain; charset=utf-8',
-};
-
-async function serveStatic(root, url, req, res) {
-  let rel;
-  try { rel = decodeURIComponent(url.pathname); } catch { res.writeHead(400).end(); return; }
-  if (rel.endsWith('/')) rel += 'index.html';
-  const path = normalize(join(root, rel));
-  if (path !== root && !path.startsWith(root + sep)) { res.writeHead(403).end(); return; }
-  if (/[\\/]\./.test(path.slice(root.length))) { res.writeHead(404).end(); return; }
-  try {
-    const st = await stat(path);
-    if (!st.isFile()) throw new Error('not a file');
-    const body = await readFile(path);
-    res.writeHead(200, {
-      'Content-Type': TYPES[extname(path)] ?? 'application/octet-stream',
-      'Cache-Control': 'no-cache',
-    });
-    res.end(req.method === 'HEAD' ? undefined : body);
-  } catch {
-    res.writeHead(404).end('not found');
-  }
+  handle.tournaments = tournaments;
+  handle.bot = bot;
+  handle.players = players;
+  handle.webhookSecret = hookSecret;
+  /** Настроить бота (вебхук, меню) — вызывается при запуске сервера. */
+  handle.setupBot = () => bot.setup({ secret: hookSecret });
+  return handle;
 }
 
 // ------------------------------------------------------------------- запуск
@@ -389,15 +296,29 @@ if (isMain) {
     botToken: env.TELEGRAM_BOT_TOKEN || '',
     trustProxy: env.TRUST_PROXY === '1' || env.TRUST_PROXY === 'true',
     staticDir: env.STATIC_DIR || null,
+    adminIds: String(env.ADMIN_TG_IDS || '').split(/[,\s]+/).filter(Boolean),
+    publicUrl: env.PUBLIC_URL || '',
+    telegramApiBase: env.TELEGRAM_API_BASE || 'https://api.telegram.org',
+    secret: env.BOT_WEBHOOK_SECRET || '',
+    tz: env.BOT_TZ || 'Europe/Moscow',
   });
   const server = createServer(handle);
   server.listen(Number(env.PORT ?? 3000), env.HOST || '0.0.0.0', () => {
     const { port } = server.address();
     console.log(`worms api: порт ${port}, база ${env.DB_PATH || './data/worms.db'}`
-      + `${env.TELEGRAM_BOT_TOKEN ? ', вход через Telegram включён' : ''}`
+      + `${env.TELEGRAM_BOT_TOKEN ? ', бот включён' : ', без бота'}`
       + `${env.STATIC_DIR ? `, игра из ${env.STATIC_DIR}` : ''}`);
+    handle.setupBot().catch((e) => console.warn('[bot] настройка не удалась', e.message));
   });
-  const stop = () => { server.close(() => { db.close(); process.exit(0); }); setTimeout(() => process.exit(0), 3000); };
+  // Турниры живут по часам: автостарт и матчи, вышедшие за окно
+  const ticker = setInterval(() => {
+    try { handle.tournaments.tick(); } catch (e) { console.error('[tournaments] tick', e); }
+  }, 30_000);
+  const stop = () => {
+    clearInterval(ticker);
+    server.close(() => { db.close(); process.exit(0); });
+    setTimeout(() => process.exit(0), 3000);
+  };
   process.on('SIGTERM', stop);
   process.on('SIGINT', stop);
 }

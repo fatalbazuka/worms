@@ -39,6 +39,35 @@ const CSS = `
 .acc-stat b { display: block; font-size: 20px; font-weight: 800; }
 .acc-stat span { font-size: 12px; color: #a9b3c4; }
 .acc-name { font-size: 24px; font-weight: 800; margin: 2px 0 2px; word-break: break-word; }
+.acc-box.wide { width: min(560px, 100%); }
+.ov-head { display: flex; align-items: center; gap: 12px; margin-bottom: 4px; }
+.ov-ava { width: 52px; height: 52px; border-radius: 50%; object-fit: cover; flex: 0 0 auto;
+  background: #161a22; display: flex; align-items: center; justify-content: center; font-size: 22px; font-weight: 800; color: #ffc247; }
+.ov-ava.sm { width: 28px; height: 28px; font-size: 13px; }
+.ov-sec { margin: 16px 0 6px; font-size: 12px; color: #ffc247; text-transform: uppercase; letter-spacing: 0.6px; }
+.ov-list { display: flex; flex-direction: column; gap: 6px; }
+.ov-row { display: flex; align-items: center; gap: 10px; background: #161a22; border-radius: 10px; padding: 9px 12px;
+  font-size: 14px; }
+.ov-row.click { cursor: pointer; }
+.ov-row.click:hover { filter: brightness(1.2); }
+.ov-row .grow { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ov-row .sub { display: block; font-size: 12px; color: #a9b3c4; font-weight: 700; }
+.ov-pill { flex: 0 0 auto; padding: 3px 9px; border-radius: 999px; font-size: 12px; background: #2b3242; color: #dfe6f3; }
+.ov-pill.ok { background: #1f5a33; color: #c8f5d6; }
+.ov-pill.bad { background: #5a1f24; color: #ffd0d4; }
+.ov-pill.gold { background: #6b4b10; color: #ffe2a6; }
+.ov-card { background: #1d2230; border: 2px solid #ffc247; border-radius: 12px; padding: 12px 14px; margin: 12px 0; }
+.ov-card b { font-size: 17px; }
+.ov-bracket { display: flex; gap: 10px; overflow-x: auto; padding-bottom: 6px; }
+.ov-round { flex: 0 0 168px; display: flex; flex-direction: column; justify-content: space-around; gap: 8px; }
+.ov-round h4 { margin: 0; font-size: 12px; color: #a9b3c4; text-align: center; }
+.ov-match { background: #161a22; border-radius: 8px; padding: 6px 8px; font-size: 13px; }
+.ov-match div { display: flex; justify-content: space-between; gap: 6px; padding: 2px 0;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: #a9b3c4; }
+.ov-match div.win { color: #f4ece0; font-weight: 800; }
+.ov-match.mine { outline: 2px solid #ffc247; }
+.ov-empty { color: #a9b3c4; font-size: 14px; padding: 10px 0; }
+.ov-back { background: none; border: 0; color: #a9b3c4; font: inherit; font-size: 14px; cursor: pointer; padding: 0 0 8px; }
 .acc-badge { display: inline-block; margin-left: 6px; padding: 2px 8px; border-radius: 8px; font-size: 11px;
   vertical-align: middle; background: #2b5d8a; color: #dff0ff; }
 `;

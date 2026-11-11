@@ -20,6 +20,10 @@ js() { printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e "s/'/\\\\'/g"; }
   [ -n "${TELEGRAM_APP:-}" ] && echo "  app: '$(js "$TELEGRAM_APP")',"
   echo "}, window.WORMS_TG || {});"
   [ -n "${WORMS_API:-}" ] && echo "window.WORMS_API = window.WORMS_API || '$(js "$WORMS_API")';"
+  # Только Telegram: в обычном браузере — ссылка на бота (по умолчанию да)
+  case "${TELEGRAM_ONLY:-1}" in
+    1|true|yes) echo "window.WORMS_TELEGRAM_ONLY = true;" ;;
+  esac
   case "${WORMS_UI:-}" in
     desktop|touch) echo "window.WORMS_UI = window.WORMS_UI || '$WORMS_UI';" ;;
   esac

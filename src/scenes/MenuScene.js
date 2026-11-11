@@ -10,11 +10,13 @@ import { Lobby } from '../net/lobby.js';
 import { pendingSession, forgetSession } from '../net/session.js';
 import { syncMe, fetchTop, myRank, loggedIn, onAccountChange } from '../net/server.js';
 import { openAccountDialog } from '../ui/AccountDialog.js';
+import { openTournaments } from '../ui/Tournaments.js';
 import { askText, closeOverlay } from '../ui/Overlay.js';
 import { makeTransport } from '../net/connect.js';
-import { player, setName } from '../platform/player.js';
+import { player } from '../platform/player.js';
 import {
   inviteLink as tgInviteLink, shareRoom, canOfferHomeScreen, addToHomeScreen, onHomeScreenChange,
+  haptic, inTelegram, botLink,
 } from '../platform/telegram.js';
 import { leagueOf, nextLeague, leagueProgress, toNextLeague, leagueLabel } from '../platform/league.js';
 import { BOT_LEVELS } from '../ai/Bot.js';
@@ -65,6 +67,19 @@ export default class MenuScene extends Phaser.Scene {
     this.events.once('shutdown', () => this.events.off('addedtoscene', assignCamera));
     this._backdrop();
     this.showRoot();
+
+    // Вернулись из турнирного матча — сразу к сетке. Пришли по кнопке бота
+    // (?tour=ID или ?tour=list) — к турнирам, один раз за запуск.
+    const back = this.registry.get('returnTour');
+    const params = new URLSearchParams(globalThis.location?.search ?? '');
+    const fromLink = params.get('tour');
+    if (back) {
+      this.registry.set('returnTour', null);
+      this.time.delayedCall(50, () => this.openTournaments(back));
+    } else if (fromLink && !this.registry.get('tourLinkUsed')) {
+      this.registry.set('tourLinkUsed', true);
+      this.time.delayedCall(300, () => this.openTournaments(/^\d+$/.test(fromLink) ? Number(fromLink) : null));
+    }
 
     this.input.keyboard?.on('keydown-ESC', () => this.showRoot());
 
@@ -203,7 +218,7 @@ export default class MenuScene extends Phaser.Scene {
 
     if (enabled) {
       img.setInteractive({ useHandCursor: true });
-      img.on('pointerdown', () => { img.setScale(0.97).setTint(0xcccccc); });
+      img.on('pointerdown', () => { img.setScale(0.97).setTint(0xcccccc); haptic('tap'); });
       const release = () => img.setScale(1).clearTint();
       img.on('pointerout', release);
       img.on('pointerup', () => { release(); onTap(); });
@@ -243,9 +258,9 @@ export default class MenuScene extends Phaser.Scene {
   showRoot() {
     this.section = this.showRoot;
     this._clear();
-    this._title('WORMS', 'прототип пошаговой артиллерии');
+    this._title('WORMS', 'пошаговая артиллерия');
     const cx = this.W / 2;
-    const y0 = 214, step = 86;
+    const y0 = 196, step = 78;
 
     this._button('quick', cx, y0, 'Быстрая игра', 'случайная карта',
       () => this.showQuick(), { variant: 'primary' });
@@ -254,24 +269,21 @@ export default class MenuScene extends Phaser.Scene {
     this._button('online', cx, y0 + step * 2, 'Онлайн', 'игра вдвоём по ссылке',
       () => this.showOnline());
 
-    // Аккаунт: ник и пароль, нужен для общего рейтинга
+    this._button('tournaments', cx, y0 + step * 3, 'Турниры', 'сетка на выбывание, титул чемпиона',
+      () => this.openTournaments());
+    // Кабинет: аккаунт — это Telegram, входить отдельно не нужно
     const me = player();
-    if (loggedIn()) {
-      this._button('account', cx, y0 + step * 3, me.name,
-        `рейтинг ${me.rating}${me.rank ? ` · место ${me.rank}` : ''} · профиль`, () => this.openAccount());
-    } else {
-      this._button('account', cx, y0 + step * 3, 'Аккаунт',
-        'войти или создать — для общего рейтинга', () => this.openAccount());
-    }
+    this._button('account', cx, y0 + step * 4, 'Кабинет',
+      `${me.name} · рейтинг ${me.rating}${me.rank ? ` · место ${me.rank}` : ''}`, () => this.openAccount());
 
     // Партия оборвалась (Telegram перезапустился, погас экран), а мы
     // открылись без ссылки: предлагаем вернуться, пока соперник ждёт
     const pending = pendingSession();
     if (pending && Date.now() - pending.at < 15 * 60 * 1000) {
-      this._button('resume', cx, y0 + step * 4, 'Вернуться в бой',
+      this._button('resume', cx, y0 + step * 5, 'Вернуться в бой',
         `комната ${pending.room} · соперник ждёт`, () => this.startOnline(pending.room),
         { variant: 'primary' });
-      this._button('resume-no', cx + 300, y0 + step * 4, '✕', '',
+      this._button('resume-no', cx + 300, y0 + step * 5, '✕', '',
         () => { forgetSession(pending.room); this.showRoot(); }, { w: 56, h: 56 });
     }
 
@@ -285,11 +297,14 @@ export default class MenuScene extends Phaser.Scene {
     // Настройки в правом нижнем углу: схема управления и звук. Схема
     // выбирается сама по устройству, но ноутбук с сенсорным экраном или
     // планшет с мышью игрок переключит сам — выбор запоминается.
+    // В Telegram управление всегда под пальцы — переключателя там нет
     const desktop = isDesktop();
-    this._button('ui-mode', this.W - 130, this.bottomY(62),
-      desktop ? 'Управление: ПК' : 'Управление: сенсор', '',
-      () => { setUiMode(desktop ? 'touch' : 'desktop'); this.showRoot(); }, { w: 228, h: 44 });
-    this._button('sound', this.W - 330, this.bottomY(62),
+    if (!inTelegram()) {
+      this._button('ui-mode', this.W - 130, this.bottomY(62),
+        desktop ? 'Управление: ПК' : 'Управление: сенсор', '',
+        () => { setUiMode(desktop ? 'touch' : 'desktop'); this.showRoot(); }, { w: 228, h: 44 });
+    }
+    this._button('sound', inTelegram() ? this.W - 94 : this.W - 330, this.bottomY(62),
       sfx.muted ? 'Звук: выкл' : 'Звук: вкл', '',
       () => { sfx.setMuted(!sfx.muted); this.showRoot(); }, { w: 156, h: 44 });
 
@@ -437,28 +452,8 @@ export default class MenuScene extends Phaser.Scene {
 
     this._leagueBar(cx, 132, me.rating);
 
-    // Профиль. С аккаунтом — окно профиля (там и смена ника); без него —
-    // вход и смена имени, которое увидит соперник. В Telegram имя своё.
-    if (loggedIn()) {
-      this._button('profile', cx, 186, `${me.name} · профиль`, '', () => this.openAccount(), { w: 300, h: 44 });
-    } else if (me.telegram) {
-      this._button('login', cx, 186, 'Войти в аккаунт', '', () => this.openAccount(),
-        { w: 256, h: 44, variant: 'primary' });
-    } else {
-      this._button('login', cx - 106, 186, 'Войти в аккаунт', '', () => this.openAccount(),
-        { w: 208, h: 44, variant: 'primary' });
-      this._button('rename', cx + 106, 186, 'Сменить имя', '', () => {
-        askText({
-          title: 'Имя в бою', value: me.name, maxLength: 20, okText: 'Сохранить',
-          note: 'Так тебя увидит соперник. Чтобы имя и рейтинг были закреплены за тобой, '
-            + 'заведи аккаунт — это ник и пароль.',
-          validate: (v) => (v.length >= 2 ? null : 'хотя бы две буквы'),
-        }).then((v) => {
-          if (v) setName(v);
-          if (this.section === this.showOnline) this.showOnline();
-        });
-      }, { w: 208, h: 44 });
-    }
+    // Профиль — Telegram-аккаунт; кабинет со статистикой по кнопке
+    this._button('profile', cx, 186, `${me.name} · кабинет`, '', () => this.openAccount(), { w: 300, h: 44 });
     this.items.push(this.add.text(cx, 214,
       `побед ${me.wins} · поражений ${me.losses}`, font(12, 700, UI.textDim))
       .setOrigin(0.5, 0));
@@ -501,9 +496,6 @@ export default class MenuScene extends Phaser.Scene {
     const note = this.add.text(cx, 150, 'загружаю…', font(14, 700, UI.textDim)).setOrigin(0.5, 0);
     this.items.push(note);
     this._back(() => this.showOnline());
-    if (!loggedIn()) {
-      this._button('login', this.W - 130, this.bottomY(46), 'Войти', '', () => this.openAccount(), { w: 200, h: 50 });
-    }
 
     fetchTop(20).then((rows) => {
       if (this.section !== this.showTop) return;
@@ -522,7 +514,7 @@ export default class MenuScene extends Phaser.Scene {
     const x0 = cx - 300, top = 146, step = 32;
     const maxRows = Math.max(3, Math.floor((this.bottomY(70) - top) / step));
     if (!rows.length) {
-      this.items.push(this.add.text(cx, top, 'пока пусто — сыграй первый бой по сети с аккаунтом',
+      this.items.push(this.add.text(cx, top, 'пока пусто — сыграй первый бой по сети на рейтинг',
         font(14, 700, UI.textDim)).setOrigin(0.5, 0));
       return;
     }
@@ -539,13 +531,27 @@ export default class MenuScene extends Phaser.Scene {
     });
     const rank = myRank(rows);
     const foot = rank ? `ты на ${rank} месте` : loggedIn()
-      ? 'тебя пока нет в таблице — доиграй бой по сети' : 'в таблицу попадают игроки с аккаунтом';
+      ? 'тебя пока нет в таблице — доиграй бой по сети' : 'открой игру в Telegram, чтобы попасть в таблицу';
     this.items.push(this.add.text(cx, this.bottomY(74), foot, font(12, 700, UI.textDim)).setOrigin(0.5, 1));
   }
 
   /** Окно аккаунта: вход и регистрация или профиль. */
   openAccount() {
-    openAccountDialog({ onTop: () => this.showTop() });
+    openAccountDialog({ onTop: () => this.showTop(), onTours: () => this.openTournaments() });
+  }
+
+  /**
+   * Турниры. Из экрана матча — в бой; по возвращении из боя меню снова
+   * откроет этот турнир (registry 'returnTour'), чтобы видеть сетку.
+   */
+  openTournaments(tour = null) {
+    openTournaments({
+      tour,
+      onPlay: (room, tid) => {
+        this.registry.set('returnTour', tid);
+        this.startOnline(room);
+      },
+    });
   }
 
   /** Режим онлайна: rated | casual. Запоминается в браузере. */

@@ -393,15 +393,64 @@ export function cloudSet(key, value) {
   });
 }
 
-/** Короткая вибрация на попадание и на нажатие — в Telegram это родное. */
-export function haptic(kind = 'light') {
+/**
+ * Вибрация — родная, через Telegram. Виды:
+ *   tap    — лёгкий щелчок нажатия кнопки
+ *   select — смена выбора (оружие, вкладка)
+ *   shot   — выстрел
+ *   hit    — попадание рядом / по сопернику
+ *   hurt   — ранили своего: сильный толчок
+ *   turn   — начался твой ход
+ *   win, lose, warn — итоги и предупреждения
+ * Вне Telegram и на старых клиентах — тишина, ошибок нет.
+ */
+export function haptic(kind = 'tap') {
   const tg = tgApi();
   const h = tg && tgSupports('6.1') ? tg.HapticFeedback : null;
   if (!h) return;
   try {
-    if (kind === 'hit') h.impactOccurred('medium');
-    else if (kind === 'win') h.notificationOccurred('success');
-    else if (kind === 'lose') h.notificationOccurred('error');
-    else h.impactOccurred('light');
+    switch (kind) {
+      case 'select': h.selectionChanged(); break;
+      case 'shot': h.impactOccurred('medium'); break;
+      case 'hit': h.impactOccurred('rigid'); break;
+      case 'hurt': h.impactOccurred('heavy'); break;
+      case 'turn': h.notificationOccurred('warning'); break;
+      case 'win': h.notificationOccurred('success'); break;
+      case 'lose': h.notificationOccurred('error'); break;
+      case 'warn': h.notificationOccurred('warning'); break;
+      default: h.impactOccurred('light');
+    }
   } catch { /* старый клиент — просто без отдачи */ }
+}
+
+/**
+ * Окно оплаты Telegram для счёта звёздами. Возвращает итог:
+ * paid | cancelled | failed | pending | unsupported.
+ */
+export function openInvoice(link) {
+  const tg = tgApi();
+  if (!tg?.openInvoice || !tgSupports('6.1')) return Promise.resolve('unsupported');
+  return new Promise((resolve) => {
+    try { tg.openInvoice(link, (status) => resolve(status || 'failed')); } catch { resolve('failed'); }
+  });
+}
+
+/**
+ * Разрешить боту писать в личку — нужно для сообщений о турнире, если
+ * игрок открыл игру по ссылке, ни разу не написав боту. Telegram сам
+ * спросит; повторно не спрашивает, если уже разрешено.
+ */
+export function requestWriteAccess() {
+  const tg = tgApi();
+  if (!tg?.requestWriteAccess || !tgSupports('6.9')) return Promise.resolve(false);
+  return new Promise((resolve) => {
+    try { tg.requestWriteAccess((ok) => resolve(Boolean(ok))); } catch { resolve(false); }
+  });
+}
+
+/** Ссылка на Telegram-профиль бота: t.me/<бот>. */
+export function botLink(startParam = '') {
+  const { bot } = telegramConfig();
+  if (!bot) return null;
+  return `https://t.me/${bot}${startParam ? `?startapp=${encodeURIComponent(startParam)}` : ''}`;
 }

@@ -11,7 +11,7 @@
  * сенсорного экрана — desktop, всё остальное — touch. Ноутбук с сенсорным
  * экраном попадает в touch; переключиться можно в меню.
  */
-import { tgApi, isDesktopClient } from './telegram.js';
+import { tgApi } from './telegram.js';
 
 const STORE_KEY = 'worms.ui';
 const MODES = ['desktop', 'touch'];
@@ -25,12 +25,13 @@ function stored() {
 export function detectUiMode() {
   const fromUrl = new URLSearchParams(globalThis.location?.search ?? '').get('ui');
   if (MODES.includes(fromUrl)) return fromUrl;
+  // Игра живёт в Telegram и управляется пальцами — и в Telegram Desktop тоже:
+  // одна раскладка на всех, кнопки там нажимаются мышью
+  if (tgApi()) return 'touch';
   const saved = stored();
   if (MODES.includes(saved)) return saved;
   if (MODES.includes(globalThis.WORMS_UI)) return globalThis.WORMS_UI;
 
-  const tg = tgApi();
-  if (tg) return isDesktopClient(tg) ? 'desktop' : 'touch';
 
   const mm = (q) => Boolean(globalThis.matchMedia?.(q).matches);
   const touchscreen = (globalThis.navigator?.maxTouchPoints ?? 0) > 0;
