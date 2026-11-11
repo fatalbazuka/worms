@@ -283,15 +283,17 @@ export function createBot({ db, api, players, tournaments, adminIds = new Set(),
   }
 
   /** Настроить бота при старте: вебхук, кнопка меню, команды. */
+  /** true — настроено; false — Telegram недоступен, стоит повторить позже. */
   async function setup({ secret }) {
-    if (!api.enabled) return;
+    if (!api.enabled) return true;
     const me = await api.call('getMe');
-    username = me?.username ?? '';
+    if (!me) { log.warn?.('[bot] Telegram недоступен — настрою позже'); return false; }
+    username = me.username ?? '';
     if (!publicUrl) {
       log.warn?.('[bot] PUBLIC_URL не задан — вебхук и кнопка меню не настроены');
-      return;
+      return true;
     }
-    await api.call('setWebhook', {
+    const hooked = await api.call('setWebhook', {
       url: `${publicUrl.replace(/\/+$/, '')}/api/bot/webhook`, secret_token: secret,
       allowed_updates: ['message', 'pre_checkout_query'], drop_pending_updates: false,
     });
@@ -314,7 +316,9 @@ export function createBot({ db, api, players, tournaments, adminIds = new Set(),
           { command: 'stars', description: 'Звёзды' }],
       });
     }
-    log.log?.(`[bot] @${username || '?'}: вебхук ${publicUrl}/api/bot/webhook`);
+    if (!hooked) { log.warn?.('[bot] вебхук не поставлен — повторю позже'); return false; }
+    log.log?.(`[bot] @${username}: вебхук ${publicUrl.replace(/\/+$/, '')}/api/bot/webhook`);
+    return true;
   }
 
   return {

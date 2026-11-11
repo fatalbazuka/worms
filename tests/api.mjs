@@ -122,6 +122,8 @@ const m1 = t.rounds[0][0];
 const room1 = (await call('GET', `/api/tournaments/${tid}`, null, tok[m1.p1.id])).data.tournament.my.room;
 await call('POST', '/api/result', { room: room1, seed: 1, opponent: m1.p2.id, won: true }, tok[m1.p1.id]);
 r = await call('POST', '/api/result', { room: room1, seed: 1, opponent: m1.p1.id, won: false }, tok[m1.p2.id]);
+const loserView = (await call('GET', `/api/tournaments/${tid}`, null, tok[m1.p2.id])).data.tournament.my;
+check('проигравший видит, что выбыл', loserView?.eliminated === true && loserView.round === 1, JSON.stringify(loserView));
 check('матч турнира засчитан, рейтинг Эло он не трогает', r.data.status === 'tournament' && r.data.match === 'done'
   && r.data.winner === m1.p1.id);
 

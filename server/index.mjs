@@ -308,7 +308,11 @@ if (isMain) {
     console.log(`worms api: порт ${port}, база ${env.DB_PATH || './data/worms.db'}`
       + `${env.TELEGRAM_BOT_TOKEN ? ', бот включён' : ', без бота'}`
       + `${env.STATIC_DIR ? `, игра из ${env.STATIC_DIR}` : ''}`);
-    handle.setupBot().catch((e) => console.warn('[bot] настройка не удалась', e.message));
+    // Telegram мог быть недоступен при запуске — пробуем ещё, пока не выйдет
+    const trySetup = () => handle.setupBot()
+      .then((ok) => { if (!ok) setTimeout(trySetup, 5 * 60_000); })
+      .catch((e) => { console.warn('[bot] настройка не удалась', e.message); setTimeout(trySetup, 5 * 60_000); });
+    trySetup();
   });
   // Турниры живут по часам: автостарт и матчи, вышедшие за окно
   const ticker = setInterval(() => {

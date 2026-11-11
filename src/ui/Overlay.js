@@ -59,7 +59,8 @@ const CSS = `
 .ov-card { background: #1d2230; border: 2px solid #ffc247; border-radius: 12px; padding: 12px 14px; margin: 12px 0; }
 .ov-card b { font-size: 17px; }
 .ov-bracket { display: flex; gap: 10px; overflow-x: auto; padding-bottom: 6px; }
-.ov-round { flex: 0 0 168px; display: flex; flex-direction: column; justify-content: space-around; gap: 8px; }
+.ov-round { flex: 0 0 150px; display: flex; flex-direction: column; gap: 6px; }
+.ov-round-matches { flex: 1 1 auto; display: flex; flex-direction: column; justify-content: space-around; gap: 8px; }
 .ov-round h4 { margin: 0; font-size: 12px; color: #a9b3c4; text-align: center; }
 .ov-match { background: #161a22; border-radius: 8px; padding: 6px 8px; font-size: 13px; }
 .ov-match div { display: flex; justify-content: space-between; gap: 6px; padding: 2px 0;

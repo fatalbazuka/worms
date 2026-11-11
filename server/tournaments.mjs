@@ -64,6 +64,8 @@ export function createTournaments({ db, now = () => Date.now(), notify = async (
     mExpired: db.prepare("select * from tournament_match where status = 'pending' and deadline is not null and deadline <= ?"),
     mMine: db.prepare(`select * from tournament_match where tid = ? and status in ('pending', 'disputed')
                          and (p1 = ? or p2 = ?) order by round desc limit 1`),
+    mLost: db.prepare(`select round from tournament_match where tid = ? and status = 'done'
+                         and (p1 = ? or p2 = ?) and (winner is null or winner != ?) order by round limit 1`),
     roomTaken: db.prepare('select 1 from tournament_match where room = ?'),
     player: db.prepare('select id, name, photo, tg_id, rating, titles from player where id = ?'),
     champion: db.prepare(`update player set tourney_wins = tourney_wins + 1, rating = rating + ?, titles = ?
@@ -333,8 +335,10 @@ export function createTournaments({ db, now = () => Date.now(), notify = async (
       });
     }
     let my = null;
-    if (meId && t.status === 'running') {
+    if (meId && t.status === 'running' && q.entry.get(tid, meId)) {
       const m = q.mMine.get(tid, meId, meId);
+      const lost = m ? null : q.mLost.get(tid, meId, meId, meId);
+      if (lost) my = { eliminated: true, round: lost.round };
       if (m) {
         const mine = m.p1 === meId ? m.p1_claim : m.p2_claim;
         my = {

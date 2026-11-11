@@ -19,7 +19,8 @@ import { avatar, fmtDate } from './AccountDialog.js';
  */
 
 const STATUS = { open: 'запись', running: 'идёт', finished: 'завершён', cancelled: 'отменён' };
-const roundName = (r, total) => (r === total ? 'Финал' : r === total - 1 ? 'Полуфинал' : `Раунд ${r}`);
+const roundName = (r, total) => (r === total ? 'Финал' : r === total - 1 ? 'Полуфинал'
+  : r === total - 2 ? 'Четвертьфинал' : `Раунд ${r}`);
 
 /**
  * @param onPlay (room, tournamentId) — уйти в бой своего матча
@@ -82,7 +83,10 @@ export function openTournaments({ onPlay, tour = null } = {}) {
     const err = el('div', { class: 'acc-err', role: 'alert' }, note);
 
     // Мой матч — главное на экране, пока турнир идёт
-    if (t.my) {
+    if (t.my?.eliminated) {
+      box.append(el('p', { class: 'acc-note' }, `Ты выбыл: ${roundName(t.my.round, t.rounds.length
+        ? Math.log2(t.rounds[0].length * 2) : 1).toLowerCase()}. Следи за сеткой — и до следующего турнира!`));
+    } else if (t.my) {
       const left = t.my.deadline ? Math.max(0, Math.round((t.my.deadline - Date.now()) / 60_000)) : null;
       const card = el('div', { class: 'ov-card' },
         el('div', { class: 'acc-note', style: 'margin:0 0 4px' }, `${roundName(t.my.round, t.rounds.length
@@ -134,13 +138,14 @@ export function openTournaments({ onPlay, tour = null } = {}) {
     for (let r = 1; r <= total; r++) {
       const ms = t.rounds[r - 1] ?? [];
       const n = t.rounds[0].length / 2 ** (r - 1);
-      const col = el('div', { class: 'ov-round' }, el('h4', {}, roundName(r, total)));
+      const inner = el('div', { class: 'ov-round-matches' });
+      const col = el('div', { class: 'ov-round' }, el('h4', {}, roundName(r, total)), inner);
       for (let k = 0; k < n; k++) {
         const m = ms.find((x) => x.slot === k);
         const line = (p) => el('div', { class: m?.winner && p && m.winner === p.id ? 'win' : '' },
           el('span', {}, p ? p.name : (m && m.status === 'done' ? '—' : '…')));
         const mine = m && me && (m.p1?.id === me.id || m.p2?.id === me.id) && m.status !== 'done';
-        col.append(el('div', { class: `ov-match${mine ? ' mine' : ''}` },
+        inner.append(el('div', { class: `ov-match${mine ? ' mine' : ''}` },
           line(m?.p1), m && m.status === 'done' && !m.p2 && m.p1 ? el('div', {}, el('span', {}, 'проход')) : line(m?.p2)));
       }
       cols.push(col);
