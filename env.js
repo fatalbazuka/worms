@@ -5,4 +5,4 @@
 // window.WORMS_NET = { url: 'https://<проект>.supabase.co', anonKey: 'sb_publishable_…' };
 // window.WORMS_TG  = { bot: 'имя_бота', app: '' };
 // window.WORMS_UI  = 'desktop' | 'touch';   // навязать интерфейс всем
-// window.WORMS_API = '/api';                 // сервер аккаунтов (по умолчанию /api)
+// window.WORMS_API = 'api';                  // сервер аккаунтов (по умолчанию api/ рядом со страницей)

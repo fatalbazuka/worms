@@ -12,7 +12,9 @@ import { adoptAccount, dropAccount, player } from '../platform/player.js';
  * сообщили согласный итог; локальный пересчёт на экране итога — только
  * предварительный показ, пока сервер не ответил.
  *
- * Адрес API — WORMS_API из env.js, по умолчанию /api на том же домене.
+ * Адрес API — WORMS_API из env.js, по умолчанию api/ рядом со страницей:
+ * в корне домена это /api, а если игра живёт по адресу /worms/, то
+ * /worms/api — так одна и та же сборка работает в любой папке сайта.
  * Нет сервера (статика без бэкенда, локальная разработка) — игра живёт
  * как раньше, на локальном профиле.
  */
@@ -21,7 +23,12 @@ const KEY = 'worms.account.v1';
 const listeners = new Set();
 
 export function apiBase() {
-  return String(globalThis.WORMS_API ?? '/api').replace(/\/+$/, '');
+  return String(globalThis.WORMS_API ?? 'api').replace(/\/+$/, '');
+}
+
+/** Полный адрес запроса: относительный путь считается от страницы игры. */
+function apiUrl(path) {
+  return new URL(`${apiBase()}${path}`, globalThis.document?.baseURI ?? globalThis.location?.href).href;
 }
 
 function loadToken() {
@@ -64,7 +71,7 @@ export class ApiError extends Error {
 async function call(method, path, body) {
   let res;
   try {
-    res = await fetch(`${apiBase()}${path}`, {
+    res = await fetch(apiUrl(path), {
       method,
       headers: {
         ...(body ? { 'content-type': 'application/json' } : {}),

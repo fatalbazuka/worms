@@ -50,12 +50,14 @@ services:
     depends_on: [web]
     environment:
       DOMAIN: ${DOMAIN:-localhost}
+      WORMS_PATH: ${WORMS_PATH:-/worms}
     ports:
       - "80:80"
       - "443:443"
       - "443:443/udp"
     volumes:
-      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      # Caddyfile — игра в корне домена, Caddyfile.subpath — по пути WORMS_PATH
+      - ./deploy/${CADDYFILE:-Caddyfile}:/etc/caddy/Caddyfile:ro
       - caddy_data:/data
       - caddy_config:/config
 

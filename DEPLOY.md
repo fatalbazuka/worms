@@ -84,6 +84,32 @@ server {
 
 `/api` контейнер `web` проксирует сам.
 
+## Игра по пути, а не в корне домена (https://домен/worms)
+
+Игра сама работает в любой папке сайта: все её адреса относительные, API —
+`api/` рядом со страницей. Нужно только, чтобы веб-сервер отдавал её по
+этому пути и срезал префикс.
+
+**На сервере уже есть nginx с сайтом** — поднять игру без Caddy и вставить
+в `server { … }` нужного домена два блока из `deploy/nginx-subpath.conf`:
+
+```bash
+# .env: HTTP_BIND=127.0.0.1, HTTP_PORT=8080
+docker compose up -d --build
+sudo nano /etc/nginx/sites-available/<сайт>   # вставить блоки location
+sudo nginx -t && sudo systemctl reload nginx
+```
+
+**Своего веб-сервера нет** — Caddy с отдельным конфигом:
+
+```bash
+# .env: DOMAIN=…, HTTP_BIND=127.0.0.1, WORMS_PATH=/worms, CADDYFILE=Caddyfile.subpath
+docker compose --profile https up -d --build
+```
+
+Адрес без слэша (`/worms`) перенаправляется на `/worms/`: иначе браузер
+считал бы относительные адреса от корня.
+
 ## Без Docker
 
 Нужен Node 22.13+ и nginx.
