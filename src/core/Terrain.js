@@ -57,7 +57,11 @@ export class Terrain {
 
   // ---------------------------------------------------------------- генерация
 
-  generate() {
+  /**
+   * @param shape  форма карты (core/shapes.js) или null — обычный остров
+   * @param srng   генератор формы: свой поток, основной не трогается
+   */
+  generate(shape = null, srng = null) {
     const { width: w, height: h, rng } = this;
     const gen = this.biome.gen;
 
@@ -75,9 +79,11 @@ export class Terrain {
       hh *= islandWindow(x / w, gen.edge); // края уходят под воду -> остров
       this.surface[x] = CFG.GROUND_BASE - hh;
     }
+    if (shape?.profile && srng) shape.profile(this.surface, { rng: srng, width: w, height: h });
 
     this._paintMask();
     if (gen.caves > 0) this._carveCaves(gen.caves);
+    if (shape?.carve && srng) shape.carve(this, srng);
     this._syncSolidFromMask();
     this._paintTexture();
   }

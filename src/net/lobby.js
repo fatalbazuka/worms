@@ -1,6 +1,7 @@
 import { player } from '../platform/player.js';
-import { findMatch, searchStatus } from './matchmaker.js';
+import { findMatch, searchStatus, BAND_OPEN_AFTER } from './matchmaker.js';
 import { makeTransport } from './connect.js';
+import { isCasualRoom, CASUAL_PREFIX } from './rooms.js';
 
 /**
  * Лобби: кто сейчас онлайн и с кем свести.
@@ -24,6 +25,12 @@ import { makeTransport } from './connect.js';
  * комнату, вошедший заходит сразу. Друг по ссылке минует лобби и попадает
  * прямо в партию, поэтому игровая сцена стучится тем же join (knock),
  * иначе хозяин, ждущий на экране стола, ничего бы не узнал.
+ *
+ * Режимов два, и у каждого свои очереди и столы: «рейтинг» — подбор по
+ * рейтингу, бой меняет рейтинг; «без рейтинга» — подбор с кем угодно, сразу,
+ * и бой ни на что не влияет. Режим едет в heartbeat (queue), а у стола он
+ * зашит в код комнаты (rooms.js). Старый клиент без queue считается
+ * рейтинговым.
  */
 
 const HEARTBEAT = 1500;   // мс между «я здесь»
@@ -35,6 +42,7 @@ export class Lobby {
     this.me = player();
     this.peers = new Map();      // id -> { id, name, rating, state, waited, room, seen }
     this.state = 'idle';         // idle | searching | hosting | playing
+    this.queue = 'rated';        // rated | casual — режим поиска или стола
     this.room = null;            // код своей открытой игры, пока hosting
     this.searchStart = 0;        // когда нажали «искать» — для ширины коридора
     this.onChange = null;        // сцена перерисовывает список
@@ -57,7 +65,17 @@ export class Lobby {
   /** Подпись под кнопкой поиска: во что сейчас упирается подбор. */
   statusText() {
     if (this.state !== 'searching') return '';
+    if (this.queue === 'casual') return 'Ищем соперника без рейтинга…';
     return searchStatus(this.waited(), this.searching().length);
+  }
+
+  /**
+   * Сколько человек сейчас ищут бой в этом режиме — вместе со мной, если
+   * я тоже ищу. Это и есть «сейчас ищут N» в меню.
+   */
+  searchingCount(queue = this.queue) {
+    const me = this.state === 'searching' && this.queue === queue ? 1 : 0;
+    return this.searching(queue).length + me;
   }
 
   _beat() {
@@ -68,6 +86,7 @@ export class Lobby {
       name: this.me.name,
       rating: this.me.rating,
       state: this.state,
+      queue: this.queue,
       waited: this.waited(),
       room: this.state === 'hosting' ? this.room : undefined,
     });
@@ -89,7 +108,8 @@ export class Lobby {
     if (msg.type === 'here' && msg.id && msg.id !== this.me.id) {
       this.peers.set(msg.id, {
         id: msg.id, name: msg.name, rating: msg.rating,
-        state: msg.state, waited: msg.waited ?? 0, room: msg.room ?? null, seen: Date.now(),
+        state: msg.state, queue: msg.queue === 'casual' ? 'casual' : 'rated',
+        waited: msg.waited ?? 0, room: msg.room ?? null, seen: Date.now(),
       });
       if (this.state === 'searching') this._tryMatch();
       this.onChange?.(this.list());
@@ -106,16 +126,21 @@ export class Lobby {
     return [...this.peers.values()].sort((a, b) => b.rating - a.rating);
   }
 
-  /** Открытые игры: кто ждёт соперника за своим столом. */
-  tables() {
+  /**
+   * Открытые игры: кто ждёт соперника за своим столом. С queue — только
+   * столы этого режима (режим стола — по коду его комнаты).
+   */
+  tables(queue = null) {
     return [...this.peers.values()]
       .filter((p) => p.state === 'hosting' && p.room)
+      .filter((p) => !queue || (queue === 'casual') === isCasualRoom(p.room))
       .sort((a, b) => b.rating - a.rating);
   }
 
   /** Открыть свою игру: стол виден всем, ждём, пока кто-то войдёт. */
   host(room) {
     this.state = 'hosting';
+    this.queue = isCasualRoom(room) ? 'casual' : 'rated';
     this.room = room;
     this.matched = null;
     this.searchStart = 0;
@@ -164,12 +189,13 @@ export class Lobby {
     return t.room;
   }
 
-  /** Только те, кто тоже ищет бой. */
-  searching() {
-    return [...this.peers.values()].filter((p) => p.state === 'searching');
+  /** Только те, кто тоже ищет бой — в том же режиме. */
+  searching(queue = this.queue) {
+    return [...this.peers.values()].filter((p) => p.state === 'searching' && p.queue === queue);
   }
 
-  search(on = true) {
+  search(on = true, queue = this.queue) {
+    if (on) this.queue = queue === 'casual' ? 'casual' : 'rated';
     this.state = on ? 'searching' : 'idle';
     this.searchStart = on ? Date.now() : 0;
     this.matched = null;
@@ -179,10 +205,17 @@ export class Lobby {
   /** Пару считает matchmaker: одинаковые данные — одинаковый ответ у обоих. */
   _tryMatch() {
     if (this.matched) return;
-    const me = { id: this.me.id, rating: this.me.rating, waited: this.waited() };
-    const found = findMatch(me, this.searching());
+    // Без рейтинга подходит любой и сразу: для подбора все будто ждали
+    // достаточно, чтобы коридор открылся полностью. Пары по-прежнему
+    // считаются одинаково у обоих — входные данные те же.
+    const casual = this.queue === 'casual';
+    const waited = (p) => (casual ? BAND_OPEN_AFTER : p.waited);
+    const me = { id: this.me.id, rating: this.me.rating, waited: casual ? BAND_OPEN_AFTER : this.waited() };
+    const others = this.searching().map((p) => ({ ...p, waited: waited(p), ref: p }));
+    const found = findMatch(me, others);
     if (!found) return;
-    this._enter(roomFor(this.me.id, found.peer.id), found.peer);
+    const peer = found.peer.ref ?? found.peer;
+    this._enter(roomFor(this.me.id, peer.id, casual), peer);
   }
 
   _enter(room, opponent) {
@@ -225,7 +258,7 @@ export async function knock(room) {
  * Код комнаты из пары идентификаторов. Порядок не важен — сортируем,
  * чтобы обе стороны получили одно и то же, не договариваясь.
  */
-export function roomFor(a, b) {
+export function roomFor(a, b, casual = false) {
   const key = [a, b].sort().join('|');
   let h = 2166136261;
   for (let i = 0; i < key.length; i++) {
@@ -233,7 +266,8 @@ export function roomFor(a, b) {
     h = Math.imul(h, 16777619);
   }
   const abc = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
-  let out = 'M';
+  // Рейтинговый подбор — «M…», без рейтинга — «Z…» (см. rooms.js)
+  let out = casual ? CASUAL_PREFIX : 'M';
   let n = h >>> 0;
   for (let i = 0; i < 5; i++) { out += abc[n % abc.length]; n = Math.floor(n / abc.length); }
   return out;

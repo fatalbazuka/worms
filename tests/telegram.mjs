@@ -109,20 +109,29 @@ async function openPage({ startParam = null, cloud = {}, local = null, viewport,
       const reply = (body, status = 200) => new Response(JSON.stringify(body), {
         status, headers: { 'content-type': 'application/json' },
       });
-      if (u.includes('/functions/v1/worms-result')) {
-        const body = JSON.parse(opts.body ?? '{}');
-        globalThis.__server.calls.push({ ...body, apikey: opts.headers?.apikey });
-        const player = { id: 'tg42', name: 'Тест Телеграмов', rating: 1300, wins: 6, losses: 2 };
-        if (body.action === 'me') return reply({ player });
-        return reply({ status: 'confirmed', delta: 12, player: { ...player, rating: 1312, wins: 7 } });
-      }
-      if (u.includes('/rest/v1/worms_player')) {
-        globalThis.__server.calls.push({ action: 'top', apikey: opts.headers?.apikey });
-        return reply([
-          { id: 'tg1', name: 'Оля', rating: 1510, wins: 20, losses: 4 },
-          { id: 'tg42', name: 'Тест Телеграмов', rating: 1300, wins: 6, losses: 2 },
-          { id: 'tg2', name: 'Петя', rating: 990, wins: 3, losses: 9 },
-        ]);
+      // Свой сервер аккаунтов. Пока тест не включил его (__server.enabled),
+      // он отвечает «вход через Telegram не настроен» — как сервер без
+      // токена бота, — и профиль живёт на облаке Telegram.
+      if (u.includes('/api/')) {
+        const path = new URL(u, location.href).pathname;
+        const body = opts.body ? JSON.parse(opts.body) : {};
+        const auth = opts.headers?.authorization ?? null;
+        const player = { id: 'tg42', name: 'Тест Телеграмов', rating: 1300, wins: 6, losses: 2, telegram: true, rank: 2 };
+        globalThis.__server.calls.push({ path, auth, ...body });
+        if (!globalThis.__server.enabled) return reply({ error: 'вход через Telegram не настроен' }, 503);
+        if (path === '/api/telegram') return reply({ token: 'tok-tg42', player });
+        if (path === '/api/me') return reply({ player });
+        if (path === '/api/top') {
+          return reply({ players: [
+            { id: 'tg1', name: 'Оля', rating: 1510, wins: 20, losses: 4 },
+            { id: 'tg42', name: 'Тест Телеграмов', rating: 1300, wins: 6, losses: 2 },
+            { id: 'u77', name: 'Петя', rating: 990, wins: 3, losses: 9 },
+          ] });
+        }
+        if (path === '/api/result') {
+          return reply({ status: 'confirmed', delta: 12, player: { ...player, rating: 1312, wins: 7, rank: 2 } });
+        }
+        return reply({ error: 'нет такого адреса' }, 404);
       }
       return realFetch(url, opts);
     };
@@ -277,20 +286,24 @@ check('профиль пишется в облако', cloudAfter?.id === 'tg42'
 
 // -------------------------------------------------- сервер рейтинга
 
-// Профиль подтягивается с сервера при входе в «Онлайн», таблица лидеров
-// читается публичным ключом, а итог боя уходит с подписанным initData
-await page.evaluate(() => window.__WORMS__.scene.getScene('Menu').showOnline());
-await page.waitForFunction(() => Telegram.WebApp.__calls && globalThis.__server.calls.some((c) => c.action === 'me'),
-  null, { timeout: 5000 }).catch(() => {});
-const srv = await page.evaluate(() => ({
-  calls: globalThis.__server.calls,
-  me: JSON.parse(localStorage.getItem('worms.player.v1')),
-}));
-const meCall = srv.calls.find((c) => c.action === 'me');
-check('при входе в «Онлайн» профиль запрошен у сервера с подписью Telegram',
-  Boolean(meCall) && typeof meCall.initData === 'string' && meCall.initData.includes('hash='),
-  meCall ? `apikey ${String(meCall.apikey).slice(0, 14)}…` : 'запроса не было');
-check('числа сервера стали главными', srv.me.rating === 1300 && srv.me.wins === 6,
+// Сервер с токеном бота: вход в аккаунт по подписи Telegram, без пароля.
+// Дальше профиль и таблица — с сервера, итог боя уходит с токеном входа.
+const srv = await page.evaluate(async () => {
+  globalThis.__server.enabled = true;
+  const m = await import('/src/net/server.js');
+  await m.telegramLogin();
+  window.__WORMS__.scene.getScene('Menu').showOnline();
+  return {
+    calls: globalThis.__server.calls,
+    me: JSON.parse(localStorage.getItem('worms.player.v1')),
+    token: JSON.parse(localStorage.getItem('worms.account.v1') ?? 'null')?.token,
+  };
+});
+const tgCall = srv.calls.find((c) => c.path === '/api/telegram');
+check('вход в аккаунт — по подписи Telegram, без пароля',
+  Boolean(tgCall) && typeof tgCall.initData === 'string' && tgCall.initData.includes('hash=') && srv.token === 'tok-tg42',
+  tgCall ? 'initData с подписью' : 'запроса не было');
+check('числа сервера стали главными', srv.me.rating === 1300 && srv.me.wins === 6 && srv.me.account === true,
   `рейтинг ${srv.me.rating}, побед ${srv.me.wins}`);
 
 await page.evaluate(() => window.__WORMS__.scene.getScene('Menu').showTop());
@@ -303,12 +316,12 @@ check('таблица лидеров показывает игроков и мо
 const rep = await page.evaluate(async () => {
   const srvMod = await import('/src/net/server.js');
   const res = await srvMod.reportResult({ room: 'ABC123', seed: 777, opponent: 'tg1', won: true });
-  const call = globalThis.__server.calls.find((c) => c.action === 'result');
+  const call = globalThis.__server.calls.find((c) => c.path === '/api/result');
   return { res, call, me: JSON.parse(localStorage.getItem('worms.player.v1')) };
 });
 check('итог боя уходит серверу: комната, зерно, соперник, исход',
   rep.call?.room === 'ABC123' && rep.call.seed === 777 && rep.call.opponent === 'tg1' && rep.call.won === true
-    && rep.call.initData.includes('hash='), JSON.stringify(rep.call ?? null).slice(0, 120));
+    && rep.call.auth === 'Bearer tok-tg42', JSON.stringify(rep.call ?? null).slice(0, 120));
 check('подтверждённый бой переписывает рейтинг числами сервера',
   rep.res?.status === 'confirmed' && rep.me.rating === 1312 && rep.me.wins === 7,
   `рейтинг ${rep.me.rating}, побед ${rep.me.wins}`);

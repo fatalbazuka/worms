@@ -8,6 +8,8 @@
  */
 
 import { findMatch, band, BAND_OPEN_AFTER } from '../src/net/matchmaker.js';
+import { isCasualRoom, randomRoom, queueOf } from '../src/net/rooms.js';
+import { isCasualRoom as serverCasual } from '../server/lib/rooms.js';
 
 const failures = [];
 function check(name, ok, detail = '') {
@@ -86,6 +88,24 @@ check('после ожидания коридор снимается', band(BAND
 
 // --- одиночка не матчится сам с собой ---
 check('один в лобби никого не находит', findMatch(p('a', 1000, 99), []) === null);
+
+// --- режим боя по коду комнаты: клиент и сервер согласны ---
+{
+  const rated = Array.from({ length: 2000 }, () => randomRoom(false));
+  const casual = Array.from({ length: 200 }, () => randomRoom(true));
+  check('рейтинговый код никогда не начинается с Z', rated.every((r) => !isCasualRoom(r) && /^[A-Z2-9]{6}$/.test(r)));
+  check('код без рейтинга — всегда на Z', casual.every((r) => isCasualRoom(r) && queueOf(r) === 'casual'));
+  const codes = ['ZAB123', 'zab123', 'MAB123', 'ABC123', '', null];
+  check('сервер понимает режим так же, как клиент',
+    codes.every((c) => isCasualRoom(c) === serverCasual(c)));
+}
+
+// --- без рейтинга: коридор открыт сразу, разница в 900 не мешает ---
+{
+  const a = p('a', 1900, BAND_OPEN_AFTER);
+  const b = p('b', 1000, BAND_OPEN_AFTER);
+  check('с открытым коридором сводит любых', findMatch(a, [b])?.peer.id === 'b' && findMatch(b, [a])?.peer.id === 'a');
+}
 
 console.log(failures.length
   ? `\nне прошло: ${failures.length}`

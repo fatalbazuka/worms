@@ -1,6 +1,7 @@
 import { CFG, DEPTH, TEAM_COLORS, TEAM_NAMES, canvasSize } from '../config.js';
 import { makeRng, subRng } from '../core/rng.js';
 import { BIOMES, pickBiome } from '../core/biomes.js';
+import { pickShape, shapeRng } from '../core/shapes.js';
 import { Terrain } from '../core/Terrain.js';
 import { TurnManager, STATE } from '../core/TurnManager.js';
 import { has, meta } from '../core/assets.js';
@@ -16,6 +17,7 @@ import { captureCommand, captureMove } from '../net/protocol.js';
 import { NetSession } from '../net/session.js';
 import { knock } from '../net/lobby.js';
 import { randomRoom, copyText } from '../net/transport.js';
+import { isCasualRoom } from '../net/rooms.js';
 import { makeTransport } from '../net/connect.js';
 import { startRoom, shareRoom, haptic, inviteLink, offerHomeScreenOnce, setBattle } from '../platform/telegram.js';
 import { HOTSEAT } from '../core/match.js';
@@ -27,6 +29,8 @@ import { reportResult, serverAvailable } from '../net/server.js';
 import { leagueOf, nextLeague, toNextLeague } from '../platform/league.js';
 import { OffscreenMarkers } from '../ui/OffscreenMarkers.js';
 import { CameraRig } from '../ui/CameraRig.js';
+import { askText, closeOverlay } from '../ui/Overlay.js';
+import { isDesktop } from '../platform/device.js';
 
 export default class GameScene extends Phaser.Scene {
   constructor() { super('Game'); }
@@ -109,6 +113,8 @@ export default class GameScene extends Phaser.Scene {
     // а Telegram держит ландшафт. Меню всего этого не касается.
     globalThis.document?.body.classList.add('in-battle');
     setBattle(true);
+    // На ПК над полем — перекрестие: сразу видно, что курсор и есть прицел
+    if (isDesktop()) this.input.setDefaultCursor('crosshair');
   }
 
   /** Пересобрать всё, что считалось от размера экрана. */
@@ -229,7 +235,7 @@ export default class GameScene extends Phaser.Scene {
   _netStatus(text, color) {
     if (text != null) this.netStatusText = text;
     const parts = [];
-    if (this.room) parts.push(`комната ${this.room}`);
+    if (this.room) parts.push(`комната ${this.room}${isCasualRoom(this.room) ? ' · без рейтинга' : ''}`);
     if (this.netStatusText) parts.push(this.netStatusText);
     this.hud.setNetStatus(parts.join(' · '), color);
   }
@@ -264,17 +270,21 @@ export default class GameScene extends Phaser.Scene {
       this.fx.banner(`ссылка скопирована · комната ${this.room}`, '#ffd166', 2600);
       return link;
     }
-    const answer = (globalThis.prompt?.('Код комнаты друга (пусто — создать свою):', '') ?? '')
-      .trim().toUpperCase();
-    const room = answer || randomRoom();
-    const link = this.inviteLink(room);
-    copyText(link);
-    // Перезаход: сессия поднимается на старте сцены. Адрес всегда сайта:
-    // t.me-ссылка внутри игры никуда не ведёт
-    const url = new URL(location.href);
-    url.searchParams.set('room', room);
-    location.href = url.toString();
-    return link;
+    askText({
+      title: 'Игра вдвоём', label: 'Код комнаты друга', placeholder: 'пусто — создать свою',
+      maxLength: 10, upper: true, okText: 'Дальше',
+      validate: (v) => (!v || /^[A-Z0-9]{4,10}$/.test(v) ? null : 'код — от 4 до 10 букв и цифр'),
+    }).then((answer) => {
+      if (answer === null) return;
+      const room = answer || randomRoom();
+      copyText(this.inviteLink(room));
+      // Перезаход: сессия поднимается на старте сцены. Адрес всегда сайта:
+      // t.me-ссылка внутри игры никуда не ведёт
+      const url = new URL(location.href);
+      url.searchParams.set('room', room);
+      location.href = url.toString();
+    });
+    return null;
   }
 
   // ------------------------------------------------------------- построение
@@ -366,7 +376,11 @@ export default class GameScene extends Phaser.Scene {
       grass: has(this, `${biome.id}_grass`)
         ? this.textures.get(`${biome.id}_grass`).getSourceImage() : null,
     });
-    this.terrain.generate();
+    // Форма карты: из миссии или меню, иначе случайная от зерна (в сети у
+    // обоих одна). Кампания без поля shape — всегда остров, как и была.
+    const wanted = this.match.shape ?? (this.match.mode === 'campaign' ? 'island' : null);
+    this.shape = pickShape(this.seed, wanted);
+    this.terrain.generate(this.shape, shapeRng(this.seed));
 
     // По одной Phaser-текстуре на чанк: после взрыва в GPU уходит
     // только задетый кусок, а не вся карта целиком.
@@ -476,13 +490,59 @@ export default class GameScene extends Phaser.Scene {
       Phaser.Input.Keyboard.KeyCodes.DOWN, Phaser.Input.Keyboard.KeyCodes.LEFT,
       Phaser.Input.Keyboard.KeyCodes.RIGHT,
     ]);
-    kb.on('keydown', (e) => {
-      const n = parseInt(e.key, 10);
-      if (!Number.isNaN(n) && n >= 1) this.turn.setWeaponIndex(n - 1);
-      if (e.key === 'r' || e.key === 'R') {
-        if (this.turn.state === STATE.OVER) this.scene.restart();
-      }
-    });
+    // Tab и F1 у браузера заняты (фокус, справка) — в бою они наши
+    kb.addCapture([
+      Phaser.Input.Keyboard.KeyCodes.TAB, Phaser.Input.Keyboard.KeyCodes.F1,
+    ]);
+    kb.on('keydown', (e) => this._hotkey(e));
+  }
+
+  /**
+   * Горячие клавиши. Оружие меняется только в свой ход: раньше цифры
+   * работали всегда, и в сетевой партии можно было «переключить» ствол
+   * сопернику прямо посреди его хода.
+   */
+  _hotkey(e) {
+    const hud = this.hud;
+    const key = e.key;
+    // Подсказка закрывается любой клавишей, сама клавиша при этом не теряется
+    if (hud.helpVisible && key !== 'F1' && key !== 'h' && key !== 'H' && key !== 'р' && key !== 'Р') {
+      hud.setHelp(false);
+    }
+    if (key === 'r' || key === 'R' || key === 'к' || key === 'К') {
+      if (this.turn.state === STATE.OVER) this.scene.restart();
+      return;
+    }
+    const code = e.code;
+    if (code === 'F1' || code === 'KeyH') { hud.toggleHelp(); return; }
+    if (code === 'KeyM') { hud.toggleSound(); return; }
+    if (code === 'KeyF') { this.focusCamera(); return; }
+    if (code === 'KeyV') { this.rig.toggleOverview(); return; }
+    if (code === 'Escape') {
+      if (hud.helpVisible) hud.setHelp(false);
+      return;   // арсенал закрывается сам (Inventory)
+    }
+
+    const mine = this.canPlayerAct();
+    if (code === 'Tab') { if (mine || hud.inventory?.isOpen) hud.inventory?.toggle(); return; }
+    if (!mine) return;
+    const digit = /^Digit(\d)$/.exec(code);
+    if (digit) {
+      const n = Number(digit[1]);
+      this.turn.setWeaponIndex(n === 0 ? 9 : n - 1);
+      return;
+    }
+    if (code === 'KeyQ' || code === 'KeyE') this._cycleWeapon(code === 'KeyE' ? 1 : -1);
+  }
+
+  /** Соседний ствол, у которого остались патроны. */
+  _cycleWeapon(dir) {
+    const n = WEAPONS.length;
+    let i = this.turn.weaponIndex;
+    for (let k = 0; k < n; k++) {
+      i = (i + dir + n) % n;
+      if (this.turn.ammoOf(i) > 0) { this.turn.setWeaponIndex(i); return; }
+    }
   }
 
   // ------------------------------------------------------------------ цикл
@@ -589,10 +649,14 @@ export default class GameScene extends Phaser.Scene {
   /**
    * Итог — серверу. Локальный расчёт уже на экране как предварительный;
    * ответ сервера дописывает строку: засчитано, ждём соперника или бой без
-   * рейтинга. Только в Telegram: анонима сервер подтвердить не может.
+   * рейтинга. Только для вошедших в аккаунт: анонима сервер не знает.
    */
   _reportToServer(won, ratingText, leagueText) {
-    if (!serverAvailable() || !this.net?.opponent?.id) return;
+    if (!this.net?.opponent?.id) return;
+    if (!serverAvailable()) {
+      ratingText.setText(`${ratingText.text} · без аккаунта бой не в рейтинге`);
+      return;
+    }
     const me = player();
     const before = me.rating;
     ratingText.setText(`${ratingText.text} · отправляю…`);
@@ -607,7 +671,7 @@ export default class GameScene extends Phaser.Scene {
         } else if (res?.status === 'pending') {
           ratingText.setText(`${base} · ждём отчёт соперника`);
         } else if (res?.status === 'unrated') {
-          ratingText.setText(`${base} · без рейтинга: соперник не из Telegram`);
+          ratingText.setText(`${base} · без рейтинга: у соперника нет аккаунта`);
         } else if (res?.status === 'disputed') {
           ratingText.setText(`${base} · итоги разошлись, бой не засчитан`);
         } else {
@@ -654,7 +718,7 @@ export default class GameScene extends Phaser.Scene {
     // Сила: держим «Огонь» — шкала набирается, отпустили — выстрел.
     // Состояние читаем опросом, а не событиями: так тач-кнопка и пробел
     // не могут разъехаться по порядку событий.
-    const pressed = this.moveInput.fire || k.fire.isDown;
+    const pressed = this.moveInput.fire || k.fire.isDown || this.mouseFire;
     if (pressed && !this.charging) this.beginCharge();
     else if (!pressed && this.charging) this.releaseCharge();
   }
@@ -713,6 +777,7 @@ export default class GameScene extends Phaser.Scene {
   resetAim() {
     this.aimAngle = CFG.AIM_ANGLE_START;
     this.cancelCharge();
+    this.mouseFire = false;
     this.remoteAim = false;
     this.remoteCharge = 0;
     this._lastMove = '';
@@ -1043,7 +1108,11 @@ export default class GameScene extends Phaser.Scene {
     // очков не бывает, иначе их можно было бы «нафармить» о самого себя.
     let ratingLine = '';
     let leagueLine = '';
-    if (this.net?.connected && winner >= 0 && this.net.opponent) {
+    // Бой без рейтинга: рейтинг не трогаем ни здесь, ни на сервере
+    const casual = isCasualRoom(this.room);
+    if (this.net?.connected && winner >= 0 && casual) {
+      ratingLine = 'бой без рейтинга';
+    } else if (this.net?.connected && winner >= 0 && this.net.opponent) {
       const me = player();
       const before = leagueOf(me.rating);
       const delta = eloDelta(me.rating, this.net.opponent.rating, winner === mine);
@@ -1081,10 +1150,11 @@ export default class GameScene extends Phaser.Scene {
       const leagueText = this.rig.ui(this.add.text(CFG.VIEW_W / 2, CFG.VIEW_H / 2 + 38, leagueLine,
         font(14, 800, leagueOf(player().rating).text)).setOrigin(0.5).setScrollFactor(0)
         .setDepth(DEPTH.HUD + 11));
-      this._reportToServer(winner === mine, ratingText, leagueText);
+      if (!casual) this._reportToServer(winner === mine, ratingText, leagueText);
     }
     const sub = this.add.text(CFG.VIEW_W / 2, CFG.VIEW_H / 2 + (ratingLine ? 68 : 32),
-      backToMenu ? 'тап — в меню' : 'тап или R — новая карта',
+      // На ПК — «клик»: «тап» там читается как опечатка
+      `${isDesktop() ? 'клик' : 'тап'}${backToMenu ? ' — в меню' : ' или R — новая карта'}`,
       font(18, 700, UI.textDim))
       .setOrigin(0.5).setScrollFactor(0).setDepth(DEPTH.HUD + 11);
     this.rig.ui(sub);
@@ -1147,6 +1217,9 @@ export default class GameScene extends Phaser.Scene {
     this.game.events.off('worms-resize', this.relayout, this);
     globalThis.document?.body.classList.remove('in-battle');
     setBattle(false);
+    closeOverlay();
+    this.input?.setDefaultCursor?.('default');
+    this.mouseFire = false;
     this.mines = [];
     this.aim?.destroy();
     this.crates = [];

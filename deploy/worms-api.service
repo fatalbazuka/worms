@@ -1,0 +1,27 @@
+# Сервер аккаунтов без Docker (Node 22+). Установка:
+#   sudo useradd --system --home /opt/worms worms
+#   sudo git clone https://github.com/fatalbazuka/worms.git /opt/worms
+#   sudo mkdir -p /var/lib/worms && sudo chown worms: /var/lib/worms
+#   sudo cp /opt/worms/deploy/worms-api.service /etc/systemd/system/
+#   sudo systemctl enable --now worms-api
+[Unit]
+Description=Worms: аккаунты и рейтинг
+After=network.target
+
+[Service]
+User=worms
+WorkingDirectory=/opt/worms
+Environment=PORT=3000
+Environment=HOST=127.0.0.1
+Environment=DB_PATH=/var/lib/worms/worms.db
+Environment=TRUST_PROXY=1
+# Environment=TELEGRAM_BOT_TOKEN=...   — или EnvironmentFile=/etc/worms.env
+ExecStart=/usr/bin/node --disable-warning=ExperimentalWarning server/index.mjs
+Restart=on-failure
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/worms
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

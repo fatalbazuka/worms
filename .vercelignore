@@ -3,3 +3,11 @@
 assets/raw/
 tools/
 node_modules/
+# Развёртывание на своём сервере и тесты Vercel не нужны
+deploy/
+dist/
+tests/
+Dockerfile
+docker-compose.yml
+.env.example
+server/

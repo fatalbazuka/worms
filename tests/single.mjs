@@ -105,6 +105,7 @@ const info = () => page.evaluate(() => {
       - Math.min(...s.worms.map((w) => w.x))),
     turnTime: s.turnTime,
     ammo: JSON.stringify(s.turn.ammo),
+    shape: s.shape?.id,
   };
 });
 
@@ -231,14 +232,14 @@ const unlocked = await page.evaluate(
 check('следующая миссия открылась после победы', unlocked === true);
 
 // Зерно каждой миссии закреплено, и плохое зерно делает её непроходимой:
-// бойцы в воде, стороны на разных островах или на расстоянии, которое не
-// перекрыть выстрелом. Дешевле проверить все восемь здесь, чем узнать об
-// этом от игрока, застрявшего на пятой.
+// бойцы в воде или на расстоянии, которое не перекрыть выстрелом.
+// Дешевле проверить все миссии здесь, чем узнать об этом от игрока,
+// застрявшего на пятой.
 const CAMPAIGN = await page.evaluate(async () => {
   const { MISSIONS } = await import('/src/campaign/missions.js');
   return MISSIONS.map((m) => ({ id: m.id, sizes: m.teams.map((t) => t.worms) }));
 });
-check('в кампании восемь миссий', CAMPAIGN.length === 8, `${CAMPAIGN.length}`);
+check('в кампании двенадцать миссий', CAMPAIGN.length === 12, `${CAMPAIGN.length}`);
 
 for (const { id, sizes: expected } of CAMPAIGN) {
   await page.evaluate(async (missionId) => {
@@ -257,6 +258,15 @@ for (const { id, sizes: expected } of CAMPAIGN) {
     m.spread > 250 && m.spread < 1800, `${m.spread} px между крайними`);
   if (id === 'storm') {
     check('в «Шторме» ветер сильный', Math.abs(m.wind) >= 190, `${m.wind}`);
+  }
+  if (id === 'islands') {
+    const tp = await page.evaluate(async () => {
+      const { WEAPONS } = await import('/src/weapons/index.js');
+      const s = window.__WORMS__.scene.getScene('Game');
+      return s.turn.ammoOf(WEAPONS.findIndex((w) => w.id === 'teleport'), 0);
+    });
+    check('в «Переправе» архипелаг и два телепорта', m.shape === 'archipelago' && tp === 2,
+      `${m.shape}, телепортов ${tp}`);
   }
   if (id === 'siege') {
     check('в «В меньшинстве» свои патроны и время хода',

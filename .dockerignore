@@ -1,0 +1,17 @@
+.git
+.github
+.claude
+.vercel
+node_modules
+dist
+assets/raw
+tools
+tests
+docs
+supabase
+*.log
+.env
+.env.*
+!.env.example
+data
+backups

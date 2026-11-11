@@ -6,13 +6,11 @@
  * выдаётся случайный идентификатор и имя «Боец NNNN», которое он может
  * поменять; всё это лежит в localStorage.
  *
- * Рейтинг хранится у игрока. В Telegram — в CloudStorage, привязанном к
- * аккаунту: он едет за человеком на другой телефон и в веб-клиент. Вне
- * Telegram — в localStorage этого устройства. Это честный MMR ровно до
- * того момента, пока никто не захочет его подкрутить: результат сообщает
- * клиент, проверить его некому. Серверная часть описана в
- * docs/rating.sql — там же объяснено, почему без неё рейтинг остаётся
- * «для своих».
+ * Вошёл в аккаунт (ник и пароль на своём сервере или автоматически из
+ * Telegram) — идентификатор, ник и рейтинг приходят с сервера
+ * (src/net/server.js), и бои идут в общую таблицу лидеров. Аноним играет
+ * на локальном рейтинге этого устройства — честном ровно до того, пока
+ * никто не захочет его подкрутить.
  */
 
 import { inTelegram, cloudGet, cloudSet } from './telegram.js';
@@ -100,21 +98,60 @@ export function player() {
     rating: Number.isFinite(stored.rating) ? stored.rating : START_RATING,
     wins: stored.wins ?? 0,
     losses: stored.losses ?? 0,
+    // Вошёл ли в аккаунт на своём сервере: тогда id и ник — оттуда
+    account: Boolean(stored.account),
+    rank: Number.isFinite(stored.rank) ? stored.rank : null,
   };
+  // Вошёл в аккаунт — идентификатор и ник оттуда, даже внутри Telegram:
+  // там можно завести аккаунт и по нику, если у сервера нет токена бота
+  if (cached.account && stored.id) {
+    cached.id = stored.id;
+    cached.name = stored.name ?? cached.name;
+    cached.telegram = Boolean(stored.telegram);
+  }
   save(cached);
   return cached;
 }
 
 /**
- * Сервер подтвердил бой или прислал профиль: его числа главные. Локальный
- * Эло — только предварительный показ, пока ответа нет.
+ * Профиль с сервера: вошли в аккаунт, сервер подтвердил бой или прислал
+ * свежие числа. Его данные главные; локальный Эло — только предварительный
+ * показ, пока ответа нет.
+ *
+ * Объект профиля правится на месте, а не подменяется: лобби и сетевая
+ * сессия держат ссылку на него, и после входа они должны сразу видеть
+ * новый идентификатор и ник.
  */
-export function adoptServer(row) {
+export function adoptAccount(row) {
   if (!row || typeof row !== 'object') return player();
   const p = player();
+  if (typeof row.id === 'string' && row.id) p.id = row.id;
+  if (typeof row.name === 'string' && row.name) p.name = row.name;
   if (Number.isFinite(row.rating)) p.rating = row.rating;
   if (Number.isFinite(row.wins)) p.wins = row.wins;
   if (Number.isFinite(row.losses)) p.losses = row.losses;
+  p.rank = Number.isFinite(row.rank) ? row.rank : null;
+  p.account = true;
+  if (typeof row.telegram === 'boolean') p.telegram = row.telegram;
+  save(p);
+  return p;
+}
+
+/**
+ * Вышли из аккаунта: дальше играем анонимом с чистым профилем. Числа
+ * аккаунта на устройстве не остаются — они живут на сервере.
+ */
+export function dropAccount() {
+  const p = player();
+  const tg = telegramUser();
+  p.id = tg?.id ?? randomId();
+  p.name = tg?.name ?? `Боец ${Math.floor(1000 + Math.random() * 9000)}`;
+  p.rating = START_RATING;
+  p.wins = 0;
+  p.losses = 0;
+  p.rank = null;
+  p.account = false;
+  p.telegram = Boolean(tg);
   save(p);
   return p;
 }

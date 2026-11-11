@@ -27,8 +27,19 @@ export function telegramConfig() {
   return { ...TELEGRAM, ...(globalThis.WORMS_TG ?? {}) };
 }
 
+/**
+ * Объект WebApp — только если игра действительно открыта в Telegram.
+ *
+ * SDK, загруженный в обычном браузере, тоже создаёт WebApp: версия 6.0,
+ * платформа unknown, и каждый вызов новых методов сыплет в консоль ошибки
+ * (а requestFullscreen и вовсе бросает исключение). Такой объект для игры
+ * всё равно что его нет.
+ */
 export function tgApi() {
-  return globalThis.Telegram?.WebApp ?? null;
+  const tg = globalThis.Telegram?.WebApp;
+  if (!tg) return null;
+  if (!tg.initData && (!tg.platform || tg.platform === 'unknown')) return null;
+  return tg;
 }
 
 export function inTelegram() {
@@ -47,6 +58,23 @@ export function tgSupports(version) {
   return a > x || (a === x && (b ?? 0) >= (y ?? 0));
 }
 
+/**
+ * Метод есть у клиента и клиент достаточно новый, чтобы его вызвать.
+ * Одного наличия мало: SDK объявляет все методы сразу, а на старом
+ * клиенте вызов пишет ошибку в консоль или бросает исключение.
+ */
+function can(tg, method, version) {
+  return typeof tg?.[method] === 'function' && tgSupports(version);
+}
+
+/**
+ * Клиент Telegram на компьютере: Desktop, macOS, веб-версия. Там игра
+ * получает интерфейс для мыши и клавиатуры, как в обычном браузере.
+ */
+export function isDesktopClient(tg = tgApi()) {
+  return ['tdesktop', 'macos', 'web', 'weba', 'webk', 'unigram'].includes(tg?.platform);
+}
+
 // ----------------------------------------------------------------- запуск
 
 let started = false;
@@ -60,13 +88,15 @@ export function initTelegram() {
   try {
     tg.ready();
     tg.expand();
-    if (tg.disableVerticalSwipes) tg.disableVerticalSwipes();
-    if (tg.setHeaderColor) tg.setHeaderColor('#0b1021');
-    if (tg.setBackgroundColor) tg.setBackgroundColor('#0b1021');
-    if (tg.setBottomBarColor) tg.setBottomBarColor('#0b1021');
+    if (can(tg, 'disableVerticalSwipes', '7.7')) tg.disableVerticalSwipes();
+    if (can(tg, 'setHeaderColor', '6.1')) tg.setHeaderColor('#0b1021');
+    if (can(tg, 'setBackgroundColor', '6.1')) tg.setBackgroundColor('#0b1021');
+    if (can(tg, 'setBottomBarColor', '7.10')) tg.setBottomBarColor('#0b1021');
     // Полный экран появился в Bot API 8.0; в компактном режиме ландшафтной
-    // игре тесно, поэтому просим его всегда, а не только с иконки.
-    if (tg.requestFullscreen) tg.requestFullscreen();
+    // игре тесно, поэтому просим его всегда, а не только с иконки. На ПК
+    // (Telegram Desktop, macOS, web) полный экран не нужен: там окно и так
+    // большое, а «развернуть на весь монитор» игрок сделает сам.
+    if (can(tg, 'requestFullscreen', '8.0') && !isDesktopClient(tg)) tg.requestFullscreen();
   } catch (e) {
     console.warn('[telegram] init failed', e);
   }
@@ -106,7 +136,7 @@ export function setBattle(on) {
  */
 export function syncOrientationLock() {
   const tg = tgApi();
-  if (!tg?.lockOrientation || !tg.unlockOrientation) return;
+  if (!can(tg, 'lockOrientation', '8.0') || !can(tg, 'unlockOrientation', '8.0')) return;
   const landscape = globalThis.innerWidth > globalThis.innerHeight;
   const want = inBattle && landscape;
   if (want === locked) return;
@@ -268,7 +298,9 @@ function setHomeState(state) {
 
 function refreshHomeState() {
   const tg = tgApi();
-  if (!tg?.checkHomeScreenStatus || !tg.addToHomeScreen) return setHomeState('unsupported');
+  if (!can(tg, 'checkHomeScreenStatus', '8.0') || !can(tg, 'addToHomeScreen', '8.0')) {
+    return setHomeState('unsupported');
+  }
   try {
     tg.checkHomeScreenStatus((status) => setHomeState(status || 'unknown'));
   } catch {
@@ -315,8 +347,13 @@ export async function offerHomeScreenOnce() {
  * на другой телефон и в веб-клиент. Вне Telegram — localStorage под тем
  * же ключом, чтобы вызывающему было всё равно, где он.
  */
+function cloud() {
+  const tg = tgApi();
+  return tg && tgSupports('6.9') ? tg.CloudStorage : null;
+}
+
 export function cloudGet(key) {
-  const cs = tgApi()?.CloudStorage;
+  const cs = cloud();
   if (!cs?.getItem) {
     try { return Promise.resolve(localStorage.getItem(key)); } catch { return Promise.resolve(null); }
   }
@@ -337,7 +374,7 @@ export function cloudGet(key) {
 }
 
 export function cloudSet(key, value) {
-  const cs = tgApi()?.CloudStorage;
+  const cs = cloud();
   if (!cs?.setItem) {
     try { localStorage.setItem(key, value); } catch { /* инкогнито */ }
     return Promise.resolve(true);
@@ -358,7 +395,8 @@ export function cloudSet(key, value) {
 
 /** Короткая вибрация на попадание и на нажатие — в Telegram это родное. */
 export function haptic(kind = 'light') {
-  const h = tgApi()?.HapticFeedback;
+  const tg = tgApi();
+  const h = tg && tgSupports('6.1') ? tg.HapticFeedback : null;
   if (!h) return;
   try {
     if (kind === 'hit') h.impactOccurred('medium');

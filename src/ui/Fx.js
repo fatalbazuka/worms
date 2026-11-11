@@ -31,6 +31,23 @@ export class Fx {
     return sfx.play(name, opts);
   }
 
+  /**
+   * Телепорт: голубое кольцо схлопывается там, где боец был, и
+   * разворачивается там, где он появился. Без взрыва и без грохота.
+   */
+  warp(x, y, outward = true) {
+    const s = this.scene;
+    sfx.play('pickup');
+    for (let i = 0; i < 2; i++) {
+      const ring = s.rig.world(s.add.circle(x, y, outward ? 6 : 34)
+        .setStrokeStyle(3, i ? 0xffffff : 0x9fd2ff, 0.95).setDepth(DEPTH.FX));
+      s.tweens.add({
+        targets: ring, radius: outward ? 38 : 4, alpha: 0,
+        duration: 380 + i * 140, ease: 'Cubic.easeOut', onComplete: () => ring.destroy(),
+      });
+    }
+  }
+
   explosion(x, y, radius) {
     const s = this.scene;
     sfx.play(radius <= SMALL_BLAST ? 'smallExplosion' : 'explosion', { radius });

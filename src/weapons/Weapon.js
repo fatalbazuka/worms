@@ -1,4 +1,5 @@
 import { Projectile } from '../entities/Projectile.js';
+import { CFG } from '../config.js';
 
 /**
  * Базовый класс оружия.
@@ -220,5 +221,114 @@ export class ClusterWeapon extends Weapon {
       ));
     }
     return out;
+  }
+}
+
+// ------------------------------------------------------- оружие с целью
+
+/**
+ * Оружие, которое бьёт не туда, куда летит снаряд, а в точку на карте:
+ * авиаудар, телепорт.
+ *
+ * Отдельного «щёлкни по карте» нет намеренно. Точка выводится из того же
+ * выстрела (vx, vy), что и у всего остального оружия: направление — куда
+ * смотрит ствол, дальность — сила заряда. Поэтому оно само работает на
+ * всех схемах управления (кнопки, свайп, мышь), у бота и в сети — по сети
+ * и так уходит ровно этот вектор.
+ */
+export class TargetedWeapon extends Weapon {
+  constructor(cfg) {
+    super(cfg);
+    this.reach = cfg.reach ?? 1500;     // дальность при полной силе, px
+    this.targeted = true;
+  }
+
+  /** Сила 0…1 из длины вектора выстрела. */
+  powerOf(vx, vy, scene) {
+    return Math.min(1, Math.hypot(vx, vy) / CFG.AIM_MAX_POWER);
+  }
+
+  /** Куда придётся удар: переопределяют наследники. */
+  targetPoint(scene, owner, vx, vy) {
+    const p = this.powerOf(vx, vy, scene);
+    const side = vx >= 0 ? 1 : -1;
+    const ox = owner?.x ?? 0;
+    const x = Math.max(40, Math.min(scene.terrain.width - 40, ox + side * p * this.reach));
+    return { x, y: scene.terrain.surfaceYAt(Math.round(x), 0) ?? scene.terrain.height };
+  }
+}
+
+/**
+ * Авиаудар: самолёт сбрасывает ракеты на точку впереди. Направление — в
+ * какую сторону смотрит ствол, дальность — сила заряда; угол не важен.
+ * Ракеты падают почти отвесно, поэтому за холмом от них не спрятаться —
+ * в этом и смысл.
+ */
+export class AirstrikeWeapon extends TargetedWeapon {
+  constructor(cfg) {
+    super(cfg);
+    this.missiles = cfg.missiles ?? 5;
+    this.spacing = cfg.spacing ?? 26;
+    this.missileWeapon = cfg.missileWeapon;
+  }
+
+  fire(scene, x, y, vx, vy, owner) {
+    const t = this.targetPoint(scene, owner, vx, vy);
+    const side = vx >= 0 ? 1 : -1;
+    const out = [];
+    const half = (this.missiles - 1) / 2;
+    for (let i = 0; i < this.missiles; i++) {
+      const k = i - half;
+      // Ракеты идут лесенкой по высоте: падают не залпом, а одна за другой
+      const mx = t.x + k * this.spacing - side * 40;
+      const my = -40 - i * 26;
+      out.push(new Projectile(scene, mx, my, side * 60, 420, this.missileWeapon, owner));
+    }
+    scene.fx?.banner?.('Авиаудар!', '#9fd2ff', 900);
+    return out;
+  }
+}
+
+/**
+ * Телепорт: боец исчезает и появляется у точки прицела. Направление —
+ * угол ствола, дальность — сила заряда. Встаёт он сразу на опору под этой
+ * точкой: появиться в воздухе и разбиться о землю было бы наказанием за
+ * то, что прицел смотрел вверх. Точка в земле — поднимаемся до свободного
+ * места; под точкой вода — туда и уйдёт, это выбор игрока. Ход на этом
+ * кончается.
+ */
+export class TeleportWeapon extends TargetedWeapon {
+  targetPoint(scene, owner, vx, vy) {
+    const p = this.powerOf(vx, vy, scene);
+    const len = Math.hypot(vx, vy) || 1;
+    const ox = owner?.x ?? 0;
+    const oy = owner?.y ?? 0;
+    const W = scene.terrain.width;
+    let x = Math.round(Math.max(20, Math.min(W - 20, ox + (vx / len) * p * this.reach)));
+    let y = Math.round(Math.max(40, Math.min(scene.terrain.height - 4, oy + (vy / len) * p * this.reach)));
+    // Не в земле: шагаем вверх, пока туловище не окажется на свободе
+    const clear = (cx, cy) => (owner ? owner.bodyClear(cx, cy) : !scene.terrain.solidAt(cx, cy));
+    let lift = 0;
+    while (!clear(x, y) && lift < 400) { y -= 2; lift += 2; }
+    if (!clear(x, y)) y = 40;
+    // Вниз до опоры: ноги на землю, а не в воздух
+    const H = scene.terrain.height;
+    const supported = (cx, cy) => (owner ? owner.supported(cx, cy) : scene.terrain.solidAt(cx, cy + 1));
+    while (y < H - 2 && !supported(x, y) && clear(x, y + 1)) y++;
+    return { x, y, water: y >= CFG.DROWN_Y };
+  }
+
+  fire(scene, x, y, vx, vy, owner) {
+    if (!owner) return [];
+    const t = this.targetPoint(scene, owner, vx, vy);
+    scene.fx?.warp?.(owner.x, owner.centerY, false);
+    owner.x = t.x;
+    owner.y = t.y;
+    owner.vx = 0;
+    owner.vy = 0;
+    owner.grounded = false;
+    owner.fallStartY = t.y;      // встал на опору — падать неоткуда
+    scene.fx?.warp?.(owner.x, owner.centerY, true);
+    return [];
   }
 }

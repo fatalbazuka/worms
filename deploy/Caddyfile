@@ -1,0 +1,7 @@
+# Caddy сам получает и продлевает сертификат Let's Encrypt для DOMAIN.
+# Почту для уведомлений можно добавить глобальным блоком:
+#   { email you@example.com }
+{$DOMAIN} {
+	encode zstd gzip
+	reverse_proxy web:80
+}

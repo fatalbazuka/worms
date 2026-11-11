@@ -302,6 +302,79 @@ for (const id of ['bazooka', 'grenade', 'cluster', 'mole', 'banana', 'holy', 'mo
   }
 }
 
+// ------------------------------------------------------- оружие с целью
+// Авиаудар и телепорт бьют не по траектории, а в точку: сторона — куда
+// смотрит ствол, дальность — сила. Стенд тот же, но точку задаём силой.
+{
+  const start = await shoot('bat', 120, true, nextSpot());   // только расставить
+  await settle(1500);
+  if (start.error) check('авиаудар: стенд собрался', false, start.error);
+  else {
+    const fired = await page.evaluate(async () => {
+      const s = window.__WORMS__.scene.getScene('Game');
+      const { CFG } = await import('/src/config.js');
+      const { WEAPONS_BY_ID } = await import('/src/weapons/index.js');
+      const w = WEAPONS_BY_ID.airstrike;
+      const { shooter, target } = window.__probe;
+      target.health = 100; shooter.health = 100;
+      window.__probe.before.health = 100;
+      window.__probe.before.solid = s.terrain.solid.reduce((a, v) => a + v, 0);
+      window.__probe.before.x = target.x;
+      // Сила так, чтобы точка удара пришлась ровно на мишень. Угол ствола
+      // авиаудару не важен — берём крутой, как в бою из-за холма.
+      const p = (target.x - shooter.x) / w.reach;
+      const vx = Math.cos(-1.2) * p * CFG.AIM_MAX_POWER;
+      const vy = Math.sin(-1.2) * p * CFG.AIM_MAX_POWER;
+      const point = w.targetPoint(s, shooter, vx, vy);
+      const shots = w.fire(s, shooter.x, shooter.centerY, vx, vy, shooter);
+      s.projectiles.push(...shots);
+      return { missiles: shots.length, aimDx: Math.round(point.x - target.x), allAbove: shots.every((m) => m.y < 0) };
+    });
+    check('авиаудар: пять ракет сверху', fired.missiles === 5 && fired.allAbove, JSON.stringify(fired));
+    const r = await settle(9000);
+    check('авиаудар: накрывает мишень и рвёт землю', r.damage > 0 && r.crater > 100,
+      `${r.damage} hp, воронка ${r.crater} px, ${r.boom}`);
+    check('авиаудар: стрелка не задевает', r.selfDamage === 0, `${r.selfDamage} hp`);
+  }
+}
+
+{
+  const start = await shoot('bat', 120, true, nextSpot());   // только расставить
+  await settle(1500);
+  if (start.error) check('телепорт: стенд собрался', false, start.error);
+  else {
+    const tp = await page.evaluate(async () => {
+      const s = window.__WORMS__.scene.getScene('Game');
+      const { CFG } = await import('/src/config.js');
+      const { WEAPONS_BY_ID } = await import('/src/weapons/index.js');
+      const w = WEAPONS_BY_ID.teleport;
+      const { shooter } = window.__probe;
+      shooter.health = 100;
+      const from = { x: shooter.x, y: shooter.y };
+      // Вверх и вправо на полсилы: точка в воздухе, встать надо на землю
+      const vx = Math.cos(-1.0) * 0.5 * CFG.AIM_MAX_POWER;
+      const vy = Math.sin(-1.0) * 0.5 * CFG.AIM_MAX_POWER;
+      const point = w.targetPoint(s, shooter, vx, vy);
+      const shots = w.fire(s, shooter.x, shooter.centerY, vx, vy, shooter);
+      return {
+        shots: shots.length, from, to: { x: shooter.x, y: shooter.y }, point,
+        onGround: shooter.supported(shooter.x, shooter.y), clear: shooter.bodyClear(shooter.x, shooter.y),
+      };
+    });
+    await page.waitForTimeout(1500);
+    const after = await page.evaluate(() => {
+      const { shooter } = window.__probe;
+      return { health: shooter.health, x: Math.round(shooter.x), alive: shooter.alive };
+    });
+    check('телепорт: переносит бойца в точку прицела',
+      tp.shots === 0 && Math.abs(tp.to.x - tp.point.x) < 1 && Math.abs(tp.to.x - tp.from.x) > 100,
+      `${Math.round(tp.from.x)} → ${Math.round(tp.to.x)}`);
+    check('телепорт: встаёт на землю, а не в землю и не в воздух', tp.onGround && tp.clear,
+      `опора ${tp.onGround}, свободно ${tp.clear}`);
+    check('телепорт: без урона от падения', after.alive && after.health === 100, `${after.health} hp`);
+  }
+}
+
 check('нет ошибок в консоли', errors.length === 0, errors.slice(0, 3).join(' | '));
 
 await browser.close();

@@ -201,6 +201,9 @@ const ICONS = {
     ctx.lineTo(c + d * 0.55, c - d * 0.55);
     ctx.stroke();
   },
+  // Динамик с волнами — звук включён; с крестом — выключен
+  sound: (ctx, s) => speaker(ctx, s, false),
+  mute: (ctx, s) => speaker(ctx, s, true),
   help: (ctx, s) => {
     stroke(ctx, s);
     ctx.lineCap = 'round';
@@ -215,6 +218,31 @@ const ICONS = {
     ctx.fill();
   },
 };
+
+function speaker(ctx, s, muted) {
+  stroke(ctx, s);
+  const c = s / 2;
+  ctx.fillStyle = UI.text;
+  ctx.beginPath();
+  ctx.moveTo(s * 0.2, c - s * 0.09);
+  ctx.lineTo(s * 0.32, c - s * 0.09);
+  ctx.lineTo(s * 0.47, c - s * 0.23);
+  ctx.lineTo(s * 0.47, c + s * 0.23);
+  ctx.lineTo(s * 0.32, c + s * 0.09);
+  ctx.lineTo(s * 0.2, c + s * 0.09);
+  ctx.closePath();
+  ctx.fill();
+  ctx.beginPath();
+  if (muted) {
+    ctx.moveTo(s * 0.58, c - s * 0.12); ctx.lineTo(s * 0.8, c + s * 0.12);
+    ctx.moveTo(s * 0.8, c - s * 0.12); ctx.lineTo(s * 0.58, c + s * 0.12);
+  } else {
+    ctx.arc(s * 0.5, c, s * 0.14, -Math.PI / 4, Math.PI / 4);
+    ctx.moveTo(s * 0.5 + Math.cos(-Math.PI / 4) * s * 0.27, c + Math.sin(-Math.PI / 4) * s * 0.27);
+    ctx.arc(s * 0.5, c, s * 0.27, -Math.PI / 4, Math.PI / 4);
+  }
+  ctx.stroke();
+}
 
 function stroke(ctx, s) {
   ctx.strokeStyle = UI.text;

@@ -489,7 +489,8 @@ export class Worm {
     if (this.marker.visible) {
       const bob = Math.sin(this.scene.time.now / 220) * 4;
       const dx = this.markerSprited ? 0 : -7;
-      this.marker.setPosition(rx + dx, ry - CFG.WORM_H - 30 - lift + bob);
+      // Выше числа здоровья: раньше стрелка садилась прямо на него («1⬇0»)
+      this.marker.setPosition(rx + dx, ry - CFG.WORM_H - 58 - lift + bob);
     }
     this.walking = false;
   }

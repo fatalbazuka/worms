@@ -1,0 +1,10 @@
+# Игра по пути, а не в корне домена: https://DOMAIN/worms
+# В .env: CADDYFILE=Caddyfile.subpath и WORMS_PATH=/worms
+{$DOMAIN} {
+	encode zstd gzip
+	# Без слэша на конце относительные адреса страницы считались бы от корня
+	redir {$WORMS_PATH} {$WORMS_PATH}/ 308
+	handle_path {$WORMS_PATH}/* {
+		reverse_proxy web:80
+	}
+}

@@ -3,9 +3,12 @@ import BootScene from './scenes/BootScene.js';
 import MenuScene from './scenes/MenuScene.js';
 import GameScene from './scenes/GameScene.js';
 import { initTelegram, startRoom, screenInsets } from './platform/telegram.js';
-import { loadCloudProfile } from './platform/player.js';
+import { applyUiClass } from './platform/device.js';
+import { loggedIn, telegramLogin, syncMe } from './net/server.js';
+import { loadCloudProfile, player, dropAccount } from './platform/player.js';
 
 initTelegram();
+applyUiClass();
 
 // Логическая ширина подгоняется под пропорции экрана ДО создания игры:
 // иначе на вытянутом телефоне 16:9 вписывается с чёрными полями по бокам
@@ -18,6 +21,14 @@ fitViewToScreen(window.innerWidth, window.innerHeight, screenInsets());
 // останется криво расположенным. Профиль из облака Telegram — тоже до
 // старта: имя и рейтинг читаются синхронно, второго шанса подменить их нет.
 await Promise.all([loadUiFont(), loadCloudProfile()]);
+
+// Аккаунт. Профиль помнит, что вход был, а токена уже нет (вышли в другой
+// вкладке, почистили хранилище) — значит, мы аноним. Иначе — освежаем
+// рейтинг с сервера, а в Telegram входим сами по подписи клиента. Ничего
+// из этого запуск не ждёт: сервер может и не ответить.
+if (player().account && !loggedIn()) dropAccount();
+if (loggedIn()) syncMe();
+else telegramLogin();
 
 
 async function loadUiFont() {
