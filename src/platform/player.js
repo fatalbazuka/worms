@@ -131,6 +131,12 @@ export function adoptAccount(row) {
   if (Number.isFinite(row.wins)) p.wins = row.wins;
   if (Number.isFinite(row.losses)) p.losses = row.losses;
   p.rank = Number.isFinite(row.rank) ? row.rank : null;
+  // Кабинет: аватар, серии, турниры, титулы — всё, что прислал сервер
+  for (const k of ['photo', 'streak', 'bestStreak', 'tourneyWins', 'winrate']) {
+    if (row[k] !== undefined) p[k] = row[k];
+  }
+  if (Array.isArray(row.titles)) p.titles = row.titles;
+  p.admin = row.admin === true;
   p.account = true;
   if (typeof row.telegram === 'boolean') p.telegram = row.telegram;
   save(p);

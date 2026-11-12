@@ -17,7 +17,7 @@ import { captureCommand, captureMove } from '../net/protocol.js';
 import { NetSession } from '../net/session.js';
 import { knock } from '../net/lobby.js';
 import { randomRoom, copyText } from '../net/transport.js';
-import { isCasualRoom } from '../net/rooms.js';
+import { isCasualRoom, isTournamentRoom } from '../net/rooms.js';
 import { makeTransport } from '../net/connect.js';
 import { startRoom, shareRoom, haptic, inviteLink, offerHomeScreenOnce, setBattle } from '../platform/telegram.js';
 import { HOTSEAT } from '../core/match.js';
@@ -156,6 +156,8 @@ export default class GameScene extends Phaser.Scene {
   /** Начало хода: боту нужен чистый план, чужой ему не годится. */
   onTurnBegin() {
     for (const b of this.bots ?? []) b?.reset();
+    // Твой ход — короткий сигнал в руку: телефон можно не держать перед глазами
+    if (this.isLocalTeam(this.turn.currentTeam) && !this.botFor(this.turn.currentTeam)) haptic('turn');
   }
 
   _applyAmmoRules() {
@@ -651,8 +653,21 @@ export default class GameScene extends Phaser.Scene {
    * ответ сервера дописывает строку: засчитано, ждём соперника или бой без
    * рейтинга. Только для вошедших в аккаунт: анонима сервер не знает.
    */
-  _reportToServer(won, ratingText, leagueText) {
+  _reportToServer(won, ratingText, leagueText, tourney = false) {
     if (!this.net?.opponent?.id) return;
+    if (tourney) {
+      ratingText.setText('турнирный матч · отправляю итог…');
+      reportResult({ room: this.room, seed: this.seed, opponent: this.net.opponent.id, won }).then((res) => {
+        if (!ratingText.active) return;
+        const text = {
+          done: won ? 'турнирный матч · победа засчитана, ты проходишь дальше' : 'турнирный матч · итог засчитан',
+          waiting: 'турнирный матч · ждём отчёт соперника',
+          disputed: 'турнирный матч · итоги разошлись — решит админ',
+        }[res?.match] ?? (res?.error ? `турнирный матч · ${res.error}` : 'турнирный матч · сервер недоступен');
+        ratingText.setText(text);
+      });
+      return;
+    }
     if (!serverAvailable()) {
       ratingText.setText(`${ratingText.text} · без аккаунта бой не в рейтинге`);
       return;
@@ -942,6 +957,7 @@ export default class GameScene extends Phaser.Scene {
       this.net?.sendShot(cmd);
     }
     this.fx.sound('shot');
+    if (!this.replaying && !this.isBotTurn()) haptic('shot');
     const shots = this.turn.weapon.fire(this, sx, sy, vx, vy, w);
     this.projectiles.push(...shots);
     this.turn.onFired();
@@ -984,6 +1000,7 @@ export default class GameScene extends Phaser.Scene {
       m.armed = true;
     }
 
+    let felt = 0;
     for (const w of this.worms) {
       if (!w.alive) continue;
       const wx = w.x, wy = w.centerY;
@@ -998,7 +1015,11 @@ export default class GameScene extends Phaser.Scene {
       w.applyImpulse(nx * cfg.knockback * f, ny * cfg.knockback * f - 70 * f);
 
       w.damage(dmg, 'взрыв');
+      if (dmg > 0) felt = Math.max(felt, this.isLocalTeam(w.team) ? 2 : 1);
     }
+    // Отдача в руку: задели своего — сильно, чужого — коротко
+    if (felt === 2) haptic('hurt');
+    else if (felt === 1) haptic('hit');
   }
 
   /**
@@ -1074,6 +1095,15 @@ export default class GameScene extends Phaser.Scene {
   }
 
   /** Команда, за которую играет этот человек: своя в сети, иначе первая. */
+  /** Вибрация — через сцену, чтобы модулям без импорта Telegram было чем звать. */
+  haptic(kind) { haptic(kind); }
+
+  /** Своя ли команда для этого устройства: в сети — моя, иначе — не бот. */
+  isLocalTeam(team) {
+    if (this.net?.connected && this.net.myTeam !== null) return team === this.net.myTeam;
+    return this.match.teams[team]?.control !== 'bot';
+  }
+
   get myTeamIndex() {
     if (this.net?.connected && this.net.myTeam !== null) return this.net.myTeam;
     return this.match.teams.findIndex((t) => t.control !== 'bot');
@@ -1110,8 +1140,11 @@ export default class GameScene extends Phaser.Scene {
     let leagueLine = '';
     // Бой без рейтинга: рейтинг не трогаем ни здесь, ни на сервере
     const casual = isCasualRoom(this.room);
+    const tourney = isTournamentRoom(this.room);
     if (this.net?.connected && winner >= 0 && casual) {
       ratingLine = 'бой без рейтинга';
+    } else if (this.net?.connected && winner >= 0 && tourney) {
+      ratingLine = 'турнирный матч';
     } else if (this.net?.connected && winner >= 0 && this.net.opponent) {
       const me = player();
       const before = leagueOf(me.rating);
@@ -1150,7 +1183,7 @@ export default class GameScene extends Phaser.Scene {
       const leagueText = this.rig.ui(this.add.text(CFG.VIEW_W / 2, CFG.VIEW_H / 2 + 38, leagueLine,
         font(14, 800, leagueOf(player().rating).text)).setOrigin(0.5).setScrollFactor(0)
         .setDepth(DEPTH.HUD + 11));
-      if (!casual) this._reportToServer(winner === mine, ratingText, leagueText);
+      if (!casual) this._reportToServer(winner === mine, ratingText, leagueText, tourney);
     }
     const sub = this.add.text(CFG.VIEW_W / 2, CFG.VIEW_H / 2 + (ratingLine ? 68 : 32),
       // На ПК — «клик»: «тап» там читается как опечатка

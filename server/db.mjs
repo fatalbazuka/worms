@@ -51,6 +51,66 @@ const MIGRATIONS = [
     unique (room, seed)
   );
   `,
+  // 2 — только Telegram: аватар, серии, титулы; турниры; платежи звёздами
+  `
+  alter table player add column photo text;
+  alter table player add column streak integer not null default 0;
+  alter table player add column best_streak integer not null default 0;
+  alter table player add column tourney_wins integer not null default 0;
+  alter table player add column titles text not null default '[]';
+
+  create table tournament (
+    id          integer primary key,
+    name        text not null,
+    size        integer not null,                 -- мест: 4, 8, 16
+    fee         integer not null default 0,       -- взнос в звёздах, 0 — бесплатно
+    status      text not null default 'open'
+                check (status in ('open', 'running', 'finished', 'cancelled')),
+    starts_at   integer,                          -- автостарт, мс; null — вручную
+    created_at  integer not null,
+    started_at  integer,
+    finished_at integer,
+    winner      text references player (id)
+  );
+
+  create table tournament_player (
+    tid        integer not null references tournament (id),
+    player_id  text not null references player (id),
+    joined_at  integer not null,
+    charge_id  text,                              -- оплата взноса, если был
+    primary key (tid, player_id)
+  );
+
+  -- Матч сетки. Слот k раунда r питается победителями слотов 2k и 2k+1
+  -- раунда r-1. Пустой p2 — проход без игры.
+  create table tournament_match (
+    id          integer primary key,
+    tid         integer not null references tournament (id),
+    round       integer not null,
+    slot        integer not null,
+    p1          text references player (id),
+    p2          text references player (id),
+    room        text not null unique,
+    p1_claim    text check (p1_claim in ('win', 'loss')),
+    p2_claim    text check (p2_claim in ('win', 'loss')),
+    winner      text references player (id),
+    status      text not null default 'pending' check (status in ('pending', 'done', 'disputed')),
+    deadline    integer,
+    settled_at  integer,
+    unique (tid, round, slot)
+  );
+
+  create table payment (
+    charge_id   text primary key,                 -- telegram_payment_charge_id
+    player_id   text not null references player (id),
+    tg_id       integer not null,
+    amount      integer not null,
+    purpose     text not null,                    -- donate | tournament
+    ref         text,
+    created_at  integer not null,
+    refunded_at integer
+  );
+  `,
 ];
 
 export function openDb(path) {

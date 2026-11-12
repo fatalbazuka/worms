@@ -2,11 +2,11 @@ import { tgApi, inTelegram } from '../platform/telegram.js';
 import { adoptAccount, dropAccount, player } from '../platform/player.js';
 
 /**
- * Свой сервер: аккаунты и рейтинг (server/index.mjs, база SQLite).
+ * Свой сервер: аккаунт, рейтинг, турниры, звёзды (server/index.mjs).
  *
- * Аккаунт — ник и пароль, без почты. В Telegram вход сам: сервер проверяет
- * подпись initData и заводит аккаунт tg<id> без всяких паролей. Токен входа
- * лежит в localStorage; на сервере только его хэш.
+ * Аккаунт — это Telegram: вход сам, сервер проверяет подпись initData и
+ * заводит игрока tg<id>. Ника и пароля нет. Токен входа лежит в
+ * localStorage; на сервере только его хэш.
  *
  * Рейтинг на сервере главный. Бой засчитывается, когда оба игрока
  * сообщили согласный итог; локальный пересчёт на экране итога — только
@@ -106,24 +106,9 @@ function signOutLocal() {
   changed();
 }
 
-/** Регистрация: ник и пароль. Бросает ApiError с полем name/password. */
-export async function register(name, password) {
-  return signedIn(await call('POST', '/register', { name, password }));
-}
-
-export async function login(name, password) {
-  return signedIn(await call('POST', '/login', { name, password }));
-}
-
-export async function logout() {
-  try { await call('POST', '/logout'); } catch { /* выходим всё равно */ }
+/** Выйти на этом устройстве (на случай смены аккаунта Telegram). */
+export function forgetLogin() {
   signOutLocal();
-}
-
-export async function renameAccount(name) {
-  const data = await call('POST', '/rename', { name });
-  changed();
-  return data.player;
 }
 
 /**
@@ -177,10 +162,44 @@ export async function reportResult({ room, seed, opponent, won }) {
   }
 }
 
-/** Таблица лидеров: сыгравшие хотя бы один бой на рейтинг. */
-export async function fetchTop(limit = 20) {
-  const data = await call('GET', `/top?limit=${limit}`);
+/** Таблица лидеров: по рейтингу или по победам в турнирах. */
+export async function fetchTop(limit = 20, kind = 'rating') {
+  const data = await call('GET', `/top?limit=${limit}&kind=${kind}`);
   return Array.isArray(data.players) ? data.players : [];
+}
+
+/** История боёв для кабинета: дуэли на рейтинг и матчи турниров. */
+export async function fetchHistory() {
+  const data = await call('GET', '/me/history');
+  return Array.isArray(data.items) ? data.items : [];
+}
+
+// ---------------------------------------------------------------- турниры
+
+export async function fetchTournaments() {
+  return call('GET', '/tournaments');
+}
+
+export async function fetchTournament(id) {
+  return (await call('GET', `/tournaments/${Number(id)}`)).tournament;
+}
+
+/** Записаться. Платный турнир вернёт {invoice} — его открывает Telegram. */
+export async function joinTournament(id) {
+  return call('POST', `/tournaments/${Number(id)}/join`, {});
+}
+
+export async function leaveTournament(id) {
+  return call('POST', `/tournaments/${Number(id)}/leave`, {});
+}
+
+export async function startTournament(id) {
+  return call('POST', `/tournaments/${Number(id)}/start`, {});
+}
+
+/** Счёт на поддержку игры звёздами: 10, 50 или 100. */
+export async function donateInvoice(amount) {
+  return (await call('POST', '/stars/donate', { amount })).invoice;
 }
 
 /** Моё место в таблице: null, если меня там нет. */

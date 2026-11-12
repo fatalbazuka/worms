@@ -381,7 +381,10 @@ export class Hud {
     this.chargeCy = cy;
   }
 
-  _press(img) { img.setScale(0.94).setTint(0xc9c9c9); }
+  _press(img) {
+    img.setScale(0.94).setTint(0xc9c9c9);
+    this.scene.haptic?.('tap');
+  }
   _unpress(img) { img.setScale(1).clearTint(); }
   /**
    * Глобальное отпускание: палец мог уйти с кнопки до того, как его подняли,

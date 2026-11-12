@@ -20,14 +20,16 @@ services:
       TELEGRAM_APP: ${TELEGRAM_APP:-}
       WORMS_UI: ${WORMS_UI:-}
       WORMS_API: ${WORMS_API:-}
+      # 1 — в обычном браузере вместо игры ссылка на бота
+      TELEGRAM_ONLY: ${TELEGRAM_ONLY:-1}
     # Порт наружу. С профилем https лучше оставить 127.0.0.1:8080:80 —
     # тогда игра доступна только через Caddy.
     ports:
       - "${HTTP_BIND:-0.0.0.0}:${HTTP_PORT:-8080}:80"
 
-  # Аккаунты и рейтинг: Node + SQLite. База — в томе worms_data, она
-  # переживает пересборку и обновления. Наружу порт не открыт: только
-  # через nginx по /api.
+  # Аккаунты, рейтинг, турниры, бот и звёзды: Node + SQLite. База — в томе
+  # worms_data, она переживает пересборку и обновления. Наружу порт не
+  # открыт: только через nginx по /api (туда же Telegram шлёт вебхук).
   api:
     build:
       context: .
@@ -36,6 +38,9 @@ services:
     restart: unless-stopped
     environment:
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+      ADMIN_TG_IDS: ${ADMIN_TG_IDS:-}
+      PUBLIC_URL: ${PUBLIC_URL:-}
+      BOT_TZ: ${BOT_TZ:-Europe/Moscow}
     volumes:
       - worms_data:/data
 

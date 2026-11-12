@@ -55,6 +55,7 @@ export class TurnManager {
     this.weaponIndex = i;
     this.shotsLeft = WEAPONS[i].shots;
     this.scene.fx?.sound('select');
+    if (!this.scene.isBotTurn?.()) this.scene.haptic?.('select');
     this.scene.hud.setWeaponIndex(i);
   }
 

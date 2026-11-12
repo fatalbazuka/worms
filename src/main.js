@@ -2,13 +2,38 @@ import { CFG, fitViewToScreen, canvasSize } from './config.js';
 import BootScene from './scenes/BootScene.js';
 import MenuScene from './scenes/MenuScene.js';
 import GameScene from './scenes/GameScene.js';
-import { initTelegram, startRoom, screenInsets } from './platform/telegram.js';
+import { initTelegram, startRoom, screenInsets, inTelegram, botLink } from './platform/telegram.js';
+import { apiBase } from './net/server.js';
 import { applyUiClass } from './platform/device.js';
 import { loggedIn, telegramLogin, syncMe } from './net/server.js';
 import { loadCloudProfile, player, dropAccount } from './platform/player.js';
 
 initTelegram();
 applyUiClass();
+
+// Игра живёт в Telegram. На сервере env.js включает WORMS_TELEGRAM_ONLY, и
+// в обычном браузере вместо игры — ссылка на бота. Локально и в тестах
+// флага нет — игра открывается как есть.
+if (globalThis.WORMS_TELEGRAM_ONLY && !inTelegram()) {
+  await showTelegramGate();
+  await new Promise(() => {});   // дальше не грузимся: игра здесь не запускается
+}
+
+async function showTelegramGate() {
+  let link = botLink();
+  if (!link) {
+    try {
+      const res = await fetch(new URL(`${apiBase()}/config`, document.baseURI));
+      const cfg = await res.json();
+      if (cfg?.bot) link = `https://t.me/${cfg.bot}`;
+    } catch { /* ссылки не будет — останется текст */ }
+  }
+  const gate = document.getElementById('gate');
+  if (!gate) return;
+  gate.style.display = 'flex';
+  const a = gate.querySelector('a');
+  if (link) { a.href = link; a.textContent = `Открыть в Telegram`; } else a.remove();
+}
 
 // Логическая ширина подгоняется под пропорции экрана ДО создания игры:
 // иначе на вытянутом телефоне 16:9 вписывается с чёрными полями по бокам

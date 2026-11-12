@@ -42,8 +42,8 @@ console.log(`игра и API на http://127.0.0.1:${port}\n`);
 const only = process.argv[2];
 // match и серверные идут первыми: они без браузера, считают секунды и ловят
 // расхождения раньше, чем на них уйдёт полчаса браузерных прогонов.
-const suites = ['match', 'server', 'api', 'weapons', 'smoke', 'desktop', 'account', 'single', 'net', 'lobby',
-  'supabase', 'telegram'].filter((s) => !only || s === only);
+const suites = ['match', 'server', 'api', 'weapons', 'smoke', 'desktop', 'single', 'net', 'lobby',
+  'supabase', 'telegram', 'tgapp'].filter((s) => !only || s === only);
 
 let code = 0;
 for (const suite of suites) {

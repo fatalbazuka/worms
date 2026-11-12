@@ -12,7 +12,13 @@
 
 export const CASUAL_PREFIX = 'Z';
 const ABC = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
-const ABC_NO_Z = ABC.replace('Z', '');
+// Первая буква обычной комнаты — не Z (бои без рейтинга) и не T (турниры)
+const ABC_NO_Z = ABC.replace('Z', '').replace('T', '');
+
+/** Комната турнирного матча: их коды выдаёт сервер, все начинаются на «T». */
+export function isTournamentRoom(room) {
+  return String(room ?? '').toUpperCase().startsWith('T');
+}
 
 /** Комната боя без рейтинга? */
 export function isCasualRoom(room) {
@@ -25,8 +31,8 @@ export function queueOf(room) {
 }
 
 /**
- * Случайный код из шести знаков. Рейтинговый никогда не начинается с «Z»,
- * иначе случайно оказался бы боем без рейтинга.
+ * Случайный код из шести знаков. Рейтинговый никогда не начинается с «Z»
+ * или «T», иначе случайно оказался бы боем без рейтинга или турнирным.
  */
 export function randomRoom(casual = false) {
   const pick = (abc) => abc[Math.floor(Math.random() * abc.length)];
