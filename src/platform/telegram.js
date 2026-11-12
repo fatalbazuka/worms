@@ -112,6 +112,11 @@ export function initTelegram() {
   for (const ev of ['safeAreaChanged', 'contentSafeAreaChanged', 'fullscreenChanged', 'viewportChanged']) {
     try { tg.onEvent?.(ev, applySafeArea); } catch { /* старый клиент */ }
   }
+  // Полный экран и смена размера окна Telegram: игре — переразложиться,
+  // даже если отступы не изменились (размер окна мог)
+  for (const ev of ['fullscreenChanged', 'viewportChanged']) {
+    try { tg.onEvent?.(ev, () => globalThis.dispatchEvent(new Event('worms-viewport'))); } catch { /* — */ }
+  }
   try { tg.onEvent?.('homeScreenAdded', () => setHomeState('added')); } catch { /* — */ }
   applySafeArea();
   refreshHomeState();
