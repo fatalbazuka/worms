@@ -406,6 +406,17 @@ const straight = await guest.waitForFunction(
 check('startapp=КОД ведёт прямо в комнату, минуя меню', straight);
 const guestLink = await guest.evaluate(() => window.__WORMS__.scene.getScene('Game').inviteLink());
 check('ссылка из партии — тоже t.me', guestLink === 'https://t.me/worms_test_bot?startapp=ROOM42', guestLink);
+
+// Код из ссылки живёт в Telegram всю сессию. Вышли из той партии и начали
+// свою — должны попасть в свою комнату, а не в старую из приглашения
+await guest.evaluate(() => window.__WORMS__.scene.getScene('Game').toMenu());
+await menuReady(guest);
+await guest.evaluate(() => window.__WORMS__.scene.getScene('Menu').startOnline('NEWROOM'));
+const ownRoom = await guest.waitForFunction(() => {
+  const g = window.__WORMS__;
+  return g.scene.isActive('Game') ? g.scene.getScene('Game').room : null;
+}, null, { timeout: 30000 }).then((h) => h.jsonValue()).catch(() => null);
+check('после партии по ссылке своя игра идёт в свою комнату, а не в старую', ownRoom === 'NEWROOM', String(ownRoom));
 await guest.close();
 
 // ------------------------------------------------------- старый клиент

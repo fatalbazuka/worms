@@ -19,7 +19,9 @@ import { knock } from '../net/lobby.js';
 import { randomRoom, copyText } from '../net/transport.js';
 import { isCasualRoom, isTournamentRoom } from '../net/rooms.js';
 import { makeTransport } from '../net/connect.js';
-import { startRoom, shareRoom, haptic, inviteLink, offerHomeScreenOnce, setBattle } from '../platform/telegram.js';
+import {
+  startRoom, forgetStartRoom, shareRoom, haptic, inviteLink, offerHomeScreenOnce, setBattle,
+} from '../platform/telegram.js';
 import { HOTSEAT } from '../core/match.js';
 import { Bot } from '../ai/Bot.js';
 import { markDone, MISSION_BY_ID } from '../campaign/missions.js';
@@ -1238,6 +1240,7 @@ export default class GameScene extends Phaser.Scene {
     this.net?.destroy();
     this.registry.set('net', null);
     this.registry.set('seed', null);
+    forgetStartRoom();
     if (new URLSearchParams(location.search).has('room')) {
       const url = new URL(location.href);
       url.searchParams.delete('room');

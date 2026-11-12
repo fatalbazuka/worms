@@ -225,10 +225,28 @@ export function applySafeArea() {
  * start_param — адресной строки, куда можно дописать ?room=, внутри
  * клиента просто нет. Снаружи работает обычный ?room=.
  */
+let startParamUsed = false;
+
+/**
+ * Код из start_param живёт в Telegram всю сессию, поэтому брать его можно
+ * только для первой партии — той, ради которой открыли ссылку. Раньше он
+ * побеждал всегда: открыл игру по приглашению — и потом и своя игра, и
+ * быстрый бой, и турнирный матч уводили в ту старую комнату. Текущая
+ * комната (?room= в адресе, её ставит меню) теперь главнее, а код из
+ * ссылки гасится, как только из той партии вышли (forgetStartRoom).
+ */
 export function startRoom() {
+  const fromUrl = new URLSearchParams(location.search).get('room');
+  if (fromUrl) return fromUrl.toUpperCase();
+  if (startParamUsed) return null;
   const p = tgApi()?.initDataUnsafe?.start_param;
   if (p && /^[A-Z0-9]{4,10}$/i.test(p)) return p.toUpperCase();
-  return new URLSearchParams(location.search).get('room');
+  return null;
+}
+
+/** Партия по ссылке окончена — код из ссылки больше не действует. */
+export function forgetStartRoom() {
+  startParamUsed = true;
 }
 
 /**
