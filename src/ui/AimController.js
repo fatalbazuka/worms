@@ -1,7 +1,21 @@
 import { CFG, DEPTH } from '../config.js';
 import { has } from '../core/assets.js';
-import { font } from './theme.js';
 import { isDesktop } from '../platform/device.js';
+
+/**
+ * Шкала силы как в Worms Armageddon: 16 «шариков» от бойца вдоль прицела,
+ * каждый следующий крупнее, от тёмно-красного к бледно-жёлтому. Радиусы и
+ * цвета сняты с оригинального спрайта (raw/general/Effects/blob.png), а
+ * рисуются своими средствами — сам спрайт в игру не копируется.
+ */
+const POWER_BLOBS = [
+  [3.5, 0xaa0000], [4.0, 0xae0f06], [4.5, 0xb41f0e], [5.0, 0xb82f16],
+  [5.5, 0xbe3f1e], [6.0, 0xc44f24], [6.5, 0xc85f2c], [7.0, 0xce6f34],
+  [7.5, 0xd47f3c], [8.0, 0xd88f42], [8.5, 0xde9f4a], [9.0, 0xe4af52],
+  [9.5, 0xe8bf5a], [10.0, 0xeecf60], [10.5, 0xf4df68], [11.0, 0xf8ef70],
+];
+const BLOB_START = 14;     // от центра бойца до первого шарика
+const BLOB_STEP = 4.6;     // шаг между шариками: соседние перекрываются клином
 
 /**
  * Прицеливание и протяжка камеры.
@@ -9,16 +23,17 @@ import { isDesktop } from '../platform/device.js';
  * Схем две, работают одновременно:
  *
  * 1. Кнопочная (основная, удобна на телефоне): угол крутится кнопками ▲▼
- *    и хранится в сцене, сила набирается удержанием «Огонь». Здесь эта
- *    схема только рисуется — прицел на луче от бойца и траектория, пока
- *    идёт набор силы. Палец при этом лежит в углу экрана и ничего не
- *    закрывает.
+ *    и хранится в сцене, сила набирается удержанием «Огонь». Палец при
+ *    этом лежит в углу экрана и ничего не закрывает.
  * 2. Свайп по бойцу: направление задаёт угол, длина — силу, отпустили =
  *    выстрел. Быстрее на мыши, но на тач-экране кисть накрывает поле.
  *
- * В обоих случаях подсказка — первые CFG.TRAJ_POINTS точек реальной
- * траектории (та же математика, что в Projectile, с учётом ветра и
- * параметров оружия), обрезанная по столкновению с землёй.
+ * Показано как в оригинале: перед бойцом прицел-крестик на постоянном
+ * расстоянии, а пока копится сила — шкала «шариков» вдоль прицела. Ни
+ * траектории, ни точки падения, ни цифр угла и силы: куда упадёт снаряд с
+ * поправкой на ветер, игрок угадывает сам — в этом и игра. Исключение —
+ * оружие с целью (авиаудар, телепорт): там метка цели, как выбор точки на
+ * карте в оригинале.
  */
 export class AimController {
   constructor(scene) {
@@ -29,10 +44,6 @@ export class AimController {
     this.camStart = 0;
 
     this.gfx = scene.rig.world(scene.add.graphics().setDepth(DEPTH.AIM));
-    this.info = scene.add.text(0, 0, '', font(15, 800))
-      .setOrigin(0.5, 1).setDepth(DEPTH.AIM);
-    scene.rig.world(this.info);
-    this.info.setVisible(false);
 
     // На ПК своя схема: прицел — курсором, сила — удержанием левой кнопки,
     // карта тянется правой или средней. Свайп по бойцу там не нужен.
@@ -111,7 +122,6 @@ export class AimController {
     this.mode = null;
     this.dragX = 0; this.dragY = 0;
     this.gfx.clear();
-    this.info.setVisible(false);
   }
 
   // ------------------------------------------------------- мышь на ПК
@@ -153,7 +163,6 @@ export class AimController {
     this.mode = null;
     this.dragX = 0; this.dragY = 0;
     this.gfx.clear();
-    this.info.setVisible(false);
   }
 
   /** Вектор выстрела из текущего свайпа, либо null, если свайп слишком короткий. */
@@ -185,7 +194,6 @@ export class AimController {
       return;
     }
     if (!w || !scene.canPlayerAct()) {
-      this.info.setVisible(false);
       if (this.crosshair) this.crosshair.setVisible(false);
       return;
     }
@@ -195,7 +203,7 @@ export class AimController {
     else this._drawButtonAim(scene.charging ? scene.charge : 0);
   }
 
-  /** Прицел и — во время набора силы — траектория для кнопочной схемы. */
+  /** Прицел и — во время набора силы — шкала силы для кнопочной схемы. */
   _drawButtonAim(charge) {
     const scene = this.scene;
     const o = this.origin();
@@ -206,24 +214,26 @@ export class AimController {
     this.crosshair.setVisible(true);
     this.crosshair.setPosition(o.x + d.x * CFG.AIM_RAY_LEN, o.y + d.y * CFG.AIM_RAY_LEN);
 
-    this.gfx.lineStyle(2, 0xffffff, 0.28);
-    this.gfx.lineBetween(o.x + d.x * 16, o.y + d.y * 16,
-      o.x + d.x * (CFG.AIM_RAY_LEN - 12), o.y + d.y * (CFG.AIM_RAY_LEN - 12));
-
-    if (!(charge > 0)) { this.info.setVisible(false); return; }
-    // Пошёл заряд — стрелка «чей ход» своё сказала, а над головой теперь
-    // подпись угла и силы: вдвоём они налезали друг на друга
+    if (!(charge > 0)) return;
+    // Пошёл заряд — стрелка «чей ход» своё сказала, убираем её
     if (this.worm?.marker?.visible) this.worm.setActiveMarker(false);
 
-    const speed = charge * CFG.AIM_MAX_POWER;
-    const sx = o.x + d.x * CFG.MUZZLE_OFFSET;
-    const sy = o.y + d.y * CFG.MUZZLE_OFFSET;
-    this._drawTrajectory(sx, sy, d.x * speed, d.y * speed, weapon);
+    this._drawPower(o, d, charge);
+    if (weapon.targeted) {
+      const speed = charge * CFG.AIM_MAX_POWER;
+      this._drawTarget(d.x * speed, d.y * speed, weapon);
+    }
+  }
 
-    const deg = Math.round((scene.aimAngle * 180) / Math.PI);
-    this.info.setText(`${deg}°  ${Math.round(charge * 100)}%`);
-    this.info.setPosition(o.x, o.y - 58);
-    this.info.setVisible(true);
+  /** Шкала силы: столько шариков, сколько набрано, от бойца вдоль прицела. */
+  _drawPower(o, d, charge) {
+    const n = Math.min(POWER_BLOBS.length, Math.ceil(charge * POWER_BLOBS.length));
+    for (let i = 0; i < n; i++) {
+      const [r, color] = POWER_BLOBS[i];
+      const dist = BLOB_START + i * BLOB_STEP;
+      this.gfx.fillStyle(color, 1);
+      this.gfx.fillCircle(o.x + d.x * dist, o.y + d.y * dist, r * 0.8);
+    }
   }
 
   _ensureCrosshair() {
@@ -240,17 +250,6 @@ export class AimController {
       this.crosshair.setTexture(key); // прицел перекрашивается под команду
     }
     this.crosshairTeam = team;
-  }
-
-  _drawTrajectory(sx, sy, vx, vy, weapon) {
-    if (weapon.targeted) { this._drawTarget(vx, vy, weapon); return; }
-    const pts = this.simulate(sx, sy, vx, vy, weapon);
-    for (let i = 0; i < pts.length; i++) {
-      const a = 0.95 - (i / CFG.TRAJ_POINTS) * 0.6;
-      const r = 3.4 - (i / CFG.TRAJ_POINTS) * 1.4;
-      this.gfx.fillStyle(weapon.color, a);
-      this.gfx.fillCircle(pts[i].x, pts[i].y, r);
-    }
   }
 
   /**
@@ -291,60 +290,21 @@ export class AimController {
   }
 
   _drawSwipe() {
-    if (this.crosshair) this.crosshair.setVisible(false);
     if (this.worm?.marker?.visible) this.worm.setActiveMarker(false);
     const shot = this.computeShot();
-    if (!shot) { this.info.setVisible(false); return; }
+    if (!shot) return;
 
+    // Свайп — тот же прицел и та же шкала силы, только направление и сила
+    // берутся из движения пальца
     const o = this.origin();
+    const len = Math.hypot(shot.vx, shot.vy);
+    const d = { x: shot.vx / len, y: shot.vy / len };
+    this._ensureCrosshair();
+    this.crosshair.setVisible(true);
+    this.crosshair.setPosition(o.x + d.x * CFG.AIM_RAY_LEN, o.y + d.y * CFG.AIM_RAY_LEN);
+    this._drawPower(o, d, shot.power / CFG.AIM_MAX_POWER);
     const weapon = this.scene.turn.weapon;
-    const nx = shot.vx / Math.hypot(shot.vx, shot.vy);
-    const ny = shot.vy / Math.hypot(shot.vx, shot.vy);
-    const sx = o.x + nx * CFG.MUZZLE_OFFSET;
-    const sy = o.y + ny * CFG.MUZZLE_OFFSET;
-
-    // Пунктирная траектория — первые CFG.TRAJ_POINTS точек
-    this._drawTrajectory(sx, sy, shot.vx, shot.vy, weapon);
-
-    // Линия силы от бойца
-    this.gfx.lineStyle(2, 0xffffff, 0.35);
-    this.gfx.lineBetween(o.x, o.y, o.x + nx * 46, o.y + ny * 46);
-
-    const pct = Math.round((shot.power / CFG.AIM_MAX_POWER) * 100);
-    const deg = Math.round((shot.angle * 180) / Math.PI);
-    this.info.setText(`${deg}°  ${pct}%`);
-    this.info.setPosition(o.x, o.y - 58);
-    this.info.setVisible(true);
-  }
-
-  /** Та же интеграция, что и у снаряда, но без разрушений. */
-  simulate(x, y, vx, vy, weapon) {
-    const p = weapon.projectile;
-    const terrain = this.scene.terrain;
-    const wind = this.scene.wind;
-    const out = [];
-    let px = x, py = y;
-
-    for (let i = 0; i < CFG.TRAJ_POINTS; i++) {
-      for (let s = 0; s < CFG.TRAJ_STEP; s++) {
-        vx += wind * p.windScale * CFG.TRAJ_DT;
-        vy += CFG.GRAVITY * p.gravityScale * CFG.TRAJ_DT;
-        if (p.drag > 0) {
-          const f = Math.exp(-p.drag * CFG.TRAJ_DT);
-          vx *= f; vy *= f;
-        }
-        const nx2 = px + vx * CFG.TRAJ_DT;
-        const ny2 = py + vy * CFG.TRAJ_DT;
-        const ray = terrain.raycast(px, py, nx2, ny2);
-        px = nx2; py = ny2;
-        if (ray.hit || py > terrain.height || px < 0 || px > terrain.width) {
-          out.push({ x: ray.x, y: ray.y });
-          return out;
-        }
-      }
-      out.push({ x: px, y: py });
-    }
-    return out;
+    if (weapon.targeted) this._drawTarget(shot.vx, shot.vy, weapon);
   }
 
   destroy() {
@@ -354,7 +314,6 @@ export class AimController {
     i.off('pointerup', this.onUp, this);
     i.off('pointerupoutside', this.onUp, this);
     this.gfx.destroy();
-    this.info.destroy();
     if (this.crosshair) this.crosshair.destroy();
   }
 }
