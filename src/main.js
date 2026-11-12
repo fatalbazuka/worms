@@ -127,7 +127,12 @@ function refit() {
   const size = canvasSize();
   // Рамка меняется скачком (Telegram прислал отступы, повернули телефон):
   // её не игнорируем, мелкие колебания ширины — да
-  if (Math.abs(CFG.VIEW_W - wBefore) < 24 && size.join('x') === sizeBefore) return;
+  if (Math.abs(CFG.VIEW_W - wBefore) < 24 && size.join('x') === sizeBefore) {
+    // Логический размер тот же, но окно могло вырасти (Telegram ушёл в
+    // полный экран): канвас всё равно вписываем заново
+    game.scale.refresh();
+    return;
+  }
   // Именно setGameSize: resize() меняет размер, но не пересчитывает
   // пропорции, под которые вписывается канвас, — поля остаются на месте.
   // И размер — канваса, с рамкой: логический без рамки оставлял камеру
@@ -143,5 +148,18 @@ function scheduleRefit(delay) {
 window.addEventListener('resize', () => scheduleRefit(200));
 // Поворот телефона: размеры окна доезжают не сразу, поэтому ждём дольше
 window.addEventListener('orientationchange', () => scheduleRefit(500));
-// Telegram сообщил новые отступы безопасной области
+// Telegram сообщил новые отступы безопасной области или новый размер окна
 window.addEventListener('worms-safearea', () => scheduleRefit(50));
+window.addEventListener('worms-viewport', () => scheduleRefit(150));
+
+/**
+ * Страховка: канвас должен занимать окно целиком. Если он заметно меньше
+ * окна (браузер не прислал resize после полного экрана или поворота) —
+ * переразложиться. Раз в секунду, это дёшево: два getBoundingClientRect.
+ */
+setInterval(() => {
+  const r = game.canvas?.getBoundingClientRect();
+  if (!r) return;
+  const w = window.innerWidth, h = window.innerHeight;
+  if (r.width < w * 0.9 && r.height < h * 0.9) refit();
+}, 1000);

@@ -2,7 +2,7 @@
 <html lang="ru">
 <head>
 <meta charset="utf-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
+<meta name="viewport" content="width=device-width, initial-scale=1, minimum-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
 <meta name="theme-color" content="#0b1021" />
 
 <!-- «На экран Домой» запускает игру без адресной строки. На iPhone это
@@ -154,14 +154,23 @@
     if (vv) {
       var meta = document.querySelector('meta[name="viewport"]');
       var resetting = false;
-      vv.addEventListener('resize', function () {
-        if (vv.scale <= 1.01 || resetting || !meta) return;
+      // Масштаб страницы должен быть ровно 1. Больше — увеличили щипком;
+      // меньше — встроенный браузер (Telegram на Android после поворота или
+      // входа в полный экран) «отдалил» страницу, и игра рисовалась
+      // маленьким окном посреди экрана. В обоих случаях переписываем
+      // viewport — браузер заново ставит масштаб 1.
+      var resetZoom = function () {
+        if (Math.abs(vv.scale - 1) <= 0.01 || resetting || !meta) return;
         resetting = true;
         var was = meta.content;
-        meta.content = was.replace('maximum-scale=1', 'maximum-scale=1.0001');
+        meta.content = was.replace('maximum-scale=1', 'maximum-scale=1.0001')
+          .replace('minimum-scale=1', 'minimum-scale=0.9999');
         setTimeout(function () { meta.content = was; resetting = false; }, 60);
         window.scrollTo(0, 0);
-      });
+      };
+      vv.addEventListener('resize', resetZoom);
+      // Событие resize при отдалении приходит не всегда — проверяем и сами
+      setInterval(resetZoom, 1000);
     }
 
     // Диагностика: что видит страница на самом деле
