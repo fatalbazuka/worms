@@ -1,4 +1,4 @@
-import { UI, font, ensureButton } from '../ui/theme.js';
+import { UI, font, ensureButton, ensureIcon } from '../ui/theme.js';
 import { CFG } from '../config.js';
 import { MISSIONS, loadProgress, isUnlocked } from '../campaign/missions.js';
 import { objectiveText } from '../campaign/objectives.js';
@@ -124,7 +124,10 @@ export default class MenuScene extends Phaser.Scene {
     this.W = CFG.VIEW_W;
     this.H = CFG.VIEW_H;
     this.portrait = this.H > this.W;
-    this.oy = Math.max(0, Math.round((this.H - CFG.VIEW_BASE) / 2));
+    // В вертикальном телефоне раздел начинается у верха экрана, как любой
+    // экран в приложении; раньше блок висел посередине, а сверху и снизу
+    // зияла пустота. В высоком ландшафте (планшет) — по центру, как было.
+    this.oy = this.portrait ? 56 : Math.max(0, Math.round((this.H - CFG.VIEW_BASE) / 2));
     this.uiCam.scrollY = -this.oy;
   }
 
@@ -194,20 +197,27 @@ export default class MenuScene extends Phaser.Scene {
    * Кнопка меню. Ширина фиксированная, чтобы столбец читался как список,
    * а не как набор разных плашек.
    */
-  _button(key, x, y, label, hint, onTap, { w = 420, h = 66, variant = 'normal', enabled = true, into = null } = {}) {
+  _button(key, x, y, label, hint, onTap, {
+    w = 420, h = 66, variant = 'normal', enabled = true, into = null, big = false,
+    titleSize = null, hintSize = null,
+  } = {}) {
     const texKey = `menu-btn-${w}x${h}-${variant}`;
     ensureButton(this, texKey, w, h, variant);
     const img = this.add.image(x, y, texKey).setOrigin(0.5);
     const alpha = enabled ? 1 : 0.45;
     img.setAlpha(alpha);
 
-    const title = this.add.text(x, hint ? y - 10 : y, label,
-      font(hint ? 20 : h < 50 ? 17 : 22, 800, enabled ? UI.text : UI.textDim)).setOrigin(0.5).setAlpha(alpha);
+    // big — главная кнопка экрана: надпись вдвое крупнее обычной
+    const title = this.add.text(x, big ? y - h * 0.13 : hint ? y - 10 : y, label,
+      font(titleSize ?? (big ? 42 : hint ? 20 : h < 50 ? 17 : 22), 800, enabled ? UI.text : UI.textDim))
+      .setOrigin(0.5).setAlpha(alpha);
+    if (!big && hint && h >= 80) title.setY(y - h * 0.16);
     this.items.push(img, title);
     into?.push(img, title);
     let sub = null;
     if (hint) {
-      sub = this.add.text(x, y + 15, hint, font(12, 700, UI.textDim))
+      sub = this.add.text(x, big ? y + h * 0.27 : h >= 80 ? y + h * 0.2 : y + 15, hint,
+        font(hintSize ?? (big ? 20 : 12), 700, big ? '#ffe9c2' : UI.textDim))
         .setOrigin(0.5).setAlpha(alpha);
       this.items.push(sub);
       into?.push(sub);
@@ -234,8 +244,8 @@ export default class MenuScene extends Phaser.Scene {
    * Голое число рейтинга не говорит ни много это, ни мало. Полоса отвечает
    * на оба вопроса сразу — видно и положение внутри лиги, и цель.
    */
-  _leagueBar(cx, y, rating) {
-    const w = 420, h = 10;
+  _leagueBar(cx, y, rating, w = 420, size = 12) {
+    const h = size > 12 ? 14 : 10;
     const cur = leagueOf(rating);
     const next = nextLeague(rating);
     const left = cx - w / 2;
@@ -244,88 +254,203 @@ export default class MenuScene extends Phaser.Scene {
     const fill = Math.max(3, Math.round(w * leagueProgress(rating)));
     this.items.push(this.add.rectangle(left, y, fill, h, cur.color).setOrigin(0, 0.5));
 
-    this.items.push(this.add.text(left, y + 12, cur.name, font(12, 800, cur.text))
+    this.items.push(this.add.text(left, y + 12, cur.name, font(size, 800, cur.text))
       .setOrigin(0, 0));
     this.items.push(this.add.text(left + w, y + 12,
       next ? `до «${next.name}» ещё ${toNextLeague(rating)}` : 'выше некуда',
-      font(12, 700, UI.textDim)).setOrigin(1, 0));
+      font(size, 700, UI.textDim)).setOrigin(1, 0));
   }
 
   _back(onTap = () => this.showRoot()) {
-    this._button('back', 92, this.bottomY(46), '← назад', '', onTap, { w: 148, h: 50 });
+    this._button('back', 108, this.bottomY(52), '← назад', '', onTap, { w: 180, h: 60, titleSize: 22 });
   }
 
+  /** y от верха экрана в координатах раздела (сам раздел сдвинут на oy). */
+  topY(d) { return d - this.oy; }
+
+  /** Маленькая квадратная кнопка со значком. */
+  _iconButton(key, x, y, icon, onTap, size = 52) {
+    const texKey = `menu-icon-btn-${size}`;
+    ensureButton(this, texKey, size, size, 'normal');
+    const img = this.add.image(x, y, texKey).setOrigin(0.5);
+    const glyph = this.add.image(x, y, ensureIcon(this, icon, Math.round(size * 0.62)));
+    this.items.push(img, glyph);
+    img.setInteractive({ useHandCursor: true });
+    img.on('pointerdown', () => { img.setScale(0.94); haptic('tap'); });
+    img.on('pointerout', () => img.setScale(1));
+    img.on('pointerup', () => { img.setScale(1); onTap(); });
+    this.buttons[key] = { x, y: y + this.oy, w: size, h: size, enabled: true };
+    return img;
+  }
+
+  /**
+   * Вкладки внизу экрана — как в любой игре на телефоне: большой палец
+   * достаёт до них без перехвата. «Турниры» и «Профиль» открываются поверх
+   * (это окна), «Бой» и «Топ» — разделы меню.
+   * @returns {number} высота полосы
+   */
+  _tabs(active) {
+    const W = this.W;
+    // Логический пиксель на телефоне — около половины экранного, поэтому
+    // подписи здесь 19–20: меньше уже не читается
+    const h = this.portrait ? 116 : 96;
+    const y0 = this.bottomY(h);
+    this.items.push(this.add.rectangle(0, y0, W, h + 600, 0x0b1018, 0.94).setOrigin(0, 0));
+    this.items.push(this.add.rectangle(0, y0, W, 2, 0xffffff, 0.09).setOrigin(0, 0));
+    const tabs = [
+      ['battle', 'Бой', 'battle', () => this.showRoot()],
+      ['tournaments', 'Турниры', 'trophy', () => this.openTournaments()],
+      ['top', 'Топ', 'podium', () => { this.topFrom = 'tab'; this.showTop(); }],
+      ['account', 'Профиль', 'profile', () => this.openAccount()],
+    ];
+    const span = Math.min(W, 880);
+    const cell = span / tabs.length;
+    const x0 = (W - span) / 2;
+    tabs.forEach(([key, label, icon, onTap], i) => {
+      const x = x0 + cell * (i + 0.5);
+      const on = key === active;
+      const size = this.portrait ? 48 : 40;
+      const glyph = this.add.image(x, y0 + h * 0.36, ensureIcon(this, icon, size))
+        .setAlpha(on ? 1 : 0.6);
+      if (on) glyph.setTint(0xffc247);
+      const text = this.add.text(x, y0 + h * 0.76, label,
+        font(this.portrait ? 20 : 18, 800, on ? UI.accent : UI.textDim)).setOrigin(0.5);
+      const zone = this.add.zone(x, y0 + h / 2, cell, h).setInteractive({ useHandCursor: true });
+      zone.on('pointerdown', () => { glyph.setScale(0.9); haptic('tap'); });
+      zone.on('pointerout', () => glyph.setScale(1));
+      zone.on('pointerup', () => { glyph.setScale(1); onTap(); });
+      this.items.push(glyph, text, zone);
+      if (on) this.items.push(this.add.rectangle(x, y0 + 3, 54, 4, 0xffc247).setOrigin(0.5, 0));
+      this.buttons[key] = { x, y: y0 + h / 2 + this.oy, w: cell, h, enabled: true };
+    });
+    return h;
+  }
+
+  /** Чем запускает большая кнопка: последний выбранный вариант «Башни». */
+  get playChoice() {
+    let saved = null;
+    try { saved = JSON.parse(localStorage.getItem('worms.play.v1') ?? 'null'); } catch { saved = null; }
+    const level = saved && 'level' in saved ? saved.level : 'fighter';
+    return { level: level === null || BOT_LEVELS[level] ? level : 'fighter' };
+  }
+
+  set playChoice(v) {
+    try { localStorage.setItem('worms.play.v1', JSON.stringify(v)); } catch { /* инкогнито */ }
+  }
+
+  /**
+   * Главный экран. Одна большая кнопка — «Играть», остальное вокруг неё:
+   * сверху кто ты и где в лиге, по центру твой боец, внизу вкладки. Всё
+   * привязано к краям экрана, а не к блоку высотой 720: в вертикальном
+   * телефоне раньше весь экран был пуст, а меню жалось в середину.
+   */
   showRoot() {
     this.section = this.showRoot;
     this._clear();
-    this._title('WORMS', 'пошаговая артиллерия');
-    const cx = this.W / 2;
-    const y0 = 242, step = 70;
-
-    // «Башня» — проба новой игры: высокая арена и крюк. Стоит первой,
-    // пока её обкатывают; остальное меню сдвинуто под неё
-    this._button('tower', cx, y0 - step, 'Башня · новое', 'высокая арена, крюк-трос, любой поворот экрана',
-      () => this.showTower(), { variant: 'primary' });
-    this._button('quick', cx, y0, 'Быстрая игра', 'случайная карта',
-      () => this.showQuick());
-    this._button('campaign', cx, y0 + step, 'Кампания', 'миссии с условиями',
-      () => this.showCampaign());
-    this._button('online', cx, y0 + step * 2, 'Онлайн', 'игра вдвоём по ссылке',
-      () => this.showOnline());
-
-    this._button('tournaments', cx, y0 + step * 3, 'Турниры', 'сетка на выбывание, титул чемпиона',
-      () => this.openTournaments());
-    // Кабинет: аккаунт — это Telegram, входить отдельно не нужно
+    const W = this.W, cx = W / 2;
+    const portrait = this.portrait;
     const me = player();
-    this._button('account', cx, y0 + step * 4, 'Кабинет',
-      `${me.name} · рейтинг ${me.rating}${me.rank ? ` · место ${me.rank}` : ''}`, () => this.openAccount());
+    const tabH = this._tabs('battle');
+    const top = this.topY(0), bottom = this.bottomY(0);
+    const pad = 28;
 
-    // Партия оборвалась (Telegram перезапустился, погас экран), а мы
-    // открылись без ссылки: предлагаем вернуться, пока соперник ждёт
-    const pending = pendingSession();
-    if (pending && Date.now() - pending.at < 15 * 60 * 1000) {
-      this._button('resume', cx, y0 + step * 5, 'Вернуться в бой',
-        `комната ${pending.room} · соперник ждёт`, () => this.startOnline(pending.room),
-        { variant: 'primary' });
-      this._button('resume-no', cx + 300, y0 + step * 5, '✕', '',
-        () => { forgetSession(pending.room); this.showRoot(); }, { w: 56, h: 56 });
-    }
-
-    // Иконка на экран Домой: открывает игру внутри Telegram сразу в полный
-    // экран. Кнопка есть, только пока Telegram говорит, что иконки нет
-    if (canOfferHomeScreen()) {
-      this._button('home', 132, this.bottomY(46), '⌂ На экран Домой', '',
-        () => addToHomeScreen(), { w: 228, h: 50 });
-    }
-
-    // Настройки в правом нижнем углу: схема управления и звук. Схема
-    // выбирается сама по устройству, но ноутбук с сенсорным экраном или
-    // планшет с мышью игрок переключит сам — выбор запоминается.
-    // В Telegram управление всегда под пальцы — переключателя там нет
-    const desktop = isDesktop();
-    if (!inTelegram()) {
-      this._button('ui-mode', this.W - 130, this.bottomY(62),
-        desktop ? 'Управление: ПК' : 'Управление: сенсор', '',
-        () => { setUiMode(desktop ? 'touch' : 'desktop'); this.showRoot(); }, { w: 228, h: 44 });
-    }
-    this._button('sound', inTelegram() ? this.W - 94 : this.W - 330, this.bottomY(62),
-      sfx.muted ? 'Звук: выкл' : 'Звук: вкл', '',
-      () => { sfx.setMuted(!sfx.muted); this.showRoot(); }, { w: 156, h: 44 });
-
-    // Пять тапов по подписи — диагностика экрана (index.html): что видит
+    // --- кто ты: имя, рейтинг, лига ---
+    const name = this.add.text(pad, top + 18, me.name, font(28, 800)).setOrigin(0, 0);
+    // Пять тапов по имени — диагностика экрана (index.html): что видит
     // страница на самом деле, когда с телефона приходит «не весь экран»
-    const foot = this.add.text(this.W - 16, this.bottomY(14),
-      desktop ? 'мышь и клавиатура · в бою F1 — подсказка' : 'бой — в ландшафте',
-      font(11, 700, UI.textDim)).setOrigin(1, 1);
-    foot.setInteractive();
-    foot.on('pointerdown', () => {
+    name.setInteractive();
+    name.on('pointerdown', () => {
       this.diagTaps = (this.diagTaps ?? 0) + 1;
       if (this.diagTaps % 5 === 0) {
         this.diagOn = !this.diagOn;
         globalThis.__diag?.(this.diagOn);
       }
     });
-    this.items.push(foot);
+    this.items.push(name);
+    this._iconButton('sound', W - pad - 30, top + 36, sfx.muted ? 'mute' : 'sound',
+      () => { sfx.setMuted(!sfx.muted); this.showRoot(); }, 60);
+    this.items.push(this.add.text(W - pad - 76, top + 18,
+      `${me.rating}${me.rank ? ` · место ${me.rank}` : ''}`, font(28, 800, UI.accent)).setOrigin(1, 0));
+    this._leagueBar(cx, top + 84, me.rating, Math.min(W - pad * 2, 760), 18);
+
+    // Редкое — мелкими плашками под лигой: иконка на экран Домой (пока
+    // Telegram говорит, что её нет) и схема управления (вне Telegram)
+    let pillX = pad;
+    const pill = (key, label, w, onTap) => {
+      this._button(key, pillX + w / 2, top + 156, label, '', onTap, { w, h: 48, titleSize: 19 });
+      pillX += w + 10;
+    };
+    if (canOfferHomeScreen()) pill('home', '⌂ На экран Домой', 250, () => addToHomeScreen());
+    const desktop = isDesktop();
+    if (!inTelegram()) {
+      pill('ui-mode', desktop ? 'Управление: ПК' : 'Управление: сенсор', 260,
+        () => { setUiMode(desktop ? 'touch' : 'desktop'); this.showRoot(); });
+    }
+
+    // --- «Играть» ---
+    const playH = portrait ? 128 : 104;
+    const playY = bottom - tabH - (portrait ? 168 : 124);
+    const choice = this.playChoice;
+    this._button('play', cx, playY, 'ИГРАТЬ',
+      choice.level ? `Башня · бот «${BOT_LEVELS[choice.level].name}»` : 'Башня · вдвоём на одном телефоне',
+      () => this.start(towerMatch(choice.level)),
+      { w: Math.min(W - 72, 560), h: playH, variant: 'primary', big: true });
+    this._button('modes', cx, playY + playH / 2 + (portrait ? 48 : 36), 'другие режимы', '',
+      () => this.showModes(), { w: 300, h: portrait ? 56 : 48, titleSize: 22 });
+
+    // Партия оборвалась (Telegram перезапустился, погас экран), а мы
+    // открылись без ссылки: предлагаем вернуться, пока соперник ждёт
+    let areaBottom = playY - playH / 2 - 22;
+    const pending = pendingSession();
+    if (pending && Date.now() - pending.at < 15 * 60 * 1000) {
+      const y = areaBottom - 30;
+      this._button('resume', cx - 32, y, 'Вернуться в бой',
+        `комната ${pending.room} · соперник ждёт`, () => this.startOnline(pending.room),
+        { w: 360, h: 60, variant: 'active' });
+      this._button('resume-no', cx + 184, y, '✕', '',
+        () => { forgetSession(pending.room); this.showRoot(); }, { w: 56, h: 56 });
+      areaBottom = y - 44;
+    }
+
+    // --- твой боец ---
+    const areaTop = top + 196;
+    const areaH = areaBottom - areaTop;
+    if (areaH > 110 && this.textures.exists('smiley')) {
+      const k = Phaser.Math.Clamp(areaH / 175, 1, 2.8);
+      const fy = areaTop + areaH * 0.6;
+      this.items.push(this.add.ellipse(cx, fy + 6 * k, 130 * k, 20 * k, 0x000000, 0.28));
+      const hero = this.add.sprite(cx, fy, 'smiley', 0).setOrigin(0.5, 0.92).setScale(k).setFlipX(true);
+      hero.play('smiley_idle');
+      // Тапнул по бойцу — он радуется. Мелочь, но экран от неё живой
+      hero.setInteractive({ useHandCursor: true });
+      hero.on('pointerdown', () => {
+        haptic('tap');
+        hero.play('smiley_win');
+        this.time.delayedCall(900, () => { if (hero.active) hero.play('smiley_idle'); });
+      });
+      this.items.push(hero);
+    }
+  }
+
+  // -------------------------------------------------------------- режимы
+
+  /** Всё, кроме «Играть»: выбор соперника на башне и прежние режимы. */
+  showModes() {
+    this.section = this.showModes;
+    this._clear();
+    this._title('Режимы');
+    const cx = this.W / 2;
+    const y0 = 186, step = 106;
+    const big = { w: Math.min(this.W - 64, 620), h: 92, titleSize: 28, hintSize: 18 };
+    this._button('tower', cx, y0, 'Башня', 'высокая арена и трос · выбрать соперника',
+      () => this.showTower(), { ...big, variant: 'primary' });
+    this._button('online', cx, y0 + step, 'Онлайн', 'бой с человеком · телефон горизонтально',
+      () => this.showOnline(), big);
+    this._button('campaign', cx, y0 + step * 2, 'Кампания', 'миссии с условиями · телефон горизонтально',
+      () => this.showCampaign(), big);
+    this._button('quick', cx, y0 + step * 3, 'Свои правила', 'обычная карта, бот или вдвоём · горизонтально',
+      () => this.showQuick(), big);
+    this._back();
   }
 
   // --------------------------------------------------------------- башня
@@ -333,18 +458,21 @@ export default class MenuScene extends Phaser.Scene {
   showTower() {
     this.section = this.showTower;
     this._clear();
-    this._title('Башня', 'по два бойца · ход 25 с · три крюка за ход');
+    this._title('Башня', 'по два бойца · ход 25 с · три троса за ход');
     const cx = this.W / 2;
-    const y0 = 200, step = 78;
-    this._button('tower-fighter', cx, y0, 'Против бота: Боец', 'считает выстрел и пользуется крюком',
-      () => this.start(towerMatch('fighter')), { variant: 'primary' });
+    const y0 = 196, step = 106;
+    const big = { w: Math.min(this.W - 64, 620), h: 92, titleSize: 28, hintSize: 18 };
+    // Выбор запоминается: большая кнопка «Играть» запускает его же
+    const go = (level) => { this.playChoice = { level }; this.start(towerMatch(level)); };
+    this._button('tower-fighter', cx, y0, 'Против бота: Боец', 'считает выстрел и пользуется тросом',
+      () => go('fighter'), { ...big, variant: 'primary' });
     this._button('tower-rookie', cx, y0 + step, 'Против бота: Новичок', 'стоит на месте, целится грубо',
-      () => this.start(towerMatch('rookie')));
+      () => go('rookie'), big);
     this._button('tower-sniper', cx, y0 + step * 2, 'Против бота: Снайпер', 'промахивается редко',
-      () => this.start(towerMatch('sniper')));
+      () => go('sniper'), big);
     this._button('tower-hotseat', cx, y0 + step * 3, 'Вдвоём на одном телефоне', 'ходы по очереди',
-      () => this.start(towerMatch(null)));
-    this._back();
+      () => go(null), big);
+    this._back(() => this.showModes());
   }
 
   // ------------------------------------------------------- быстрая игра
@@ -500,7 +628,7 @@ export default class MenuScene extends Phaser.Scene {
     this._button('join', this.W - 108, this.bottomY(46), 'по коду', '',
       () => this.askCode(), { w: 180, h: 50 });
     this._button('top', this.W - 300, this.bottomY(46), '🏆 Топ', '',
-      () => this.showTop(), { w: 170, h: 50 });
+      () => { this.topFrom = 'online'; this.showTop(); }, { w: 170, h: 50 });
 
     this._back();
     this._ensureLobby();
@@ -523,7 +651,9 @@ export default class MenuScene extends Phaser.Scene {
     tab('top-tourney', 'Турниры', 'tourney');
     const note = this.add.text(cx, 204, 'загружаю…', font(14, 700, UI.textDim)).setOrigin(0.5, 0);
     this.items.push(note);
-    this._back(() => this.showOnline());
+    // Пришли со вкладки — внизу вкладки; из лобби — кнопка «назад» в лобби
+    if (this.topFrom === 'tab') this._tabs('top');
+    else this._back(() => this.showOnline());
 
     fetchTop(20, kind).then((rows) => {
       if (this.section !== this.showTop || this.topKind !== kind) return;
@@ -566,7 +696,10 @@ export default class MenuScene extends Phaser.Scene {
 
   /** Личный кабинет. */
   openAccount() {
-    openAccountDialog({ onTop: () => this.showTop(), onTours: () => this.openTournaments() });
+    openAccountDialog({
+      onTop: () => { this.topFrom = 'tab'; this.showTop(); },
+      onTours: () => this.openTournaments(),
+    });
   }
 
   /**

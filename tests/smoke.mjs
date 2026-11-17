@@ -104,6 +104,7 @@ const menuTap = async (key) => {
 
 await menuReady();
 check('меню открылось первым', true);
+await menuTap('modes');
 await menuTap('quick');
 await menuTap('hotseat');
 
@@ -145,8 +146,8 @@ const portraitMenu = await portrait.evaluate(() => {
     w: g.scale.width, h: g.scale.height,
     ratio: Math.abs(r.width / r.height - g.scale.width / g.scale.height),
     rotate: getComputedStyle(document.getElementById('rotate')).display,
-    // Кнопки центрированы по вертикали, а не прижаты к верху
-    quickY: m.buttons.quick.y, backY: null,
+    // Экран занят целиком: «Играть» — в нижней половине, вкладки — у края
+    playY: m.buttons.play.y, tabY: m.buttons.account.y,
   };
 });
 // 852/393 ≈ 2.168 → 720 * 2.168 ≈ 1561
@@ -155,9 +156,10 @@ check('в портрете логический размер портретны�
   `${portraitMenu.w}x${portraitMenu.h}, расхождение ${portraitMenu.ratio.toFixed(3)}`);
 check('в портрете меню работает, «поверни телефон» не показывается',
   portraitMenu.rotate === 'none', portraitMenu.rotate);
-check('в портрете меню центрировано по вертикали',
-  portraitMenu.quickY > portraitMenu.h * 0.3 && portraitMenu.quickY < portraitMenu.h * 0.7,
-  `кнопка на ${portraitMenu.quickY} из ${portraitMenu.h}`);
+check('в портрете меню занимает весь экран: «Играть» внизу, вкладки у края',
+  portraitMenu.playY > portraitMenu.h * 0.6 && portraitMenu.tabY > portraitMenu.h * 0.9
+    && portraitMenu.tabY < portraitMenu.h,
+  `«Играть» на ${portraitMenu.playY}, вкладки на ${portraitMenu.tabY} из ${portraitMenu.h}`);
 
 // Бой в портрете просит повернуть, а после поворота размер ландшафтный
 await portrait.evaluate(() => window.__WORMS__.scene.getScene('Menu').start({

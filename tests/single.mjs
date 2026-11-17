@@ -113,8 +113,14 @@ const info = () => page.evaluate(() => {
 await menuReady();
 const rootButtons = await page.evaluate(
   () => Object.keys(window.__WORMS__.scene.getScene('Menu').buttons));
-check('в меню три пункта', ['quick', 'campaign', 'online'].every((k) => rootButtons.includes(k)),
+check('на главном экране «Играть», режимы и вкладки',
+  ['play', 'modes', 'tournaments', 'top', 'account'].every((k) => rootButtons.includes(k)),
   rootButtons.join(', '));
+await menuTap('modes');
+const modeButtons = await page.evaluate(
+  () => Object.keys(window.__WORMS__.scene.getScene('Menu').buttons));
+check('в режимах башня и три прежних', ['tower', 'quick', 'campaign', 'online'].every((k) => modeButtons.includes(k)),
+  modeButtons.join(', '));
 
 // --- кампания: миссия «Пристрелка» ---
 await menuTap('campaign');
@@ -226,6 +232,7 @@ await menuReady();
 check('после миссии возвращаемся в меню', true);
 
 // --- все миссии собираются в играбельные карты ---
+await menuTap('modes');
 await menuTap('campaign');
 const unlocked = await page.evaluate(
   () => window.__WORMS__.scene.getScene('Menu').buttons.storm?.enabled);
@@ -274,11 +281,13 @@ for (const { id, sizes: expected } of CAMPAIGN) {
   }
   await page.evaluate(() => window.__WORMS__.scene.getScene('Game').toMenu());
   await menuReady();
+  await menuTap('modes');
   await menuTap('campaign');
 }
 
 // --- быстрая игра против бота ---
 await menuTap('back');
+await menuTap('modes');
 await menuTap('quick');
 await menuTap('sniper');
 await gameReady();

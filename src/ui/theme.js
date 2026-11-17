@@ -202,6 +202,49 @@ const ICONS = {
     ctx.stroke();
   },
   // Динамик с волнами — звук включён; с крестом — выключен
+  // --- вкладки меню ---
+  // Скрещённые клинки: бой
+  battle: (ctx, s) => {
+    stroke(ctx, s);
+    ctx.beginPath();
+    ctx.moveTo(s * 0.24, s * 0.76); ctx.lineTo(s * 0.76, s * 0.24);
+    ctx.moveTo(s * 0.76, s * 0.76); ctx.lineTo(s * 0.24, s * 0.24);
+    ctx.moveTo(s * 0.24, s * 0.58); ctx.lineTo(s * 0.42, s * 0.76);
+    ctx.moveTo(s * 0.76, s * 0.58); ctx.lineTo(s * 0.58, s * 0.76);
+    ctx.stroke();
+  },
+  // Кубок: турниры
+  trophy: (ctx, s) => {
+    stroke(ctx, s);
+    ctx.beginPath();
+    ctx.moveTo(s * 0.32, s * 0.22); ctx.lineTo(s * 0.68, s * 0.22);
+    ctx.lineTo(s * 0.66, s * 0.4);
+    ctx.quadraticCurveTo(s * 0.62, s * 0.58, s * 0.5, s * 0.58);
+    ctx.quadraticCurveTo(s * 0.38, s * 0.58, s * 0.34, s * 0.4);
+    ctx.closePath();
+    ctx.moveTo(s * 0.5, s * 0.58); ctx.lineTo(s * 0.5, s * 0.72);
+    ctx.moveTo(s * 0.36, s * 0.78); ctx.lineTo(s * 0.64, s * 0.78);
+    ctx.moveTo(s * 0.32, s * 0.28); ctx.quadraticCurveTo(s * 0.18, s * 0.3, s * 0.3, s * 0.44);
+    ctx.moveTo(s * 0.68, s * 0.28); ctx.quadraticCurveTo(s * 0.82, s * 0.3, s * 0.7, s * 0.44);
+    ctx.stroke();
+  },
+  // Пьедестал: рейтинг
+  podium: (ctx, s) => {
+    ctx.fillStyle = UI.text;
+    ctx.fillRect(s * 0.4, s * 0.24, s * 0.2, s * 0.54);
+    ctx.fillRect(s * 0.18, s * 0.42, s * 0.2, s * 0.36);
+    ctx.fillRect(s * 0.62, s * 0.52, s * 0.2, s * 0.26);
+  },
+  // Голова и плечи: профиль
+  profile: (ctx, s) => {
+    stroke(ctx, s);
+    ctx.beginPath();
+    ctx.arc(s * 0.5, s * 0.36, s * 0.14, 0, Math.PI * 2);
+    ctx.moveTo(s * 0.24, s * 0.8);
+    ctx.quadraticCurveTo(s * 0.26, s * 0.56, s * 0.5, s * 0.56);
+    ctx.quadraticCurveTo(s * 0.74, s * 0.56, s * 0.76, s * 0.8);
+    ctx.stroke();
+  },
   // Три точки: редкие кнопки спрятаны под одной
   more: (ctx, s) => {
     ctx.fillStyle = '#ffffff';
