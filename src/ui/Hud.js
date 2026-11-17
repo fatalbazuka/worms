@@ -174,11 +174,11 @@ export class Hud {
     this.windCx = 16 + pad + this.windHalf;
     this.windCy = 40;
 
-    // Крюки — справа: подпись и кружки, по одному на оставшийся
-    this.fix(s.add.text(W - 16 - pad, 7, 'КРЮК', font(11, 700, UI.textDim)).setOrigin(1, 0));
-    this.hookGfx = this.fix(s.add.graphics());
-    this.hookX = W - 16 - pad;
-    this.hookY = 40;
+    // Подсказка новичку под панелью: гаснет сама после трёх тросов
+    this.hintText = this.fix(s.add.text(Math.round(W / 2), TOP_H + 14,
+      'коснись светящейся точки — трос подтянет туда', font(15, 800, '#1a1408'))
+      .setOrigin(0.5, 0).setPadding(12, 6, 12, 6).setBackgroundColor('#ffe27a'), DEPTH.HUD + 1)
+      .setVisible(false);
   }
 
   _barImage(x, y, w, h) {
@@ -292,6 +292,19 @@ export class Hud {
     const jumpCx = W - 24 - JR, jumpCy = H - 24 - JR;
     this._holdRound(jumpCx, jumpCy, JR, 'jump', 'jumpQueued');
     this.serviceEnd = lx2 + B;
+
+    // Тросы — как патроны: плашка над стрелками, по кружку на каждый
+    // оставшийся в этом ходу. Стоит у большого пальца, а не в углу панели:
+    // там её не замечали
+    const s = this.scene;
+    const pw = B * 2 + gap, ph = 52, py = rowLow - ph - 12;
+    ensureButton(s, `ui-hooks-${pw}x${ph}`, pw, ph, 'normal');
+    this.hookPlate = this.fix(s.add.image(lx + pw / 2, py + ph / 2, `ui-hooks-${pw}x${ph}`));
+    this.fix(s.add.text(lx + 16, py + ph / 2, 'ТРОС', font(16, 800)).setOrigin(0, 0.5), DEPTH.HUD + 1);
+    this.hookGfx = this.fix(s.add.graphics(), DEPTH.HUD + 1);
+    this.hookX = lx + pw - 14;
+    this.hookY = py + ph / 2;
+    this.uiRects.push({ x: lx, y: py, w: pw, h: ph });
     this.buttons = {
       left: { x: lx + B / 2, y: rowLow + B / 2 },
       right: { x: lx2 + B / 2, y: rowLow + B / 2 },
@@ -758,10 +771,18 @@ export class Hud {
     g.clear();
     const n = scene.hookPerTurn;
     for (let i = 0; i < n; i++) {
-      const x = this.hookX - 9 - (n - 1 - i) * 24;
-      if (i < scene.hooksLeft) g.fillStyle(0xe8d9a8, 1).fillCircle(x, this.hookY, 8);
-      else g.lineStyle(2, 0xe8d9a8, 0.35).strokeCircle(x, this.hookY, 7);
+      const x = this.hookX - 11 - (n - 1 - i) * 30;
+      if (i < scene.hooksLeft) g.fillStyle(0xffe27a, 1).fillCircle(x, this.hookY, 10);
+      else g.lineStyle(2.5, 0xffe27a, 0.35).strokeCircle(x, this.hookY, 9);
     }
+    // Потратил трос — плашка вздрагивает: глаз ловит, что счёт изменился
+    if (this._hooksShown != null && scene.hooksLeft < this._hooksShown) {
+      scene.tweens.add({ targets: this.hookPlate, scaleX: 1.08, scaleY: 1.18, duration: 110, yoyo: true });
+    }
+    this._hooksShown = scene.hooksLeft;
+    this.hookPlate.setAlpha(scene.hooksLeft > 0 ? 1 : 0.55);
+    this.hintText?.setVisible(!!scene.hookHint && !this.helpVisible
+      && scene.canPlayerAct() && scene.hooksLeft > 0);
   }
 
   _updateTeams(scene) {

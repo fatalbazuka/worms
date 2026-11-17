@@ -260,18 +260,91 @@ export class AimController {
     }
     if (!w || !scene.canPlayerAct()) {
       if (this.crosshair) this.crosshair.setVisible(false);
+      this.hintLabel?.setVisible(false);
       return;
     }
 
     // Свайп имеет приоритет; иначе показываем прицел кнопочной схемы
-    if (this.mode === 'aim') this._drawSwipe();
+    if (this.mode === 'aim') { this.hintLabel?.setVisible(false); this._drawSwipe(); }
     else if (scene.sling && !this.desktop && !scene.charging) {
       // У рогатки прицела «в покое» нет: направления ещё никто не задал
       if (this.crosshair) this.crosshair.setVisible(false);
+      this._drawHookHints();
       this._drawHookPreview();
     } else {
       this._drawButtonAim(scene.charging ? scene.charge : 0);
       this._drawHookPreview();
+    }
+  }
+
+  /**
+   * Подсказка новичку: до трёх светящихся точек, куда трос точно достанет
+   * и где боец удержится. Считается один раз на позицию бойца.
+   */
+  _hintSpots(w) {
+    const key = `${Math.round(w.x)}:${Math.round(w.y)}:${w.hang ?? ''}`;
+    if (this._hintKey === key) return this._hints;
+    this._hintKey = key;
+    const scene = this.scene;
+    const out = [];
+    for (let k = 0; k < 16 && out.length < 3; k++) {
+      // Сначала вверх, потом веером в обе стороны
+      const off = Math.ceil(k / 2) * (Math.PI / 10) * (k % 2 ? 1 : -1);
+      const a = -Math.PI / 2 + off;
+      const anchor = scene.hookAnchor(w, w.x + Math.cos(a) * 200, w.centerY + Math.sin(a) * 200);
+      if (!anchor) continue;
+      const end = w.zipEnd(anchor.x, anchor.y);
+      if (!end.grounded && !end.hang) continue;
+      if (Math.hypot(end.x - w.x, end.y - w.y) < 90) continue;
+      if (out.some((o) => Math.hypot(o.x - anchor.x, o.y - anchor.y) < 130)) continue;
+      out.push(anchor);
+    }
+    this._hints = out;
+    return out;
+  }
+
+  _drawHookHints() {
+    const scene = this.scene;
+    const w = this.worm;
+    const on = scene.hookHint && w && !this.tap && scene.canHook() && !scene.turn.retreating;
+    if (!on) { this.hintLabel?.setVisible(false); return; }
+    const spots = this._hintSpots(w);
+    const g = this.gfx;
+    const pulse = Math.sin(scene.time.now / 260);
+    for (const p of spots) {
+      g.lineStyle(3, 0xffe27a, 0.55 + pulse * 0.3).strokeCircle(p.x, p.y, 15 + pulse * 4);
+      g.fillStyle(0xffe27a, 0.95).fillCircle(p.x, p.y, 5);
+    }
+    if (!spots.length) { this.hintLabel?.setVisible(false); return; }
+    if (!this.hintLabel) {
+      this.hintLabel = scene.rig.world(scene.add.text(0, 0, 'коснись', {
+        fontFamily: 'Nunito, system-ui, sans-serif', fontSize: '15px', fontStyle: '800',
+        color: '#1a1408', backgroundColor: '#ffe27a', padding: { x: 7, y: 3 },
+      }).setOrigin(0.5, 1).setDepth(DEPTH.AIM));
+    }
+    this.hintLabel.setVisible(true).setPosition(spots[0].x, spots[0].y - 24 - pulse * 3);
+  }
+
+  /**
+   * Начало дуги для того, что бросают рукой (граната, банан): первые
+   * полсекунды полёта тем же счётом, что и у настоящего снаряда. Куда она
+   * в итоге ляжет, не видно — только как пойдёт из руки.
+   */
+  _drawThrowArc(o, vx, vy, weapon) {
+    const p = weapon.projectile;
+    const terrain = this.scene.terrain;
+    const d = Math.hypot(vx, vy) || 1;
+    let x = o.x + (vx / d) * CFG.MUZZLE_OFFSET, y = o.y + (vy / d) * CFG.MUZZLE_OFFSET;
+    const dt = 1 / 60;
+    const steps = 36;
+    for (let i = 1; i <= steps; i++) {
+      vx += this.scene.wind * (p.windScale ?? 1) * dt;
+      vy += CFG.GRAVITY * (p.gravityScale ?? 1) * dt;
+      x += vx * dt; y += vy * dt;
+      if (terrain.solidAt(x, y)) break;
+      if (i % 3) continue;
+      this.gfx.fillStyle(0xffffff, 0.9 * (1 - i / (steps + 6)));
+      this.gfx.fillCircle(x, y, 3.2);
     }
   }
 
@@ -404,6 +477,8 @@ export class AimController {
       this.gfx.lineStyle(3, 0xffffff, 0.35)
         .lineBetween(o.x, o.y, o.x - d.x * pull, o.y - d.y * pull);
       this.gfx.fillStyle(0xffffff, 0.5).fillCircle(o.x - d.x * pull, o.y - d.y * pull, 7);
+      const pr = this.scene.turn.weapon.projectile;
+      if (pr?.fuse > 0 && pr.bounciness > 0) this._drawThrowArc(o, shot.vx, shot.vy, this.scene.turn.weapon);
     }
     const weapon = this.scene.turn.weapon;
     if (weapon.targeted) this._drawTarget(shot.vx, shot.vy, weapon);
@@ -416,6 +491,7 @@ export class AimController {
     i.off('pointerup', this.onUp, this);
     i.off('pointerupoutside', this.onUp, this);
     this.gfx.destroy();
+    this.hintLabel?.destroy();
     if (this.crosshair) this.crosshair.destroy();
   }
 }

@@ -55,7 +55,8 @@ export function towerMatch(botLevel = null) {
         ? { worms: 2, control: 'bot', level: botLevel }
         : { worms: 2, control: 'human' },
     ],
-    rules: { turnTime: 25, hook: 3, crateChance: 0.3 },
+    // bounce и roll — граната на тесных этажах прыгает и катится вдвое слабее
+    rules: { turnTime: 25, hook: 3, crateChance: 0.3, bounce: 0.5, roll: 0.7 },
   };
 }
 

@@ -194,7 +194,13 @@ export default class GameScene extends Phaser.Scene {
    * тратит: наказывать за тап в небо незачем.
    */
   tryHook(px, py) {
-    if (!this.canHook()) return false;
+    if (!this.canHook()) {
+      // Молчать нельзя: игрок тапает в стену и не понимает, почему ничего
+      if (this.hookPerTurn > 0 && this.hooksLeft <= 0 && this.canPlayerAct()) {
+        this.fx.banner('тросы на этот ход кончились', '#ffd166', 900);
+      }
+      return false;
+    }
     const w = this.turn.activeWorm;
     const a = this.hookAnchor(w, px, py);
     if (!a) {
@@ -202,12 +208,31 @@ export default class GameScene extends Phaser.Scene {
       return false;
     }
     this.hooksLeft--;
+    if (!this.isBotTurn()) this._countHookUse();
     w.startZip(a.x, a.y);
     w.setActiveMarker(false);
     this.fx.sound('jump');
     if (!this.isBotTurn()) haptic('shot');
     this.setCameraManual(false);
     return true;
+  }
+
+  /**
+   * Подсказка про трос: пока игрок не пустил его три раза (за все партии),
+   * точки, куда можно зацепиться, светятся, а под панелью висит строка.
+   * Потом подсказка уходит сама — опытному она только мешает.
+   */
+  get hookHint() {
+    if (!this.sling) return false;
+    if (this._hookUses == null) {
+      try { this._hookUses = Number(localStorage.getItem('worms.hookUses')) || 0; } catch { this._hookUses = 0; }
+    }
+    return this._hookUses < 3;
+  }
+
+  _countHookUse() {
+    this._hookUses = (this._hookUses ?? 0) + 1;
+    try { localStorage.setItem('worms.hookUses', String(this._hookUses)); } catch { /* инкогнито */ }
   }
 
   // ------------------------------------------------------------------ боты

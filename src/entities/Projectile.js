@@ -164,14 +164,19 @@ export class Projectile {
   _bounce(ray, p) {
     const n = this.terrain.normalAt(ray.x, ray.y, 5);
     const vn = this.vx * n.x + this.vy * n.y;
+    // Правила партии могут приглушить отскок: на тесных этажах башни
+    // прыгучая граната скатывалась с плиты раньше, чем взрывалась
+    const rules = this.scene.rules ?? {};
+    const bounce = p.bounciness * (rules.bounce ?? 1);
+    const friction = p.friction * (rules.roll ?? 1);
 
     // Отражение с потерей энергии + касательное трение
-    let rx = this.vx - (1 + p.bounciness) * vn * n.x;
-    let ry = this.vy - (1 + p.bounciness) * vn * n.y;
+    let rx = this.vx - (1 + bounce) * vn * n.x;
+    let ry = this.vy - (1 + bounce) * vn * n.y;
     const tvn = rx * n.x + ry * n.y;
     const tx = rx - tvn * n.x, ty = ry - tvn * n.y;
-    rx = tvn * n.x + tx * p.friction;
-    ry = tvn * n.y + ty * p.friction;
+    rx = tvn * n.x + tx * friction;
+    ry = tvn * n.y + ty * friction;
 
     this.vx = rx; this.vy = ry;
     // Отодвигаем от поверхности, чтобы не залипнуть внутри пикселя
