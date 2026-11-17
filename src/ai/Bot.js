@@ -63,6 +63,7 @@ export class Bot {
     this.phase = 'idle';
     this.timer = 0;
     this.noHook = false;
+    this.noWalk = false;
   }
 
   /**
@@ -132,8 +133,16 @@ export class Bot {
       case 'zip':
         // Летим по тросу; долетели — короткая пауза и целимся с нового места
         if (worm.zip || this.timer < 0.35) break;
-        this.plan = this.decide(worm, { allowMove: false });
+        // Крюки ещё есть — можно подтянуться и второй раз, ногами уже не идём
+        this.noWalk = true;
+        this.plan = this.decide(worm, { allowMove: scene.hooksLeft > 0 });
         if (!this.plan) { this.phase = 'give-up'; this.timer = 0; break; }
+        if (this.plan.hookTo) {
+          const ok = scene.tryHook(this.plan.hookTo.x, this.plan.hookTo.y);
+          if (ok) { this.timer = 0; break; }
+          this.plan = this.decide(worm, { allowMove: false });
+          if (!this.plan) { this.phase = 'give-up'; this.timer = 0; break; }
+        }
         worm.facing = this.plan.facing;
         scene.turn.setWeaponIndex(this.plan.weapon);
         this.phase = 'aim';
@@ -184,19 +193,27 @@ export class Bot {
     // С места плохо: прикидываем пару точек рядом, куда можно дойти ногами
     let move = null;
     const x0 = worm.x, y0 = worm.y;
-    for (const x of this.walkableSpots(worm)) {
+    for (const x of this.noWalk ? [] : this.walkableSpots(worm)) {
       worm.x = x.x; worm.y = x.y;
       const shot = this.bestShot(worm, 1);
       if (shot && (!move || shot.score < move.shot.score)) move = { x: x.x, shot };
     }
     // И точки, куда подтянет трос
     let hook = null;
+    let closer = null;      // точка, откуда до цели просто ближе
     if (!this.noHook && this.scene.hooksLeft > 0 && this.scene.canHook?.()) {
+      const target = this.scene.worms
+        .filter((w) => w.alive && w.team !== worm.team)
+        .sort((a, b) => this.targetScore(worm, a) - this.targetScore(worm, b))[0];
+      const far = (x, y) => (target ? Math.hypot(target.x - x, target.y - y) : 0);
       for (const h of this.hookSpots(worm)) {
         worm.x = h.end.x; worm.y = h.end.y;
         const shot = this.bestShot(worm, 1);
         if (shot && (!hook || shot.score < hook.shot.score)) hook = { at: h.anchor, shot };
+        const d = far(h.end.x, h.end.y);
+        if (!closer || d < closer.d) closer = { at: h.anchor, d };
       }
+      if (closer && closer.d > far(x0, y0) - 90) closer = null;
     }
     worm.x = x0; worm.y = y0;
     // Идти стоит, только если оттуда заметно лучше: суета ради пары
@@ -206,6 +223,10 @@ export class Bot {
       return { ...this.withError(hook.shot), hookTo: hook.at };
     }
     if (better(move)) return { ...this.withError(move.shot), moveTo: move.x };
+    // Достать не выходит ниоткуда (цель тремя этажами выше): тогда просто
+    // подбираемся ближе, а стрелять будем уже оттуда. Иначе бот до конца
+    // партии палил бы в потолок
+    if (closer && (!here || here.score > 150)) return { hookTo: closer.at };
     return this.withError(here);
   }
 

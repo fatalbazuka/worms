@@ -162,7 +162,7 @@ export const SHAPES = [
     hidden: true,
     // Ширина — ровно логическая ширина вертикального экрана (VIEW_BASE):
     // в портрете башня видна вся при масштабе 1, бойцы не мельчают
-    world: { w: 720, h: 1560, ground: 1515, water: 1470, focus: 780, power: 850, fallSafe: 190 },
+    world: { w: 720, h: 1560, ground: 1515, water: 1470, focus: 780, power: 1000, fallSafe: 190 },
     build(terrain, rng) {
       const ctx = terrain.maskCtx;
       const W = terrain.width, H = terrain.height;
