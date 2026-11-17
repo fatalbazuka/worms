@@ -83,6 +83,7 @@ export function captureMove(scene) {
     x: Math.round(w.x),
     y: Math.round(w.y),
     facing: w.facing,
+    hang: w.hang ?? null,
     aim: Math.round(scene.aimAngle * 1000) / 1000,
     charge: scene.charging ? Math.round(scene.charge * 100) / 100 : 0,
     weapon: scene.turn.weaponIndex,
@@ -113,6 +114,9 @@ export function applyMove(scene, m) {
     }
   }
   w.grounded = w.supported(w.x, w.y);
+  // Висит на стене или потолке — у нас тоже, иначе боец падал бы у зрителя
+  w.zip = null;
+  w.hang = m.hang ?? null;
   // Приземлился у соперника — складываем парашют и у нас: иначе боец
   // «на земле» с раскрытым куполом висел бы так вечно, а с ним и ход
   if (w.grounded && w.parachuting) w.foldChute();
@@ -147,6 +151,7 @@ export function captureState(scene) {
       hp: w.health,
       alive: w.alive,
       facing: w.facing,
+      hang: w.hang ?? null,
     })),
     ammo: scene.turn.ammo.map((row) => row.slice()),
     crates: scene.crates
@@ -192,6 +197,8 @@ export function applyState(scene, state) {
     }
     w.health = s.hp;
     w.grounded = w.supported(w.x, w.y);
+    w.zip = null;
+    w.hang = s.hang ?? null;
     // У соперника десант уже приземлился, а у нас парашют ещё раскрыт
     if (w.grounded && w.parachuting) w.foldChute();
   });

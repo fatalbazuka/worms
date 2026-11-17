@@ -39,6 +39,7 @@ export class CameraRig {
     // Границы не ставим: setBounds вместе с зумом дерётся с ручным
     // скроллом, поэтому clamp считаем сами.
     this.zoom = 1;
+    this.baseZoom = 1;        // обычный масштаб партии (у башни свой)
     this.manual = false;      // камеру увели рукой
     this.idle = 0;
     this.pinching = false;
@@ -98,8 +99,15 @@ export class CameraRig {
   get visibleW() { return this.W / this.zoom; }
   get visibleH() { return this.H / this.zoom; }
 
-  /** Масштаб, при котором в кадр влезает вся карта по ширине. */
-  get fitZoom() { return this.W / CFG.WORLD_W; }
+  /**
+   * Масштаб, при котором в кадр влезает вся карта: по ширине, а у высокой
+   * карты — ещё и по высоте. Обычной карте (3200x720) второе условие не
+   * мешает: её высота и так равна экрану.
+   */
+  get fitZoom() { return Math.min(this.W / CFG.WORLD_W, this.H / CFG.WORLD_H); }
+
+  /** Мир выше кадра: по вертикали есть куда вести камеру. */
+  get tall() { return this.visibleH < CFG.WORLD_H; }
 
   // --- Видимая область ---
   // Внимание: cam.scrollX/scrollY — это НЕ левый верхний угол вида. Phaser
@@ -122,29 +130,32 @@ export class CameraRig {
   /** То же в координатах интерфейса: канвас минус рамка. */
   uiX(worldX) { return this.screenX(worldX) - CFG.FRAME.left; }
 
-  setZoom(z, anchorX = null) {
+  setZoom(z, anchorX = null, anchorY = null) {
     const next = Phaser.Math.Clamp(z, CFG.ZOOM_MIN, CFG.ZOOM_MAX);
     if (next === this.zoom) return;
 
     // Точка мира под пальцем (или под курсором) должна остаться на месте,
     // иначе зум «уезжает» и им невозможно пользоваться прицельно.
     const ax = anchorX ?? this.W / 2;
+    const ay = anchorY ?? this.H / 2;
     const worldUnderAnchor = this.viewLeft + ax / this.zoom;
+    const worldYUnderAnchor = this.viewTop + ay / this.zoom;
 
     this.zoom = next;
     this.worldCam.setZoom(next);
     this.setViewLeft(worldUnderAnchor - ax / next);
+    this.setViewTop(this.clampTop(worldYUnderAnchor - ay / next));
   }
 
   toggleOverview() {
     const overview = this.zoom > this.fitZoom * 1.05;
-    this.setZoom(overview ? Math.max(CFG.ZOOM_MIN, this.fitZoom) : 1);
+    this.setZoom(overview ? Math.max(CFG.ZOOM_MIN, this.fitZoom) : this.baseZoom);
     this.manual = overview;   // в обзоре камера не дёргается за бойцом
     this.idle = 0;
   }
 
   _onWheel(pointer, objs, dx, dy) {
-    this.setZoom(this.zoom * (dy > 0 ? 0.9 : 1.1), pointer.x);
+    this.setZoom(this.zoom * (dy > 0 ? 0.9 : 1.1), pointer.x, pointer.y);
     this.manual = true;
     this.idle = 0;
   }
@@ -157,6 +168,7 @@ export class CameraRig {
 
     const dist = Phaser.Math.Distance.Between(p1.x, p1.y, p2.x, p2.y);
     const mid = (p1.x + p2.x) / 2;
+    const midY = (p1.y + p2.y) / 2;
 
     if (!this.pinching) {
       this.pinching = true;
@@ -167,7 +179,7 @@ export class CameraRig {
       this.idle = 0;
       return;
     }
-    if (this.pinchDist > 12) this.setZoom(this.pinchZoom * (dist / this.pinchDist), mid);
+    if (this.pinchDist > 12) this.setZoom(this.pinchZoom * (dist / this.pinchDist), mid, midY);
     this.idle = 0;
   }
 
@@ -184,17 +196,19 @@ export class CameraRig {
    * центрируемся на полосе земли: сверху остаётся небо, снизу — вода
    * (её прямоугольник специально уходит намного ниже мира).
    */
-  _applyScrollY(targetY) {
+  _applyScrollY(targetY, k = 1) {
+    const want = this.clampTop((targetY ?? CFG.WORLD_H / 2) - this.visibleH / 2);
+    this.setViewTop(k >= 1 ? want : this.viewTop + (want - this.viewTop) * k);
+  }
+
+  /** Допустимый верх кадра для желаемого. */
+  clampTop(top) {
     const vh = this.visibleH;
-    if (vh >= CFG.WORLD_H) {
-      // Центрируемся на полосе земли, но не опускаем вид ниже нуля: при
-      // зуме 1 высота вида ровно равна миру, и любое смещение резало бы
-      // небо сверху и показывало лишнюю воду снизу.
-      this.setViewTop(Math.min(CFG.WORLD_FOCUS_Y - vh / 2, 0));
-    } else {
-      const want = (targetY ?? CFG.WORLD_H / 2) - vh / 2;
-      this.setViewTop(Phaser.Math.Clamp(want, 0, CFG.WORLD_H - vh));
-    }
+    // Центрируемся на полосе земли, но не опускаем вид ниже нуля: при
+    // зуме 1 высота вида ровно равна миру, и любое смещение резало бы
+    // небо сверху и показывало лишнюю воду снизу.
+    if (vh >= CFG.WORLD_H) return Math.min(CFG.WORLD_FOCUS_Y - vh / 2, 0);
+    return Phaser.Math.Clamp(top, 0, CFG.WORLD_H - vh);
   }
 
   // ------------------------------------------------------------ протяжка
@@ -202,7 +216,9 @@ export class CameraRig {
   panStart(pointer) {
     this.panning = true;
     this.panPointerX = pointer.x;
+    this.panPointerY = pointer.y;
     this.panLeft = this.viewLeft;
+    this.panTop = this.viewTop;
     this.manual = true;
     this.idle = 0;
   }
@@ -210,6 +226,7 @@ export class CameraRig {
   panMove(pointer) {
     if (!this.panning || this.pinching) return;
     this.setViewLeft(this.panLeft - (pointer.x - this.panPointerX) / this.zoom);
+    if (this.tall) this.setViewTop(this.clampTop(this.panTop - (pointer.y - this.panPointerY) / this.zoom));
     this.idle = 0;
   }
 
@@ -242,7 +259,9 @@ export class CameraRig {
       else this.idle += realDt;
       // В обзоре камера остаётся там, где её поставили
       if (this.idle < CFG.CAM_IDLE_RETURN || this.zoom <= this.fitZoom * 1.05) {
-        this._applyScrollY(target ? (target.y ?? target.centerY) : null);
+        // Высокую карту по вертикали тоже ведут рукой — там её не трогаем
+        if (this.tall) this.setViewTop(this.clampTop(this.viewTop));
+        else this._applyScrollY(target ? (target.y ?? target.centerY) : null);
         return;
       }
       this.manual = false;
@@ -264,7 +283,10 @@ export class CameraRig {
         const to = this.clampLeft(desired);
         this.setViewLeft(this.viewLeft + (to - this.viewLeft) * Math.min(1, lerp * dt * 60));
       }
-      this._applyScrollY(target.y ?? target.centerY);
+      // По вертикали за целью идём плавно, когда есть куда идти: рывок по
+      // тросу на три этажа иначе дёргал бы кадр
+      this._applyScrollY(target.y ?? target.centerY,
+        this.tall ? Math.min(1, CFG.CAM_LERP_FAST * dt * 60) : 1);
     }
   }
 

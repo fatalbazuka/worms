@@ -33,6 +33,10 @@ export class Worm {
     this.fallStartY = y;
     this.parachuting = false;   // спускается на парашюте: медленно и без урона
     this.chute = null;
+    // Крюк-трос: zip — летит по тросу к точке; hang — висит, зацепившись
+    // за стену или потолок ('ceil' | 'left' | 'right'), и не падает
+    this.zip = null;
+    this.hang = null;
 
     this._buildView();
   }
@@ -202,10 +206,129 @@ export class Worm {
     if (this.grounded && this.parachuting) this.foldChute();
   }
 
+  // ---------------------------------------------------------------- крюк
+
+  /** Касается ли корпус тверди хоть с какой-то стороны (на пиксель вокруг). */
+  touching(cx = this.x, cy = this.y) {
+    const hw = CFG.WORM_W >> 1;
+    return this.terrain.solidInRect(
+      Math.round(cx) - hw, Math.round(cy) - CFG.WORM_H,
+      Math.round(cx) + hw, Math.round(cy) + 1,
+    );
+  }
+
+  /** За что держится: потолок над головой, иначе стена сбоку. */
+  _hangSide(cx = this.x, cy = this.y) {
+    const hw = CFG.WORM_W >> 1;
+    const x = Math.round(cx), y = Math.round(cy);
+    const t = this.terrain;
+    if (t.solidInRow(x - hw + 2, x + hw - 2, y - CFG.WORM_H)) return 'ceil';
+    if (t.solidInRect(x + hw, y - CFG.WORM_H + 3, x + hw, y - 2)) return 'right';
+    if (t.solidInRect(x - hw, y - CFG.WORM_H + 3, x - hw, y - 2)) return 'left';
+    return this.touching(cx, cy) ? 'ceil' : null;
+  }
+
+  /**
+   * Рывок по тросу к точке (ax, ay) на тверди. Летит по прямой; если корпус
+   * задел выступ — скользит вдоль него, пока приближается к точке.
+   */
+  startZip(ax, ay) {
+    if (!this.alive) return;
+    this.foldChute();
+    const d = Math.hypot(ax - this.x, ay - this.centerY);
+    this.zip = { ax, ay, budget: d * 1.6 + 40 };
+    this.hang = null;
+    this.grounded = false;
+    this.vx = 0; this.vy = 0;
+    if (Math.abs(ax - this.x) > 4) this.facing = ax >= this.x ? 1 : -1;
+  }
+
+  /**
+   * Один шаг рывка длиной dist. Вынесен отдельно: бот прогоняет рывок
+   * целиком «в уме» (zipEnd), и шагать он должен ровно так же.
+   * @returns {boolean} true — ещё летим
+   */
+  _zipMove(dist) {
+    const z = this.zip;
+    let remaining = dist;
+    while (remaining > 0) {
+      const step = Math.min(1, remaining);
+      remaining -= step;
+      const dx = z.ax - this.x, dy = z.ay - this.centerY;
+      const d = Math.hypot(dx, dy);
+      if (d < 3 || z.budget <= 0) return false;
+      z.budget -= step;
+      const nx = this.x + (dx / d) * step, ny = this.y + (dy / d) * step;
+      if (this.rectClear(nx, ny)) { this.x = nx; this.y = ny; continue; }
+      // Упёрлись: пробуем проскользнуть по одной оси — по той, по которой
+      // до точки дальше
+      const tryX = () => (Math.abs(dx) > 2 && this.rectClear(nx, this.y) ? ((this.x = nx), true) : false);
+      const tryY = () => (Math.abs(dy) > 2 && this.rectClear(this.x, ny) ? ((this.y = ny), true) : false);
+      const moved = Math.abs(dx) >= Math.abs(dy) ? (tryX() || tryY()) : (tryY() || tryX());
+      if (!moved) return false;
+    }
+    return true;
+  }
+
+  _endZip() {
+    this.zip = null;
+    this.vx = 0; this.vy = 0;
+    this.fallStartY = this.y;           // рывок — не падение: урона нет
+    this._clampToWorld();
+    if (this.supported(this.x, this.y)) { this.grounded = true; this.hang = null; return; }
+    this.hang = this._hangSide();
+    this.grounded = false;
+  }
+
+  /** Где окажется боец после рывка к точке — не двигая его самого. */
+  zipEnd(ax, ay) {
+    const keep = { x: this.x, y: this.y, zip: this.zip };
+    const d = Math.hypot(ax - this.x, ay - this.centerY);
+    this.zip = { ax, ay, budget: d * 1.6 + 40 };
+    while (this._zipMove(40)) { /* до упора */ }
+    const out = { x: this.x, y: this.y, grounded: this.supported(this.x, this.y) };
+    out.hang = out.grounded ? null : this._hangSide();
+    this.x = keep.x; this.y = keep.y; this.zip = keep.zip;
+    return out;
+  }
+
+  /** Отцепиться: прыжок от стены или просто вниз с потолка. */
+  letGo() {
+    if (!this.hang) return;
+    const side = this.hang;
+    this.hang = null;
+    this.fallStartY = this.y;
+    if (side === 'left' || side === 'right') {
+      this.facing = side === 'left' ? 1 : -1;
+      this.vx = this.facing * CFG.JUMP_VX;
+      this.vy = CFG.JUMP_VY * 0.7;
+    } else {
+      this.vx = this.facing * CFG.JUMP_VX * 0.5;
+      this.vy = 0;
+    }
+  }
+
   // ------------------------------------------------------------- механика
 
   update(dt) {
     if (!this.alive) return;
+
+    if (this.zip) {
+      if (!this._zipMove(CFG.HOOK_SPEED * dt)) this._endZip();
+      if (this.y > CFG.DROWN_Y) this._drown();
+      this._syncView();
+      return;
+    }
+    if (this.hang) {
+      // Стену или потолок снесли — держаться не за что, падаем
+      if (this.touching()) {
+        this.vx = 0; this.vy = 0;
+        this._syncView();
+        return;
+      }
+      this.hang = null;
+      this.fallStartY = this.y;
+    }
 
     if (this.grounded && !this.supported(this.x, this.y)) {
       // Под ногами взорвали землю
@@ -276,7 +399,9 @@ export class Worm {
   }
 
   jump(dir = this.facing) {
-    if (!this.alive || !this.grounded) return;
+    if (!this.alive) return;
+    if (this.hang) { this.scene.fx?.sound('jump'); this.letGo(); return; }
+    if (!this.grounded) return;
     this.scene.fx?.sound('jump');
     this.grounded = false;
     this.fallStartY = this.y;
@@ -287,7 +412,10 @@ export class Worm {
   /** Импульс от взрыва. */
   applyImpulse(ix, iy) {
     if (!this.alive) return;
-    if (this.grounded) this.fallStartY = this.y;
+    if (this.grounded || this.hang || this.zip) this.fallStartY = this.y;
+    // Взрыв срывает со стены и обрывает рывок
+    this.hang = null;
+    this.zip = null;
     this.grounded = false;
     this.vx += ix;
     this.vy += iy;
@@ -407,6 +535,10 @@ export class Worm {
   kill(cause = '') {
     this.foldChute();
     if (!this.alive) return;
+    this.zip = null;
+    this.hang = null;
+    this.rope?.destroy();
+    this.rope = null;
     this.alive = false;
     this.health = 0;
     this.marker.setVisible(false);
@@ -448,19 +580,28 @@ export class Worm {
   }
 
   get settled() {
-    return !this.alive || (this.grounded && Math.abs(this.vx) < 4);
+    if (!this.alive || this.hang) return true;
+    return !this.zip && this.grounded && Math.abs(this.vx) < 4;
   }
 
   _syncView() {
     const rx = Math.round(this.x);
     const ry = Math.round(this.y);
-    this.view.setPosition(rx, ry);
+    // На стене и потолке боец «стоит» на них ногами: поворачиваем вид
+    // вокруг точки ног и ставим её на ту поверхность, за которую держится
+    const hw = CFG.WORM_W >> 1;
+    if (this.hang === 'ceil') { this.view.setPosition(rx, ry - CFG.WORM_H + 1); this.view.setRotation(Math.PI); }
+    else if (this.hang === 'left') { this.view.setPosition(rx - hw, ry - CFG.WORM_H / 2); this.view.setRotation(Math.PI / 2); }
+    else if (this.hang === 'right') { this.view.setPosition(rx + hw, ry - CFG.WORM_H / 2); this.view.setRotation(-Math.PI / 2); }
+    else { this.view.setPosition(rx, ry); this.view.setRotation(0); }
+    this._drawRope();
 
     // Спрайты нарисованы мордой влево, поэтому отражаем при движении вправо
     if (this.view.setFlipX) this.view.setFlipX(this.sprited ? this.facing > 0 : this.facing < 0);
 
     if (this.sprited) {
-      if (!this.grounded) this._setAnim('worm_fall');
+      if (this.hang) this._setAnim('worm_idle');
+      else if (!this.grounded) this._setAnim('worm_fall');
       else if (this.walking || this.scene.time.now < (this.remoteWalkUntil ?? 0)) this._setAnim('worm_walk');
       else this._setAnim('worm_idle');
     }
@@ -495,6 +636,18 @@ export class Worm {
     this.walking = false;
   }
 }
+
+Worm.prototype._drawRope = function _drawRope() {
+  if (!this.zip) { if (this.rope) this.rope.clear(); return; }
+  const s = this.scene;
+  if (!this.rope) this.rope = s.rig.world(s.add.graphics().setDepth(DEPTH.WORM - 1));
+  const g = this.rope;
+  const { ax, ay } = this.zip;
+  g.clear();
+  g.lineStyle(4, 0x1a1208, 0.55).lineBetween(this.x, this.centerY, ax, ay);
+  g.lineStyle(2, 0xe8d9a8, 1).lineBetween(this.x, this.centerY, ax, ay);
+  g.fillStyle(0xe8d9a8, 1).fillCircle(ax, ay, 4);
+};
 
 /** Ширина полоски здоровья над бойцом. */
 const HP_BAR_W = 26;

@@ -2,7 +2,7 @@ import { UI, font, ensureButton } from '../ui/theme.js';
 import { CFG } from '../config.js';
 import { MISSIONS, loadProgress, isUnlocked } from '../campaign/missions.js';
 import { objectiveText } from '../campaign/objectives.js';
-import { quickMatch, campaignMatch, onlineMatch, QUICK_OPTIONS } from '../core/match.js';
+import { quickMatch, campaignMatch, onlineMatch, towerMatch, QUICK_OPTIONS } from '../core/match.js';
 import { SHAPES } from '../core/shapes.js';
 import { randomRoom, copyText } from '../net/transport.js';
 import { isCasualRoom } from '../net/rooms.js';
@@ -260,10 +260,14 @@ export default class MenuScene extends Phaser.Scene {
     this._clear();
     this._title('WORMS', 'пошаговая артиллерия');
     const cx = this.W / 2;
-    const y0 = 196, step = 78;
+    const y0 = 242, step = 70;
 
+    // «Башня» — проба новой игры: высокая арена и крюк. Стоит первой,
+    // пока её обкатывают; остальное меню сдвинуто под неё
+    this._button('tower', cx, y0 - step, 'Башня · новое', 'высокая арена, крюк-трос, любой поворот экрана',
+      () => this.showTower(), { variant: 'primary' });
     this._button('quick', cx, y0, 'Быстрая игра', 'случайная карта',
-      () => this.showQuick(), { variant: 'primary' });
+      () => this.showQuick());
     this._button('campaign', cx, y0 + step, 'Кампания', 'миссии с условиями',
       () => this.showCampaign());
     this._button('online', cx, y0 + step * 2, 'Онлайн', 'игра вдвоём по ссылке',
@@ -324,6 +328,25 @@ export default class MenuScene extends Phaser.Scene {
     this.items.push(foot);
   }
 
+  // --------------------------------------------------------------- башня
+
+  showTower() {
+    this.section = this.showTower;
+    this._clear();
+    this._title('Башня', 'по два бойца · ход 25 с · три крюка за ход');
+    const cx = this.W / 2;
+    const y0 = 200, step = 78;
+    this._button('tower-fighter', cx, y0, 'Против бота: Боец', 'считает выстрел и пользуется крюком',
+      () => this.start(towerMatch('fighter')), { variant: 'primary' });
+    this._button('tower-rookie', cx, y0 + step, 'Против бота: Новичок', 'стоит на месте, целится грубо',
+      () => this.start(towerMatch('rookie')));
+    this._button('tower-sniper', cx, y0 + step * 2, 'Против бота: Снайпер', 'промахивается редко',
+      () => this.start(towerMatch('sniper')));
+    this._button('tower-hotseat', cx, y0 + step * 3, 'Вдвоём на одном телефоне', 'ходы по очереди',
+      () => this.start(towerMatch(null)));
+    this._back();
+  }
+
   // ------------------------------------------------------- быстрая игра
 
   showQuick() {
@@ -335,7 +358,7 @@ export default class MenuScene extends Phaser.Scene {
 
     // Настройки партии: каждая кнопка перебирает свои варианты по кругу.
     // Выбор запоминается и действует и на игру вдвоём, и против бота.
-    const shapes = ['random', ...SHAPES.map((sh) => sh.id)];
+    const shapes = ['random', ...SHAPES.filter((sh) => !sh.hidden).map((sh) => sh.id)];
     const shapeName = (id) => (id === 'random' ? 'любая' : SHAPES.find((sh) => sh.id === id)?.name ?? id);
     const cycle = (list, cur) => list[(list.indexOf(cur) + 1) % list.length];
     const opt = (key, x, w, label, next) => this._button(key, x, 168, label, '',
@@ -370,7 +393,7 @@ export default class MenuScene extends Phaser.Scene {
     let saved = null;
     try { saved = JSON.parse(localStorage.getItem('worms.quick.v1') ?? 'null'); } catch { saved = null; }
     const pick = (list, v, d) => (list.includes(v) ? v : d);
-    const shapes = ['random', ...SHAPES.map((sh) => sh.id)];
+    const shapes = ['random', ...SHAPES.filter((sh) => !sh.hidden).map((sh) => sh.id)];
     return {
       shape: pick(shapes, saved?.shape, 'random'),
       worms: pick(QUICK_OPTIONS.worms, saved?.worms, 2),

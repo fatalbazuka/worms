@@ -16,6 +16,9 @@
  *   weight   — вес при случайном выборе
  *   profile(surface, ctx) — правит массив высот поверхности (y земли)
  *   carve(terrain, rng)   — режет маску после заливки (пещеры)
+ *   build(terrain, rng)   — рисует маску целиком сама, без профиля (башня)
+ *   world                 — свои размеры мира (config.js, applyWorld)
+ *   hidden                — не показывать в выборе карты быстрой игры
  */
 import { CFG } from '../config.js';
 import { subRng } from './rng.js';
@@ -146,6 +149,110 @@ export const SHAPES = [
         }
       }
       ctx.globalCompositeOperation = 'source-over';
+    },
+  },
+  {
+    // Башня: узкая и высокая арена из этажей. Целиком помещается в
+    // вертикальный экран телефона; между этажами — крюком. Рисует маску
+    // сама (build), профиль поверхности ей не нужен. В случайный выбор не
+    // попадает (weight 0): её включает только свой режим, вместе с крюком.
+    id: 'tower',
+    name: 'Башня',
+    weight: 0,
+    hidden: true,
+    // Ширина — ровно логическая ширина вертикального экрана (VIEW_BASE):
+    // в портрете башня видна вся при масштабе 1, бойцы не мельчают
+    world: { w: 720, h: 1560, ground: 1515, water: 1470, focus: 780, power: 850, fallSafe: 190 },
+    build(terrain, rng) {
+      const ctx = terrain.maskCtx;
+      const W = terrain.width, H = terrain.height;
+      const r = (a, b) => a + rng() * (b - a);
+      ctx.globalCompositeOperation = 'source-over';
+      ctx.clearRect(0, 0, W, H);
+      ctx.fillStyle = '#ffffff';
+
+      // Плита с неровными краями. Верх волнистый, но пологий: по нему ходят
+      // (подъём за шаг не выше STEP_UP), низ — грубее.
+      const slab = (x0, x1, yTop, thick) => {
+        const f1 = r(0.018, 0.03), f2 = r(0.05, 0.08), p1 = r(0, 6.3), p2 = r(0, 6.3);
+        const top = [], bottom = [];
+        for (let x = x0; x <= x1; x += 8) {
+          const edge = Math.min(1, Math.min(x - x0, x1 - x) / 34);
+          const k = edge * edge * (3 - 2 * edge);           // к краям плита сходит на клин
+          const wave = Math.sin(x * f1 + p1) * 6 + Math.sin(x * f2 + p2) * 2;
+          const mid = yTop + thick / 2;
+          top.push([x, mid - (thick / 2 - wave) * k - 3]);
+          bottom.push([x, mid + (thick / 2 + Math.sin(x * f2 * 1.7 + p1) * 7) * k + 3]);
+        }
+        ctx.beginPath();
+        ctx.moveTo(top[0][0], top[0][1]);
+        for (const [x, y] of top) ctx.lineTo(x, y);
+        for (let i = bottom.length - 1; i >= 0; i--) ctx.lineTo(bottom[i][0], bottom[i][1]);
+        ctx.closePath();
+        ctx.fill();
+      };
+      // Столбик: сверху вниз от потолка (сталактит) или снизу вверх от пола
+      const spike = (x, y0, y1, w) => {
+        ctx.beginPath();
+        ctx.moveTo(x - w / 2, y0);
+        ctx.lineTo(x + w / 2, y0);
+        ctx.lineTo(x + w * 0.28, y1);
+        ctx.quadraticCurveTo(x, y1 + Math.sign(y1 - y0) * 12, x - w * 0.28, y1);
+        ctx.closePath();
+        ctx.fill();
+      };
+
+      // Основание — остров: края уходят под воду
+      const baseY = H - 245;
+      const f = r(0.006, 0.011), ph = r(0, 6.3);
+      ctx.beginPath();
+      ctx.moveTo(0, H);
+      for (let x = 0; x <= W; x += 6) {
+        const e = Math.min(1, Math.min(x, W - x) / 90);
+        const k = e * e * (3 - 2 * e);
+        const y = baseY + Math.sin(x * f + ph) * 26 + Math.sin(x * 0.031 + ph * 2) * 7;
+        ctx.lineTo(x, y + (CFG.WATER_Y + 50 - y) * (1 - k));
+      }
+      ctx.lineTo(W, H);
+      ctx.closePath();
+      ctx.fill();
+
+      // Этажи: через один — две плиты с проёмом посередине и одна по центру.
+      // Проёмы друг над другом не стоят: насквозь башню не простреливает,
+      // но с этажа на этаж всегда есть куда зацепиться.
+      const levels = 5, gap = 212;
+      const floors = [];
+      for (let k = 1; k <= levels; k++) {
+        const y = baseY - gap * k + r(-14, 14);
+        const thick = r(48, 64);
+        const split = (k % 2 === 1) !== (rng() < 0.12);
+        if (split) {
+          const hole = r(150, 200), cx = W / 2 + r(-70, 70);
+          const a = [r(20, 60), cx - hole / 2], b = [cx + hole / 2, W - r(20, 60)];
+          slab(a[0], a[1], y, thick);
+          slab(b[0], b[1], y, thick);
+          floors.push({ y, thick, parts: [a, b] });
+        } else {
+          const half = r(150, 205), cx = W / 2 + r(-50, 50);
+          const parts = [[cx - half, cx + half]];
+          slab(cx - half, cx + half, y, thick);
+          // Полочки у краёв — не всегда: за них цепляются и с них сбивают
+          if (rng() < 0.6) { const w = r(84, 110); slab(12, 12 + w, y + r(-30, 30), thick * 0.8); parts.push([12, 12 + w]); }
+          if (rng() < 0.6) { const w = r(84, 110); slab(W - 12 - w, W - 12, y + r(-30, 30), thick * 0.8); parts.push([W - 12 - w, W - 12]); }
+          floors.push({ y, thick, parts });
+        }
+      }
+      // Сталактиты под плитами (укрытие и зацеп) и пара столбиков на полу
+      for (const fl of floors) {
+        for (const [x0, x1] of fl.parts) {
+          if (x1 - x0 < 200 || rng() < 0.45) continue;
+          spike(r(x0 + 60, x1 - 60), fl.y + fl.thick - 6, fl.y + fl.thick + r(55, 95), r(40, 58));
+        }
+      }
+      for (let i = 0; i < 2; i++) {
+        const x = r(120, W - 120);
+        spike(x, baseY + 30, baseY - r(45, 75), r(46, 64));
+      }
     },
   },
 ];

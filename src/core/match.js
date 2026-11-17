@@ -41,6 +41,24 @@ export function quickMatch(botLevel = null, opts = {}) {
   };
 }
 
+/**
+ * Башня: высокая арена, крюк-трос, короткий ход. Соперник — бот или
+ * человек рядом. Играется в любой ориентации телефона.
+ */
+export function towerMatch(botLevel = null) {
+  return {
+    mode: 'quick',
+    shape: 'tower',
+    teams: [
+      { worms: 2, control: 'human' },
+      botLevel
+        ? { worms: 2, control: 'bot', level: botLevel }
+        : { worms: 2, control: 'human' },
+    ],
+    rules: { turnTime: 25, hook: 3, crateChance: 0.3 },
+  };
+}
+
 /** Варианты настроек быстрой игры — для меню и проверки сохранённых. */
 export const QUICK_OPTIONS = {
   worms: [2, 3, 4, 1],

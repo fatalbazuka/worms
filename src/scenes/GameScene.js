@@ -1,4 +1,4 @@
-import { CFG, DEPTH, TEAM_COLORS, TEAM_NAMES, canvasSize } from '../config.js';
+import { CFG, DEPTH, TEAM_COLORS, TEAM_NAMES, canvasSize, applyWorld } from '../config.js';
 import { makeRng, subRng } from '../core/rng.js';
 import { BIOMES, pickBiome } from '../core/biomes.js';
 import { pickShape, shapeRng } from '../core/shapes.js';
@@ -49,6 +49,17 @@ export default class GameScene extends Phaser.Scene {
     this.seed = this._chooseSeed();
     this.rng = makeRng(this.seed);
     this.turnRng = subRng(this.seed, 0);
+    // Форма карты: из миссии или меню, иначе случайная от зерна (в сети у
+    // обоих одна). Кампания без поля shape — всегда остров, как и была.
+    // Выбирается первой: от формы зависят размеры мира, а от них — всё.
+    this.shape = pickShape(this.seed,
+      this.match.shape ?? (this.match.mode === 'campaign' ? 'island' : null));
+    applyWorld(this.shape.world);
+    // Крюк-трос: сколько раз за ход. Ноль — крюка в партии нет. Вместе с
+    // ним приходит и новая схема под палец: рогатка, тап, любая ориентация
+    this.hookPerTurn = Math.max(0, Number(this.rules.hook) || 0);
+    this.hooksLeft = this.hookPerTurn;
+    this.sling = this.hookPerTurn > 0;
     this.explosionLog = [];
     // Все воронки с начала партии — для соперника, вернувшегося после
     // обрыва: у него земля чистая, журнал одного хода ему не поможет
@@ -81,6 +92,7 @@ export default class GameScene extends Phaser.Scene {
     // Риг камер создаётся первым: каждый последующий объект сразу
     // приписывается к своей камере.
     this.rig = new CameraRig(this);
+    this._applyBaseZoom();
 
     const biome = this._chooseBiome();
 
@@ -111,10 +123,13 @@ export default class GameScene extends Phaser.Scene {
     this.game.events.on('worms-resize', this.relayout, this);
     this.events.once('shutdown', this._shutdown, this);
 
-    // Бой ландшафтный: в портрете страница показывает «поверни телефон»,
-    // а Telegram держит ландшафт. Меню всего этого не касается.
-    globalThis.document?.body.classList.add('in-battle');
-    setBattle(true);
+    // Обычный бой ландшафтный: в портрете страница показывает «поверни
+    // телефон», а Telegram держит ландшафт. Арена с крюком играется как
+    // угодно — ни просьбы, ни фиксации. Меню всего этого не касается.
+    if (!this.sling) {
+      globalThis.document?.body.classList.add('in-battle');
+      setBattle(true);
+    }
     // На ПК над полем — перекрестие: сразу видно, что курсор и есть прицел
     if (isDesktop()) this.input.setDefaultCursor('crosshair');
   }
@@ -122,6 +137,7 @@ export default class GameScene extends Phaser.Scene {
   /** Пересобрать всё, что считалось от размера экрана. */
   relayout() {
     this.rig.resize();
+    this._applyBaseZoom();
     const [cw, ch] = canvasSize();
     this.skyImage?.setDisplaySize(cw, Math.max(this.skyHeight ?? 0, ch));
     this._buildBarBacking();
@@ -133,6 +149,65 @@ export default class GameScene extends Phaser.Scene {
     this.hud.setHelp(help);
     this.hud.setWeaponIndex(this.turn.weaponIndex);
     if (this.room) this._netStatus();
+  }
+
+  /**
+   * Обычный масштаб партии. На широкой карте это 1. Башня уже экрана в
+   * ландшафте и шире — в портрете: там отдаляемся ровно настолько, чтобы
+   * она влезла по ширине, и тогда в вертикальном телефоне видна вся арена.
+   */
+  _applyBaseZoom() {
+    const rig = this.rig;
+    rig.baseZoom = this.shape.world
+      ? Phaser.Math.Clamp(rig.W / CFG.WORLD_W, 0.6, 1)
+      : 1;
+    rig.setZoom(rig.baseZoom);
+    if (this.turn?.activeWorm) rig.focus(this.turn.activeWorm);
+  }
+
+  // ------------------------------------------------------------------ крюк
+
+  /**
+   * Куда зацепится трос, если пустить его от бойца в сторону точки (px, py):
+   * первая твердь на луче в пределах длины троса.
+   * @returns {{x:number, y:number}|null}
+   */
+  hookAnchor(worm, px, py) {
+    const ox = worm.x, oy = worm.centerY;
+    const d = Math.hypot(px - ox, py - oy);
+    if (d < 6) return null;
+    const dx = (px - ox) / d, dy = (py - oy) / d;
+    const ray = this.terrain.raycast(ox, oy, ox + dx * CFG.HOOK_RANGE, oy + dy * CFG.HOOK_RANGE);
+    if (!ray.hit) return null;
+    if (Math.hypot(ray.x - ox, ray.y - oy) < CFG.HOOK_MIN) return null;
+    return { x: ray.x, y: ray.y };
+  }
+
+  /** Можно ли сейчас пустить крюк (свой ход, крюки остались, не в полёте). */
+  canHook() {
+    const w = this.turn.activeWorm;
+    return this.hooksLeft > 0 && this.canAct() && !!w && w.alive && !w.zip && !this.charging;
+  }
+
+  /**
+   * Пустить крюк в сторону точки. Промах (не за что зацепиться) крюк не
+   * тратит: наказывать за тап в небо незачем.
+   */
+  tryHook(px, py) {
+    if (!this.canHook()) return false;
+    const w = this.turn.activeWorm;
+    const a = this.hookAnchor(w, px, py);
+    if (!a) {
+      this.fx.banner('не достаёт', '#ffd166', 700);
+      return false;
+    }
+    this.hooksLeft--;
+    w.startZip(a.x, a.y);
+    w.setActiveMarker(false);
+    this.fx.sound('jump');
+    if (!this.isBotTurn()) haptic('shot');
+    this.setCameraManual(false);
+    return true;
   }
 
   // ------------------------------------------------------------------ боты
@@ -352,9 +427,9 @@ export default class GameScene extends Phaser.Scene {
     this.barBacking?.destroy();
     this.barBacking = null;
     const f = CFG.FRAME;
-    if (!f.left && !f.right) return;
+    if (!f.left && !f.right && !f.top) return;
     const [cw] = canvasSize();
-    this.barBacking = this.rig.bg(this.add.rectangle(0, 0, cw, TOP_H, 0x10131a, 0.9)
+    this.barBacking = this.rig.bg(this.add.rectangle(0, 0, cw, f.top + TOP_H, 0x10131a, 0.9)
       .setOrigin(0, 0).setScrollFactor(0).setDepth(DEPTH.SKY + 1));
   }
 
@@ -380,10 +455,6 @@ export default class GameScene extends Phaser.Scene {
       grass: has(this, `${biome.id}_grass`)
         ? this.textures.get(`${biome.id}_grass`).getSourceImage() : null,
     });
-    // Форма карты: из миссии или меню, иначе случайная от зерна (в сети у
-    // обоих одна). Кампания без поля shape — всегда остров, как и была.
-    const wanted = this.match.shape ?? (this.match.mode === 'campaign' ? 'island' : null);
-    this.shape = pickShape(this.seed, wanted);
     this.terrain.generate(this.shape, shapeRng(this.seed));
 
     // По одной Phaser-текстуре на чанк: после взрыва в GPU уходит
@@ -420,6 +491,20 @@ export default class GameScene extends Phaser.Scene {
       sizes.forEach((n, team) => { if (i < n) order.push({ team, idx: i }); });
     }
 
+    // Многоэтажная карта: бойцы сразу стоят на своих этажах. Десант сверху
+    // посадил бы всех на крышу
+    if (this.terrain.tops) {
+      const spots = this._findFloorSpots(order.length);
+      order.forEach(({ team, idx }, i) => {
+        const p = spots[i] ?? { x: CFG.WORLD_W / 2, y: 100 };
+        const worm = new Worm(this, p.x, p.y, team, idx);
+        worm.snapToGround();
+        worm.fallStartY = worm.y;
+        this.worms.push(worm);
+      });
+      return;
+    }
+
     const spots = this._findSpawnSpots(order.length);
     order.forEach(({ team, idx }, i) => {
       const x = spots[i] ?? this.rng.range(300, CFG.WORLD_W - 300);
@@ -431,6 +516,23 @@ export default class GameScene extends Phaser.Scene {
       worm.deployChute();
       this.worms.push(worm);
     });
+  }
+
+  /** Точки старта на этажах: случайные, но подальше друг от друга. */
+  _findFloorSpots(count) {
+    const all = this.terrain.standSpots();
+    for (let i = all.length - 1; i > 0; i--) {
+      const j = this.rng.int(0, i);
+      [all[i], all[j]] = [all[j], all[i]];
+    }
+    for (let minDist = 420; minDist >= 60; minDist -= 40) {
+      const picked = [];
+      for (const p of all) {
+        if (picked.every((q) => Math.hypot(q.x - p.x, q.y - p.y) >= minDist)) picked.push(p);
+        if (picked.length === count) return picked;
+      }
+    }
+    return all.slice(0, count);
   }
 
   /**
@@ -793,6 +895,7 @@ export default class GameScene extends Phaser.Scene {
   /** Сброс прицела в начале хода. */
   resetAim() {
     this.aimAngle = CFG.AIM_ANGLE_START;
+    this.hooksLeft = this.hookPerTurn;
     this.cancelCharge();
     this.mouseFire = false;
     this.remoteAim = false;
@@ -935,8 +1038,9 @@ export default class GameScene extends Phaser.Scene {
     // у соперника, наше дело — повторить его на экране.
     const allowed = this.replaying ? this.turn.state === STATE.AIM : this.canAct();
     // Во время отхода от собственного заряда стрелять нельзя: иначе мина
-    // превращалась бы в бесплатную добавку к обычному выстрелу.
-    if (!allowed || this.turn.retreating || !w || !w.alive) return;
+    // превращалась бы в бесплатную добавку к обычному выстрелу. И на лету
+    // по тросу тоже: сначала долети.
+    if (!allowed || this.turn.retreating || !w || !w.alive || (w.zip && !this.replaying)) return;
 
     const len = Math.hypot(vx, vy) || 1;
     const nx = vx / len, ny = vy / len;

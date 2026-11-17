@@ -202,6 +202,13 @@ const ICONS = {
     ctx.stroke();
   },
   // Динамик с волнами — звук включён; с крестом — выключен
+  // Три точки: редкие кнопки спрятаны под одной
+  more: (ctx, s) => {
+    ctx.fillStyle = '#ffffff';
+    for (const k of [0.28, 0.5, 0.72]) {
+      ctx.beginPath(); ctx.arc(s * k, s / 2, s * 0.075, 0, Math.PI * 2); ctx.fill();
+    }
+  },
   sound: (ctx, s) => speaker(ctx, s, false),
   mute: (ctx, s) => speaker(ctx, s, true),
   help: (ctx, s) => {
