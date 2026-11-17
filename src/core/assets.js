@@ -53,6 +53,22 @@ for (const b of BIOMES) {
  * предрассчитанных поворота (кадр выбирается по направлению полёта).
  */
 export const SHEETS = {
+  // Боец-смайлик: один лист на все позы (tools/build_smiley.py). Если он
+  // загрузился, бойцы рисуются им, а червяки ниже остаются запасными.
+  // Анимации — наборы кадров по номерам, а не подряд идущие отрезки.
+  smiley: {
+    anims: {
+      smiley_idle: { frameRate: 6, repeat: -1, frames: [0, 0, 0, 2, 0, 3, 0, 0, 0, 0, 1, 0, 0, 2, 0, 3] },
+      smiley_walk: { frameRate: 12, repeat: -1, frames: [4, 5, 6, 7] },
+      smiley_fall: { frameRate: 6, repeat: -1, frames: [6, 9] },
+      smiley_fly: { frameRate: 1, repeat: -1, frames: [8] },
+      smiley_hurt: { frameRate: 1, repeat: -1, frames: [10] },
+      smiley_dizzy: { frameRate: 1, repeat: -1, frames: [11] },
+      smiley_aim: { frameRate: 1, repeat: -1, frames: [12] },
+      smiley_win: { frameRate: 5, repeat: -1, frames: [13, 3] },
+      smiley_cry: { frameRate: 1, repeat: -1, frames: [14] },
+    },
+  },
   worm_idle: { anims: { worm_idle: { frameRate: 10, repeat: -1 } } },
   worm_walk: { anims: { worm_walk: { frameRate: 18, repeat: -1 } } },
   worm_fall: { anims: { worm_fall: { frameRate: 8, repeat: -1 } } },
@@ -93,8 +109,18 @@ export function has(scene, key) {
   return !missing.has(key) && scene.textures.exists(key);
 }
 
+/**
+ * Размеры листов, которые собирает не build_assets.py (он пишет
+ * sprite-meta.js), а отдельный скрипт. scale — во сколько раз кадр
+ * уменьшается на экране, originY — где в кадре линия ног, ghost — кадр
+ * призрака.
+ */
+const EXTRA_META = {
+  smiley: { frameWidth: 100, frameHeight: 100, frames: 16, originY: 0.92, scale: 0.52, ghost: 15 },
+};
+
 export function meta(key) {
-  return SPRITE_META[key] ?? null;
+  return SPRITE_META[key] ?? EXTRA_META[key] ?? null;
 }
 
 /** Индекс предрассчитанного поворота для направления (vx, vy). */

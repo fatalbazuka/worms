@@ -54,7 +54,7 @@ export class Worm {
     this.vy = Math.min(this.vy, CFG.CHUTE_SPEED);
     const s = this.scene;
     if (this.chute) return;
-    if (has(s, 'worm_chute')) {
+    if (!this.smiley && has(s, 'worm_chute')) {
       this.chute = s.rig.world(s.add.image(this.x, this.y + 2, 'worm_chute')
         .setOrigin(0.5, 1).setDepth(DEPTH.WORM));
       this.chuteWhole = true;
@@ -81,9 +81,17 @@ export class Worm {
   _buildView() {
     const s = this.scene;
     const color = TEAM_COLORS[this.team % TEAM_COLORS.length];
-    this.sprited = has(s, 'worm_idle');
+    this.smiley = has(s, 'smiley');
+    this.sprited = this.smiley || has(s, 'worm_idle');
 
-    if (this.sprited) {
+    if (this.smiley) {
+      // Смайлик: один лист на все позы, рисуется вдвое мельче кадра
+      const m = meta('smiley');
+      this.view = s.add.sprite(this.x, this.y, 'smiley', 0).setScale(m.scale);
+      this.view.setOrigin(0.5, m.originY);
+      this.view.play('smiley_idle');
+      this.anim = 'smiley_idle';
+    } else if (this.sprited) {
       // Спрайты WA нарисованы «мордой влево», ноги — не по низу кадра,
       // поэтому точка привязки берётся из sprite-meta.
       const m = meta('worm');
@@ -128,7 +136,9 @@ export class Worm {
   }
 
   /** Переключить анимацию, если она отличается от текущей. */
-  _setAnim(key) {
+  _setAnim(name) {
+    // Имена анимаций исторически червячьи; у смайлика тот же набор и свои
+    const key = this.smiley ? name.replace('worm_', 'smiley_') : name;
     if (!this.sprited || this.anim === key) return;
     this.anim = key;
     this.view.play(key, true);
@@ -523,6 +533,9 @@ export class Worm {
   damage(amount, cause = '') {
     if (!this.alive || amount <= 0) return;
     this.health = Math.max(0, this.health - amount);
+    // Пару секунд лицо помнит, что было больно; после падения — кружится голова
+    this.hurtPose = cause === 'падение' ? 'worm_dizzy' : 'worm_hurt';
+    this.hurtUntil = this.scene.time.now + 1300;
     this.scene.fx.damageNumber(this.x, this.centerY - 10, amount);
     if (this.health <= 0) this.kill(cause);
   }
@@ -546,6 +559,7 @@ export class Worm {
 
     const s = this.scene;
     const gx = Math.round(this.x), gy = Math.round(this.y);
+    if (this.smiley) this._ghost();
     s.tweens.add({
       targets: [this.view, this.label, this.bar, this.barBg, this.eye].filter(Boolean),
       alpha: 0,
@@ -566,12 +580,26 @@ export class Worm {
   /** Надгробие на месте гибели — если под ним осталась земля. */
   _placeGrave(x, y) {
     const s = this.scene;
-    if (!has(s, 'grave')) return;
+    // У смайлика вместо надгробия улетает призрак
+    if (this.smiley || !has(s, 'grave')) return;
     const top = this.terrain.surfaceYAt(x, Math.max(0, y - 60));
     if (top === null || top > CFG.DROWN_Y) return;
     const grave = s.rig.world(s.add.image(x, top + 1, 'grave')
       .setOrigin(0.5, 1).setDepth(DEPTH.WORM - 1).setAlpha(0));
     s.tweens.add({ targets: grave, alpha: 1, duration: 300 });
+  }
+
+  /** Призрак: поднимается с места гибели и тает. */
+  _ghost() {
+    const s = this.scene;
+    const m = meta('smiley');
+    const g = s.rig.world(s.add.image(this.x, this.centerY, 'smiley', m.ghost)
+      .setScale(m.scale).setDepth(DEPTH.WORM + 4).setAlpha(0.95));
+    if (g.setFlipX) g.setFlipX(this.facing > 0);
+    s.tweens.add({
+      targets: g, y: this.centerY - 90, alpha: 0, duration: 1800, ease: 'Sine.easeOut',
+      onComplete: () => g.destroy(),
+    });
   }
 
   setActiveMarker(on) {
@@ -599,7 +627,8 @@ export class Worm {
     // Спрайты нарисованы мордой влево, поэтому отражаем при движении вправо
     if (this.view.setFlipX) this.view.setFlipX(this.sprited ? this.facing > 0 : this.facing < 0);
 
-    if (this.sprited) {
+    if (this.smiley) this._syncSmiley(rx, ry);
+    else if (this.sprited) {
       if (this.hang) this._setAnim('worm_idle');
       else if (!this.grounded) this._setAnim('worm_fall');
       else if (this.walking || this.scene.time.now < (this.remoteWalkUntil ?? 0)) this._setAnim('worm_walk');
@@ -636,6 +665,36 @@ export class Worm {
     this.walking = false;
   }
 }
+
+/**
+ * Поза смайлика: у него лицо, и оно должно отвечать на происходящее —
+ * летит по тросу, больно, целится, победил. Полёт рисуется вокруг центра
+ * и разворачивается по направлению рывка; остальное стоит на ногах.
+ */
+Worm.prototype._syncSmiley = function _syncSmiley(rx, ry) {
+  const scene = this.scene;
+  const m = meta('smiley');
+  const now = scene.time.now;
+  if (this.zip) {
+    const dx = this.zip.ax - this.x, dy = this.zip.ay - this.centerY;
+    this._setAnim('worm_fly');
+    this.view.setOrigin(0.5, 0.5);
+    this.view.setPosition(rx, Math.round(this.centerY));
+    this.view.setFlipX(dx > 0);
+    this.view.setRotation(dx > 0 ? Math.atan2(dy, dx) : Math.atan2(-dy, -dx));
+    return;
+  }
+  this.view.setOrigin(0.5, m.originY);
+  const aiming = scene.turn?.activeWorm === this
+    && (scene.charging || scene.aim?.mode === 'aim');
+  if (this.mood) this._setAnim(this.mood);
+  else if (now < (this.hurtUntil ?? 0)) this._setAnim(this.hurtPose);
+  else if (this.hang) this._setAnim(aiming ? 'worm_aim' : 'worm_idle');
+  else if (!this.grounded) this._setAnim('worm_fall');
+  else if (aiming) this._setAnim('worm_aim');
+  else if (this.walking || now < (this.remoteWalkUntil ?? 0)) this._setAnim('worm_walk');
+  else this._setAnim('worm_idle');
+};
 
 Worm.prototype._drawRope = function _drawRope() {
   if (!this.zip) { if (this.rope) this.rope.clear(); return; }

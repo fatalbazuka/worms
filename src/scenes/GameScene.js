@@ -1217,6 +1217,8 @@ export default class GameScene extends Phaser.Scene {
 
   onGameOver(winner) {
     if (this.gameOverUi) return;
+    // Выжившие радуются или плачут — у кого есть чем
+    for (const w of this.worms) if (w.alive) w.mood = w.team === winner ? 'worm_win' : 'worm_cry';
 
     // Где есть бот или сеть, «победа красных» ничего не говорит: важно,
     // выиграл ли ты. В хотсите наоборот — команды равноправны.
