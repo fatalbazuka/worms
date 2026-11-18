@@ -467,6 +467,25 @@ check(`«Подъём»: все ${upIds.length} боёв собираются, �
 check('края башни: на Леднике и в Жерле стены, у подножия и в космосе — обрыв',
   edges.ice && edges.lava && edges.classic === false && edges.space === false, JSON.stringify(edges));
 
+// Оружие у каждой команды своё: соперник сменил — у тебя на твоём ходу прежнее
+const weap = await page.evaluate(async () => {
+  const { WEAPONS } = await import('/src/weapons/index.js');
+  const s = window.__WORMS__.scene.getScene('Game');
+  const t = s.turn;
+  const gi = WEAPONS.findIndex((w) => w.id === 'grenade');
+  t.ammo[0][gi] = 5; t.ammo[1][gi] = 5;
+  t.currentTeam = 0; t.setWeaponIndex(gi);
+  t.currentTeam = 1; t.setWeaponIndex(0);
+  t._activate(1, true);                       // обычная очередь: снова команда 0
+  const local = t.currentTeam === 0 ? t.weaponIndex === gi : null;
+  t.currentTeam = 1; t.setWeaponIndex(0);
+  const w0 = s.worms.findIndex((w) => w.alive && w.team === 0);
+  t.forceTurn({ turn: t.turnNumber + 1, team: 0, worm: w0, weapon: 0 });  // очередь по сети
+  const net = t.weaponIndex === gi;
+  return { local, net };
+});
+check('оружие у каждой команды своё: ход соперника не меняет твоё (и по сети)', weap.local === true && weap.net === true, JSON.stringify(weap));
+
 // Невидимых стен нет: за краем — падение; висящего шаг отцепляет; стик ведёт бойца
 const moves = await page.evaluate(async () => {
   const { CFG } = await import('/src/config.js');
