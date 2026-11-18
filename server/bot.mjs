@@ -18,6 +18,7 @@
  * «tour:<турнир>:<игрок>» — не длиннее 128 байт.
  */
 import { createHash } from 'node:crypto';
+import { shopItem } from './shop.mjs';
 
 export const DONATE_AMOUNTS = [10, 50, 100];
 
@@ -83,6 +84,16 @@ export function createBot({ db, api, players, tournaments, analytics = null, adm
     });
   }
 
+  function shopInvoice(player, item) {
+    return invoice({
+      purpose: 'shop', ref: item.id, player, amount: item.stars,
+      title: item.title,
+      description: item.kind === 'skin'
+        ? 'Скин бойца навсегда. Только внешность — на бой не влияет.'
+        : 'Внутри — случайный скин, которого у тебя ещё нет. На бой не влияет.',
+    });
+  }
+
   function parsePayload(s) {
     const [purpose, ref, playerId] = String(s ?? '').split(':');
     return { purpose, ref, playerId };
@@ -108,6 +119,10 @@ export function createBot({ db, api, players, tournaments, analytics = null, adm
       if (!error && t.fee !== pq.total_amount) error = 'Взнос изменился — открой турнир заново.';
     } else if (purpose === 'donate') {
       if (!DONATE_AMOUNTS.includes(pq.total_amount)) error = 'Неизвестная сумма.';
+    } else if (purpose === 'shop') {
+      const it = shopItem(ref);
+      if (!it) error = 'Такого товара больше нет.';
+      else if (it.stars !== pq.total_amount) error = 'Цена изменилась — открой магазин заново.';
     } else error = 'Неизвестная покупка.';
     await api.call('answerPreCheckoutQuery', error
       ? { pre_checkout_query_id: pq.id, ok: false, error_message: error }
@@ -128,6 +143,8 @@ export function createBot({ db, api, players, tournaments, analytics = null, adm
         await refund(chargeId);
         await send(msg.chat.id, 'Места в турнире закончились, пока шла оплата. Звёзды вернутся на счёт.');
       }
+    } else if (purpose === 'shop') {
+      await send(msg.chat.id, '✅ Покупка прошла! Открой игру — она уже в твоём профиле.', playButton());
     } else {
       await send(msg.chat.id, `💛 Спасибо за ${sp.total_amount} ⭐! Это правда помогает игре.`);
     }
@@ -363,7 +380,7 @@ export function createBot({ db, api, players, tournaments, analytics = null, adm
   }
 
   return {
-    handleUpdate, setup, notify, notifyAdmins, refund, donateInvoice, tourInvoice, remind,
+    handleUpdate, setup, notify, notifyAdmins, refund, donateInvoice, tourInvoice, shopInvoice, remind,
     get username() { return username; },
   };
 }

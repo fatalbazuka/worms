@@ -7,8 +7,9 @@
  * останутся теми же снаружи.
  */
 import {
-  SKINS, SKIN_BY_ID, DEFAULT_SKIN, normalize, claimBoxes, openBox, equip,
+  SKINS, SKIN_BY_ID, DEFAULT_SKIN, normalize, claimBoxes, openBox, equip, mergeSkins, applyOwned,
 } from '../core/skins.js';
+import { inTelegram, cloudGet, cloudSet } from './telegram.js';
 import { MISSIONS, loadProgress } from '../campaign/missions.js';
 
 const STORE_KEY = 'worms.skins.v1';
@@ -18,8 +19,30 @@ function load() {
 }
 
 function save(state) {
-  try { localStorage.setItem(STORE_KEY, JSON.stringify(state)); } catch { /* инкогнито */ }
+  const raw = JSON.stringify(state);
+  try { localStorage.setItem(STORE_KEY, raw); } catch { /* инкогнито */ }
+  // Копия в облаке Telegram: сменил телефон — скины с тобой
+  if (inTelegram()) cloudSet(STORE_KEY, raw);
   return state;
+}
+
+/** Подтянуть облачную копию и свести с местной. Зовётся при запуске. */
+export async function syncSkinsCloud() {
+  if (!inTelegram()) return;
+  let cloud = null;
+  try { cloud = JSON.parse((await cloudGet(STORE_KEY)) ?? 'null'); } catch { cloud = null; }
+  if (cloud) save(mergeSkins(load(), cloud));
+}
+
+/**
+ * Применить то, что положено с сервера (покупки за звёзды, подарки).
+ * @returns {{boxes:number, skins:string[]}} что прибавилось
+ */
+export function applyServerOwned(owned) {
+  const before = load();
+  const res = applyOwned(before, owned);
+  if (res.boxes || res.skins.length || res.state.paidSeen !== before.paidSeen) save(res.state);
+  return { boxes: res.boxes, skins: res.skins };
 }
 
 export function skinState() { return load(); }

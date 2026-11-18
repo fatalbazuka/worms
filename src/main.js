@@ -5,7 +5,9 @@ import GameScene from './scenes/GameScene.js';
 import { initTelegram, startRoom, screenInsets, inTelegram, botLink } from './platform/telegram.js';
 import { apiBase } from './net/server.js';
 import { applyUiClass } from './platform/device.js';
-import { loggedIn, telegramLogin, syncMe, track } from './net/server.js';
+import { loggedIn, telegramLogin, syncMe, track, fetchShop } from './net/server.js';
+import { syncSkinsCloud, applyServerOwned } from './platform/skins.js';
+import { syncDailyCloud } from './platform/daily.js';
 import { dailyState } from './platform/daily.js';
 import { dayKey, prevDay } from './core/daily.js';
 import { loadCloudProfile, player, dropAccount } from './platform/player.js';
@@ -47,7 +49,7 @@ fitViewToScreen(window.innerWidth, window.innerHeight, screenInsets());
 // метрики при создании, и текст, созданный на запасном шрифте, так и
 // останется криво расположенным. Профиль из облака Telegram — тоже до
 // старта: имя и рейтинг читаются синхронно, второго шанса подменить их нет.
-await Promise.all([loadUiFont(), loadCloudProfile()]);
+await Promise.all([loadUiFont(), loadCloudProfile(), syncSkinsCloud(), syncDailyCloud()]);
 
 // Аккаунт. Профиль помнит, что вход был, а токена уже нет (вышли в другой
 // вкладке, почистили хранилище) — значит, мы аноним. Иначе — освежаем
@@ -57,6 +59,8 @@ if (player().account && !loggedIn()) dropAccount();
 // Открыл игру — событие для статистики, с текущей серией дней (по ней бот
 // вечером напомнит, что серия сгорает). Без аккаунта ничего не уходит
 const openEvent = () => {
+  // Покупки за звёзды и подарки с сервера — в профиль (повтор ничего не добавит)
+  fetchShop().then((shop) => { if (shop?.owned) applyServerOwned(shop.owned); });
   const st = dailyState();
   const live = st.streakDay === dayKey() || st.streakDay === prevDay(dayKey());
   track('open', { streak: live ? st.streak : 0 });

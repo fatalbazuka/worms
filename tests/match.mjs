@@ -204,6 +204,42 @@ check('один в лобби никого не находит', findMatch(p('a'
     junk.coins === 0 && junk.tasks.length === 1 && junk.tasks[0].progress === 0 && junk.streak === 0);
 }
 
+// --- облачная копия и покупки с сервера ---
+{
+  const K = await import('../src/core/skins.js');
+  const D = await import('../src/core/daily.js');
+  const { SKIN_IDS } = await import('../server/shop.mjs');
+  check('сервер и игра знают одни и те же скины',
+    SKIN_IDS.join() === K.SKINS.filter((x) => x.id !== K.DEFAULT_SKIN).map((x) => x.id).join(), SKIN_IDS.join());
+
+  const phone = { owned: ['classic', 'ice'], equipped: 'ice', boxes: 1, claimed: ['m0'], paidSeen: 0 };
+  const cloud = { owned: ['classic', 'devil'], equipped: 'devil', boxes: 3, claimed: ['m2'], paidSeen: 5 };
+  const m = K.mergeSkins(phone, cloud);
+  check('копии скинов сводятся: собранное объединяется, счётчики — больший',
+    m.owned.join() === 'classic,ice,devil' && m.equipped === 'ice' && m.boxes === 3
+      && m.claimed.join() === 'm0,m2' && m.paidSeen === 5, JSON.stringify(m));
+
+  let st = K.emptyState();
+  let r = K.applyOwned(st, { boxes: 5, skins: ['devil'] });
+  check('купленные коробки и скин ложатся в профиль', r.boxes === 5 && r.state.boxes === 5
+    && r.state.owned.includes('devil') && r.state.paidSeen === 5);
+  const again = K.applyOwned(r.state, { boxes: 5, skins: ['devil'] });
+  check('повторная проверка покупок ничего не добавляет', again.boxes === 0 && again.state.boxes === 5);
+  const more = K.applyOwned(r.state, { boxes: 6, skins: ['devil'] });
+  check('новая покупка добавляет только разницу', more.boxes === 1 && more.state.boxes === 6);
+  const refunded = K.applyOwned(more.state, { boxes: 1, skins: [] });
+  check('после возврата звёзд открытое не отбирается', refunded.state.boxes === 6 && refunded.state.owned.includes('devil'));
+
+  const a1 = { coins: 120, day: '2026-11-18', tasks: [{ id: 'win1', progress: 0, claimed: false }, { id: 'play3', progress: 2, claimed: false }], battlesToday: 2, streak: 3, streakDay: '2026-11-18' };
+  const b1 = { coins: 80, day: '2026-11-18', tasks: [{ id: 'win1', progress: 1, claimed: true }, { id: 'play3', progress: 1, claimed: false }], battlesToday: 4, streak: 2, streakDay: '2026-11-17' };
+  const md = D.mergeDaily(a1, b1);
+  check('копии кошелька и заданий сводятся без потерь',
+    md.coins === 120 && md.tasks[0].progress === 1 && md.tasks[0].claimed && md.tasks[1].progress === 2
+      && md.battlesToday === 4 && md.streak === 3, JSON.stringify(md));
+  const old = { ...b1, day: '2026-11-17' };
+  check('задания вчерашней копии не мешают сегодняшним', D.mergeDaily(a1, old).tasks[0].progress === 0);
+}
+
 console.log(failures.length
   ? `\nне прошло: ${failures.length}`
   : '\nпроверки подбора пройдены');

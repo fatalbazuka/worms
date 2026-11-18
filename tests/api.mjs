@@ -251,6 +251,62 @@ check('«твой ход» бот не пишет', !calls('sendMessage').some((
   check('/metrics не админу не показывается', !/игроков/.test(calls('sendMessage').at(-1)?.params.text ?? ''));
 }
 
+// ------------------------------------------------------ магазин и подарки
+{
+  clock = Date.now();
+  const buyer = await login(51, 'Покупатель');
+  let shop = await call('GET', '/api/shop', null, buyer.token);
+  check('магазин: товары и пустой профиль покупок',
+    shop.data?.items?.some((i) => i.id === 'box5' && i.stars === 99) && shop.data.owned.boxes === 0);
+  const buy = await call('POST', '/api/shop/buy', { item: 'box5' }, buyer.token);
+  const inv = calls('createInvoiceLink').at(-1)?.params;
+  check('счёт на 5 коробок — 99 звёзд', buy.data?.invoice && inv?.currency === 'XTR' && inv.prices[0].amount === 99,
+    JSON.stringify(inv?.prices));
+  const bad = await call('POST', '/api/shop/buy', { item: 'box1000' }, buyer.token);
+  check('несуществующий товар не продаётся', bad.status === 400);
+
+  await hook({ pre_checkout_query: { id: 'pq-shop', from: { id: 51 }, total_amount: 50, invoice_payload: inv.payload } });
+  check('чужая цена в оплате отклоняется', calls('answerPreCheckoutQuery').at(-1)?.params.ok === false);
+  await hook({ pre_checkout_query: { id: 'pq-shop2', from: { id: 51 }, total_amount: 99, invoice_payload: inv.payload } });
+  check('верная цена — оплата разрешена', calls('answerPreCheckoutQuery').at(-1)?.params.ok === true);
+  await hook({ message: { from: { id: 51 }, chat: { id: 51, type: 'private' },
+    successful_payment: { invoice_payload: inv.payload, total_amount: 99, telegram_payment_charge_id: 'shop-1' } } });
+  shop = await call('GET', '/api/shop', null, buyer.token);
+  check('после оплаты 5 коробок положены игроку', shop.data.owned.boxes === 5);
+  await call('POST', '/api/shop/buy', { item: 'skin-devil' }, buyer.token);
+  const skinInv = calls('createInvoiceLink').at(-1)?.params;
+  await hook({ message: { from: { id: 51 }, chat: { id: 51, type: 'private' },
+    successful_payment: { invoice_payload: skinInv.payload, total_amount: skinInv.prices[0].amount, telegram_payment_charge_id: 'shop-2' } } });
+  shop = await call('GET', '/api/shop', null, buyer.token);
+  check('купленный скин положен игроку', shop.data.owned.skins.includes('devil') && /Чертёнок/.test(skinInv.title));
+  await hook({ message: { from: { id: ADMIN }, chat: { id: ADMIN, type: 'private' }, text: '/refund shop-1' } });
+  shop = await call('GET', '/api/shop', null, buyer.token);
+  check('после возврата звёзд коробки из покупок уходят', shop.data.owned.boxes === 0);
+
+  // Друг по ссылке: новичку и пригласившему — по коробке
+  const hostBefore = (await call('GET', '/api/shop', null, buyer.token)).data.owned.boxes;
+  const guest = await login(52, 'Новичок', {});
+  const viaRef = await call('POST', '/api/telegram', { initData: await signInitData({
+    query_id: 'q', user: { id: 53, first_name: 'Друг' }, start_param: 'ref_51', auth_date: String(Math.floor(clock / 1000)),
+  }, BOT) });
+  const friendShop = await call('GET', '/api/shop', null, viaRef.data.token);
+  const hostShop = await call('GET', '/api/shop', null, buyer.token);
+  const note = calls('sendMessage').at(-1)?.params;
+  check('новичок по ссылке друга: обоим по коробке, другу — сообщение',
+    friendShop.data.owned.boxes === 1 && hostShop.data.owned.boxes === hostBefore + 1
+      && note?.chat_id === 51 && /по твоей ссылке/.test(note.text), `${friendShop.data.owned.boxes}/${hostShop.data.owned.boxes}`);
+  const again = await call('POST', '/api/telegram', { initData: await signInitData({
+    query_id: 'q', user: { id: 53, first_name: 'Друг' }, start_param: 'ref_51', auth_date: String(Math.floor(clock / 1000)),
+  }, BOT) });
+  check('повторный вход по той же ссылке подарков не даёт',
+    (await call('GET', '/api/shop', null, again.data.token)).data.owned.boxes === 1);
+  const self = await call('POST', '/api/telegram', { initData: await signInitData({
+    query_id: 'q', user: { id: 54, first_name: 'Хитрый' }, start_param: 'ref_54', auth_date: String(Math.floor(clock / 1000)),
+  }, BOT) });
+  check('по своей же ссылке подарка нет', (await call('GET', '/api/shop', null, self.data.token)).data.owned.boxes === 0);
+  check('обычный вход без ссылки подарка не даёт', (await call('GET', '/api/shop', null, guest.token)).data.owned.boxes === 0);
+}
+
 server.close();
 fakeTg.close();
 db.close();

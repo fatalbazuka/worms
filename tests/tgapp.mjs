@@ -213,6 +213,26 @@ check('в кабинете чемпиона титул и матч турнир�
 
 const startMsgs = tgCalls.filter((c) => c.method === 'sendMessage' && /соперник/.test(c.params.text));
 check('бот написал обоим о матче', startMsgs.length === 2);
+// --- покупка коробки за звёзды: счёт, оплата, коробка в профиле ---
+await A.keyboard.press('Escape');
+await A.evaluate(() => window.__WORMS__.scene.getScene('Menu').showSkins());
+const shopBtn = await A.evaluate(() => window.__WORMS__.scene.getScene('Menu').buttons['shop-box1']?.enabled);
+check('в скинах есть магазин за звёзды', shopBtn === true);
+const boxesBefore = await A.evaluate(() => JSON.parse(localStorage.getItem('worms.skins.v1') ?? '{}').boxes ?? 0);
+const invBefore = tgCalls.filter((c) => c.method === 'createInvoiceLink').length;
+A.evaluate(() => window.__WORMS__.scene.getScene('Menu')._buy('box1'));
+await A.waitForFunction(() => (globalThis.__invoices ?? []).length > 0, null, { timeout: 10000 }).catch(() => {});
+const shopInv = tgCalls.filter((c) => c.method === 'createInvoiceLink')[invBefore]?.params;
+// Telegram сообщает боту об оплате — как настоящий, через вебхук
+await app.bot.handleUpdate({ message: { from: { id: ADMIN }, chat: { id: ADMIN, type: 'private' },
+  successful_payment: { invoice_payload: shopInv?.payload, total_amount: shopInv?.prices?.[0]?.amount, telegram_payment_charge_id: 'tg-shop-1' } } });
+const boxesAfter = await A.waitForFunction((b) => {
+  const n = JSON.parse(localStorage.getItem('worms.skins.v1') ?? '{}').boxes ?? 0;
+  return n > b ? n : false;
+}, boxesBefore, { timeout: 20000 }).then((h) => h.jsonValue()).catch(() => boxesBefore);
+check('коробка за звёзды: счёт на 25 ⭐, после оплаты коробка в профиле',
+  shopInv?.prices?.[0]?.amount === 25 && boxesAfter === boxesBefore + 1, `${boxesBefore} → ${boxesAfter}`);
+
 check('нет ошибок в консоли', errors.length === 0, errors.slice(0, 4).join(' | '));
 
 await Promise.all(browsers.map((b) => b.close()));

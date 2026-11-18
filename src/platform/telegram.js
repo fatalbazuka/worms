@@ -277,6 +277,30 @@ export function inviteLink(room) {
  * сервер бота, а его нет. Снаружи Telegram возвращаем false, и вызывающий
  * копирует ссылку сам.
  */
+/**
+ * Ссылка «приходи в игру» с меткой пригласившего: новичку и другу — по
+ * коробке со скином (сервер, shop.referral). null — нет бота или не в Telegram.
+ */
+export function refLink() {
+  const { bot, app } = telegramConfig();
+  const id = tgApi()?.initDataUnsafe?.user?.id;
+  if (!bot || !id) return null;
+  const base = app ? `https://t.me/${bot}/${app}` : `https://t.me/${bot}`;
+  return `${base}?startapp=ref_${id}`;
+}
+
+/** Поделиться ссылкой в чат родным окном Telegram. */
+export function shareLink(link, text) {
+  const tg = tgApi();
+  if (!tg?.openTelegramLink) return false;
+  try {
+    tg.openTelegramLink(`https://t.me/share/url?url=${encodeURIComponent(link)}&text=${encodeURIComponent(text)}`);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export function shareRoom(room, link = inviteLink(room)) {
   const tg = tgApi();
   if (!tg?.openTelegramLink) return false;

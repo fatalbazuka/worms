@@ -29,7 +29,8 @@ export const SKINS = [
 export const SKIN_BY_ID = Object.fromEntries(SKINS.map((s) => [s.id, s]));
 
 export function emptyState() {
-  return { owned: [DEFAULT_SKIN], equipped: DEFAULT_SKIN, boxes: 0, claimed: [] };
+  // paidSeen — сколько коробок с сервера (куплено + подарено) уже положено
+  return { owned: [DEFAULT_SKIN], equipped: DEFAULT_SKIN, boxes: 0, claimed: [], paidSeen: 0 };
 }
 
 /** Привести что угодно из хранилища к правильному состоянию. */
@@ -41,7 +42,48 @@ export function normalize(raw) {
   st.equipped = st.owned.includes(raw.equipped) ? raw.equipped : DEFAULT_SKIN;
   st.boxes = Math.max(0, Math.min(99, Math.floor(Number(raw.boxes) || 0)));
   st.claimed = Array.isArray(raw.claimed) ? [...new Set(raw.claimed.map(String))] : [];
+  st.paidSeen = Math.max(0, Math.floor(Number(raw.paidSeen) || 0));
   return st;
+}
+
+/**
+ * Свести две копии (устройство и облако Telegram): собранное — объединяем,
+ * счётчики — берём больший. Так ни одна копия не теряет того, что есть в
+ * другой; надетый — с этого устройства, если он есть в собранных.
+ */
+export function mergeSkins(a, b) {
+  const x = normalize(a), y = normalize(b);
+  const owned = [...new Set([...x.owned, ...y.owned])];
+  return normalize({
+    owned,
+    equipped: owned.includes(x.equipped) ? x.equipped : y.equipped,
+    boxes: Math.max(x.boxes, y.boxes),
+    claimed: [...new Set([...x.claimed, ...y.claimed])],
+    paidSeen: Math.max(x.paidSeen, y.paidSeen),
+  });
+}
+
+/**
+ * Применить то, что положено с сервера: коробки — разницей с уже
+ * положенными (paidSeen), купленные скины — в собранные. Повторный вызов
+ * ничего не добавляет.
+ * @returns {{state, boxes:number, skins:string[]}} что прибавилось
+ */
+export function applyOwned(state, owned) {
+  const total = Math.max(0, Math.floor(Number(owned?.boxes) || 0));
+  const add = Math.max(0, total - state.paidSeen);
+  const newSkins = (owned?.skins ?? []).filter((id) => SKIN_BY_ID[id] && !state.owned.includes(id));
+  if (!add && !newSkins.length && total <= state.paidSeen) return { state, boxes: 0, skins: [] };
+  return {
+    state: {
+      ...state,
+      boxes: Math.min(99, state.boxes + add),
+      paidSeen: Math.max(state.paidSeen, total),
+      owned: [...state.owned, ...newSkins],
+    },
+    boxes: add,
+    skins: newSkins,
+  };
 }
 
 /** За какие миссии дают коробку: первая, дальше через одну и последняя. */

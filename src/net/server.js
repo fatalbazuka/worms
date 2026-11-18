@@ -136,6 +136,18 @@ export function track(name, props = {}) {
   call('POST', '/event', { name, props }).catch(() => {});
 }
 
+/** Магазин: товары, цены и что положено игроку (куплено и подарено). */
+export async function fetchShop() {
+  if (!token) return null;
+  try { return await call('GET', '/shop'); } catch { return null; }
+}
+
+/** Счёт на покупку: box1 | box5 | skin-<id>. @returns {Promise<string>} ссылка на счёт */
+export async function buyShopItem(item) {
+  const r = await call('POST', '/shop/buy', { item });
+  return r.invoice;
+}
+
 let lastSync = 0;
 
 /**

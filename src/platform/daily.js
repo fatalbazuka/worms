@@ -7,8 +7,9 @@
  * станут чем-то покупаться за звёзды, кошелёк переедет на сервер.
  */
 import {
-  normalize, rollDay, addBattle, claimTask, claimStreak, payForBox, hasReward, dayKey,
+  normalize, rollDay, addBattle, claimTask, claimStreak, payForBox, hasReward, dayKey, mergeDaily,
 } from '../core/daily.js';
+import { inTelegram, cloudGet, cloudSet } from './telegram.js';
 import { grantBoxes, allSkinsOwned } from './skins.js';
 
 const STORE_KEY = 'worms.daily.v1';
@@ -21,9 +22,19 @@ function load() {
 }
 
 function save(state) {
-  try { localStorage.setItem(STORE_KEY, JSON.stringify(state)); } catch { /* инкогнито */ }
+  const raw = JSON.stringify(state);
+  try { localStorage.setItem(STORE_KEY, raw); } catch { /* инкогнито */ }
+  if (inTelegram()) cloudSet(STORE_KEY, raw);
   for (const fn of listeners) fn(state);
   return state;
+}
+
+/** Подтянуть облачную копию кошелька и заданий и свести с местной. */
+export async function syncDailyCloud() {
+  if (!inTelegram()) return;
+  let cloud = null;
+  try { cloud = JSON.parse((await cloudGet(STORE_KEY)) ?? 'null'); } catch { cloud = null; }
+  if (cloud) save(rollDay(mergeDaily(load(), cloud), dayKey()));
 }
 
 /** Подписка на изменения кошелька — меню перерисовывает счётчик. */
