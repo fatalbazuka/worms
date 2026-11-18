@@ -5,6 +5,7 @@ import { UI, font, ensureButton, ensureRoundButton, ensureIcon } from './theme.j
 import { Inventory } from './Inventory.js';
 import { isDesktop } from '../platform/device.js';
 import { sfx } from '../audio/Sfx.js';
+import { EMOTES } from '../core/emotes.js';
 
 export const TOP_H = 62;
 
@@ -208,8 +209,8 @@ export class Hud {
     const s = this.scene;
     const bw = 278, bh = 75;
     // По центру, но не поверх служебных кнопок: на 16:9 им тесно
-    const bx = Math.max(Math.round((W - bw) / 2), (this.serviceEnd ?? 0) + 16);
-    const by = H - bh - 14;
+    const bx = this.weaponSpot?.x ?? Math.max(Math.round((W - bw) / 2), (this.serviceEnd ?? 0) + 16);
+    const by = this.weaponSpot?.y ?? H - bh - 14;
 
     ensureButton(s, 'ui-weapon-slot', bw, bh, 'active');
     const plate = this.fix(s.add.image(bx + bw / 2, by + bh / 2, 'ui-weapon-slot'));
@@ -284,12 +285,20 @@ export class Hud {
    * правой. Стрельба и крюк — пальцем по полю, кнопок для них нет.
    */
   _buildCompactControls(W, H) {
+    this.weaponSpot = null;
     const B = 96, gap = 14, JR = 62;
     const lx = 20, lx2 = lx + B + gap;
     const rowLow = H - B - 18;
     this._hold(lx, rowLow, B, 'left', 'left');
     this._hold(lx2, rowLow, B, 'right', 'right');
-    const jumpCx = W - 24 - JR, jumpCy = H - 24 - JR;
+    // Кнопочная схема (выбор в меню): справа от стрелок — угол ▲▼, в углу
+    // «Огонь», прыжок по диагонали от него, как в прежней раскладке
+    const buttons = !this.scene.slingAim;
+    const FR = 76;
+    const fireCx = W - 24 - FR, fireCy = H - 24 - FR;
+    const dj = (FR + gap + JR) * 0.7071;
+    const jumpCx = buttons ? Math.round(fireCx - dj) : W - 24 - JR;
+    const jumpCy = buttons ? Math.round(fireCy - dj) : H - 24 - JR;
     this._holdRound(jumpCx, jumpCy, JR, 'jump', 'jumpQueued');
     this.serviceEnd = lx2 + B;
 
@@ -310,6 +319,24 @@ export class Hud {
       right: { x: lx2 + B / 2, y: rowLow + B / 2 },
       jump: { x: jumpCx, y: jumpCy },
     };
+    if (buttons) {
+      const lx3 = lx2 + B + gap, rowHigh = rowLow - B - gap;
+      this._hold(lx3, rowHigh, B, 'up', 'aimUp');
+      this._hold(lx3, rowLow, B, 'down', 'aimDown');
+      this._fireButton(fireCx, fireCy, FR);
+      this.serviceEnd = lx3 + B;
+      // Узкий экран: плашке оружия между ▲▼ и «Огнём» не уместиться —
+      // она встаёт над левой рукой, выше плашки тросов
+      const bw = 278, bh = 75;
+      if (Math.max(Math.round((W - bw) / 2), this.serviceEnd + 16) + bw > jumpCx - JR - 8) {
+        this.weaponSpot = { x: lx, y: rowHigh - bh - 12 };
+      }
+      Object.assign(this.buttons, {
+        fire: { x: fireCx, y: fireCy },
+        aimUp: { x: lx3 + B / 2, y: rowHigh + B / 2 },
+        aimDown: { x: lx3 + B / 2, y: rowLow + B / 2 },
+      });
+    }
   }
 
   /**
@@ -324,6 +351,10 @@ export class Hud {
     let y = TOP_H + 12;
     const more = this._tap(x, y, SB, 'more', () => this.setMore(!this.moreOpen));
     this.buttons.more = { x: x + SB / 2, y: y + SB / 2 };
+    // Эмоции — слева от «⋯»: смайлик, по нажатию — ряд рож с фразами
+    this._tap(x - step, y, SB, 'emote', () => this.toggleEmotes());
+    this.buttons.emote = { x: x - step + SB / 2, y: y + SB / 2 };
+    this._buildEmotes(W, y + SB + 14);
     this.moreItems = [];
     const service = (icon, onTap) => {
       y += step;
@@ -351,8 +382,46 @@ export class Hud {
     this.netText = this.fix(s.add.text(16, TOP_H + 10, '', font(13, 800, UI.accent)), DEPTH.HUD + 1);
   }
 
+  /** Ряд эмоций под верхней панелью; скрыт, пока не нажали смайлик. */
+  _buildEmotes(W, y) {
+    const s = this.scene;
+    this.emoteItems = [];
+    const list = EMOTES;
+    const bw = Math.min(150, Math.floor((W - 24) / 3) - 8), bh = 64, gap = 8;
+    const cols = 3;
+    const x0 = Math.round((W - (cols * bw + (cols - 1) * gap)) / 2);
+    ensureButton(s, `ui-emote-${bw}x${bh}`, bw, bh, 'normal');
+    list.forEach((e, i) => {
+      const x = x0 + (i % cols) * (bw + gap), yy = y + Math.floor(i / cols) * (bh + gap);
+      const img = this.fix(s.add.image(x + bw / 2, yy + bh / 2, `ui-emote-${bw}x${bh}`), DEPTH.HUD + 6);
+      const t = this.fix(s.add.text(x + bw / 2, yy + bh / 2, e.text, font(18, 800)).setOrigin(0.5), DEPTH.HUD + 7);
+      if (t.width > bw - 12) t.setScale((bw - 12) / t.width);
+      img.setInteractive({ useHandCursor: true });
+      img.on('pointerup', () => {
+        this.toggleEmotes(false);
+        s.showEmote(s.myTeamIndex, e.id, { send: true });
+      });
+      const rect = { x, y: yy, w: bw, h: bh };
+      this.uiRects.push(rect);
+      this.emoteItems.push({ img, t, rect });
+      this.buttons[`emote-${e.id}`] = { x: x + bw / 2, y: yy + bh / 2 };
+    });
+    this.toggleEmotes(false);
+  }
+
+  toggleEmotes(on = !this.emotesOpen) {
+    this.emotesOpen = on;
+    if (on) this.setMore(false);
+    for (const it of this.emoteItems ?? []) {
+      it.img.setVisible(on); it.t.setVisible(on);
+      if (on) it.img.setInteractive(); else it.img.disableInteractive();
+      it.rect.h = on ? 64 : 0;
+    }
+  }
+
   setMore(on) {
     this.moreOpen = on;
+    if (on) this.toggleEmotes(false);
     for (const it of this.moreItems ?? []) {
       it.img.setVisible(on);
       it.img.iconImage?.setVisible(on);
@@ -545,7 +614,14 @@ export class Hud {
     if (this.compact) this._buildCompactService(W);
     else if (!this.desktop) this._buildTouchService(W, H);
 
-    const lines = this.compact ? [
+    const lines = this.compact && !s.slingAim ? [
+      'ОГОНЬ — держи, набирается сила; отпустил — выстрел',
+      '▲▼ — угол прицела, правится прямо на заряде',
+      'свайп от бойца к цели — быстрый выстрел',
+      'коснись стены или потолка — крюк подтянет бойца туда',
+      'стрелки — шаг, круглая кнопка — прыжок или отцепиться',
+      'тяни фон — камера · рогатка — в меню, «Прицел»',
+    ] : this.compact ? [
       'тяни от бойца НАЗАД и отпусти — выстрел, как из рогатки',
       'чем дальше тянешь, тем сильнее; вернул палец — отмена',
       'коснись стены или потолка — крюк подтянет бойца туда',

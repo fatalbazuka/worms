@@ -44,11 +44,22 @@ export const IMAGES = {
  * картинки нет, остаётся прежняя.
  */
 const HANDS = ['bazooka', 'grenade', 'cluster', 'mole', 'banana', 'holy', 'dynamite', 'mine',
-  'airstrike', 'shotgun', 'bat', 'teleport', 'mortar', 'hook'];
+  'airstrike', 'shotgun', 'bat', 'teleport', 'mortar', 'hook', 'weight', 'sticky', 'spring'];
 const SHOTS = ['bazooka', 'grenade', 'cluster', 'bomblet', 'mole', 'banana', 'holy', 'dynamite',
-  'mine', 'mine_on', 'mortar', 'airmissile', 'crate_weapon', 'crate_health', 'chute', 'hook'];
+  'mine', 'mine_on', 'mortar', 'airmissile', 'crate_weapon', 'crate_health', 'chute', 'hook',
+  'weight', 'sticky', 'spring'];
 for (const id of HANDS) IMAGES[`hand_${id}`] = `assets/items/hand_${id}.png`;
 for (const id of SHOTS) IMAGES[`shot_${id}`] = `assets/items/shot_${id}.png`;
+IMAGES.mon_slime = 'assets/items/mon_slime.png';
+
+/**
+ * Эмодзи как графика: декор башни, разрушаемые предметы, монстры.
+ * Картинки — Twemoji (CC-BY 4.0, см. README), SVG; грузятся растром
+ * 128×128 под ключом emoji_<имя>.
+ */
+export const EMOJI = ['pine', 'tree', 'palm', 'mushroom', 'rock', 'barrel', 'cactus', 'ogre',
+  'slime', 'cloud', 'sun', 'mountain', 'herb', 'sunflower', 'bricks', 'box', 'volcano', 'ice',
+  'snowflake', 'fire', 'snowman'];
 
 /** Текстуры ландшафта: по четыре файла на каждую тему из biomes.js. */
 for (const b of BIOMES) {

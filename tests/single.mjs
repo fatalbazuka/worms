@@ -350,6 +350,201 @@ await gesture([['move', -60, 20], ['move', -140, 50], ['up', -140, 50]]);
 await page.waitForTimeout(200);
 check('спокойное натяжение — выстрел', await turnState() !== 'aim');
 
+// --- испытания: все собираются, звёзды и монеты за победу ---
+const challengeIds = await page.evaluate(async () => (await import('/src/campaign/challenges.js')).CHALLENGES.map((c) => c.id));
+const broken = [];
+for (const id of challengeIds) {
+  await page.evaluate(async (id) => {
+    const { challengeMatch } = await import('/src/core/match.js');
+    window.__WORMS__.scene.getScene('Game').registry.set('match', challengeMatch(id));
+    window.__WORMS__.scene.getScene('Game').registry.set('seed', challengeMatch(id).seed);
+    window.__WORMS__.scene.getScene('Game').scene.restart();
+  }, id);
+  await gameReady();
+  const ok = await page.evaluate(async () => {
+    const { CFG } = await import('/src/config.js');
+    const s = window.__WORMS__.scene.getScene('Game');
+    return s.shape.id === 'tower' && s.turn.currentTeam === 0
+      && s.worms.every((w) => w.grounded && w.y < CFG.DROWN_Y - 60);
+  });
+  if (!ok) broken.push(id);
+}
+check('все испытания собираются: башня, бойцы на этажах, первый ход за игроком', broken.length === 0, broken.join(','));
+
+await page.evaluate(async () => {
+  localStorage.removeItem('worms.challenges.v1');
+  const { challengeMatch } = await import('/src/core/match.js');
+  const g = window.__WORMS__.scene.getScene('Game');
+  g.registry.set('match', challengeMatch('first'));
+  g.registry.set('seed', challengeMatch('first').seed);
+  g.scene.restart();
+});
+await gameReady();
+const coins0 = await page.evaluate(() => JSON.parse(localStorage.getItem('worms.daily.v1') ?? '{}').coins ?? 0);
+await page.evaluate(() => {
+  const s = window.__WORMS__.scene.getScene('Game');
+  s.hud.setHelp(false);
+  const foe = s.worms.find((w) => w.team === 1);
+  s.explode(foe.x, foe.centerY, { radius: 30, damageRadius: 60, damage: 150, knockback: 50 });
+});
+await page.waitForFunction(() => window.__WORMS__.scene.getScene('Game').overButtons?.menu, null, { timeout: 30000 });
+const ch = await page.evaluate(() => ({
+  stars: JSON.parse(localStorage.getItem('worms.challenges.v1') ?? '{}').first,
+  coins: JSON.parse(localStorage.getItem('worms.daily.v1') ?? '{}').coins ?? 0,
+}));
+check('испытание за один ход без потерь — три звезды и монеты за них',
+  ch.stars === 3 && ch.coins - coins0 >= 120, `звёзд ${ch.stars}, монет +${ch.coins - coins0}`);
+const nextBtn = await page.evaluate(() => Boolean(window.__WORMS__.scene.getScene('Game').overButtons?.next));
+check('после пройденного испытания на итоге есть «Дальше»', nextBtn);
+
+// Голоса: фразы подгрузились после первого касания, итог боя сказан вслух
+const vo = await page.evaluate(async () => {
+  const { voice } = await import('./src/audio/Voice.js');
+  const { sfx } = await import('./src/audio/Sfx.js');
+  await voice.load();
+  return { n: voice.buffers.size, last: voice.last ?? null, ctx: sfx.state, muted: sfx.muted };
+});
+check('голоса смайликов загружены, победа сказана голосом',
+  vo.n === 10 && (vo.last === 'win' || vo.ctx !== 'running' || vo.muted), JSON.stringify(vo));
+
+// --- кампания «Подъём»: все бои собираются, Великан ходит и падает ---
+const upIds = await page.evaluate(async () => (await import('/src/campaign/ascent.js')).ASCENT.map((m) => m.id));
+const upBroken = [];
+for (const id of upIds) {
+  await page.evaluate(async (id) => {
+    const { ascentMatch } = await import('/src/core/match.js');
+    const g = window.__WORMS__.scene.getScene('Game');
+    g.registry.set('match', ascentMatch(id));
+    g.registry.set('seed', ascentMatch(id).seed);
+    g.scene.restart();
+  }, id);
+  await gameReady();
+  const ok = await page.evaluate(async (id) => {
+    const { ASCENT_BY_ID } = await import('/src/campaign/ascent.js');
+    const { CFG } = await import('/src/config.js');
+    const m = ASCENT_BY_ID[id];
+    const s = window.__WORMS__.scene.getScene('Game');
+    const want = Object.values(m.monsters ?? {}).reduce((a, n) => a + n, 0) + (m.boss ? 1 : 0);
+    return s.shape.id === 'tower' && s.turn.currentTeam === 0 && s.monsters.length === want
+      && s.worms.every((w) => w.grounded && w.y < CFG.DROWN_Y - 60)
+      && s.monsters.every((x) => x.y < CFG.DROWN_Y - 60);
+  }, id);
+  if (!ok) upBroken.push(id);
+}
+check('«Подъём»: все 15 боёв собираются, монстры на этажах', upBroken.length === 0, upBroken.join(','));
+
+await page.evaluate(async () => {
+  localStorage.removeItem('worms.ascent.v1');
+  const { ascentMatch } = await import('/src/core/match.js');
+  const g = window.__WORMS__.scene.getScene('Game');
+  g.registry.set('match', ascentMatch('up-5'));
+  g.registry.set('seed', ascentMatch('up-5').seed);
+  g.scene.restart();
+});
+await gameReady();
+await page.waitForFunction(() => window.__WORMS__.scene.getScene('Game').canPlayerAct(), null, { timeout: 40000 });
+const t0 = await page.evaluate(() => {
+  const s = window.__WORMS__.scene.getScene('Game');
+  s.hud.setHelp(false);
+  s.turn.endTurn();
+  return s.turn.turnNumber;
+});
+let rock = false;
+for (let i = 0; i < 80; i++) {
+  await page.waitForTimeout(200);
+  const st = await page.evaluate(() => {
+    const s = window.__WORMS__.scene.getScene('Game');
+    return { n: s.turn.turnNumber, rock: s.projectiles.some((p) => p.weapon.id === 'rock') };
+  });
+  rock ||= st.rock;
+  if (st.n > t0) break;
+}
+check('ход монстров: после хода игрока Великан кидает камень', rock);
+await page.evaluate(() => {
+  const s = window.__WORMS__.scene.getScene('Game');
+  s.monsters.find((m) => m.kind === 'boss').damage(9999);
+  s.turn.endTurn();
+});
+const bossWin = await page.waitForFunction(() => window.__WORMS__.scene.getScene('Game').overButtons?.menu, null, { timeout: 20000 })
+  .then(() => page.evaluate(() => ({
+    done: JSON.parse(localStorage.getItem('worms.ascent.v1') ?? '[]'),
+    next: Boolean(window.__WORMS__.scene.getScene('Game').overButtons?.next),
+  }))).catch(() => null);
+check('Великан повален — победа, бой пройден, есть «Дальше»',
+  bossWin?.done?.includes('up-5') && bossWin.next, JSON.stringify(bossWin));
+
+// --- выбор прицела в меню: прежние кнопки вместо рогатки ---
+await page.goto(`${BASE}${BASE.includes('?') ? '&' : '?'}aim=buttons`, { waitUntil: 'domcontentloaded' });
+await menuReady();
+const pillLabel = await page.evaluate(() => Boolean(window.__WORMS__.scene.getScene('Menu').buttons['aim-mode']));
+await menuTap('play');
+await gameReady();
+await page.waitForFunction(() => window.__WORMS__.scene.getScene('Game').canPlayerAct(), null, { timeout: 40000 });
+const btnHud = await page.evaluate(() => {
+  const s = window.__WORMS__.scene.getScene('Game');
+  s.hud.setHelp(false);
+  return { slingAim: s.slingAim, fire: Boolean(s.hud.buttons.fire), up: Boolean(s.hud.buttons.aimUp), turn: s.turn.turnNumber };
+});
+await page.evaluate(() => { window.__WORMS__.scene.getScene('Game').moveInput.fire = true; });
+await page.waitForTimeout(600);
+await page.evaluate(() => { window.__WORMS__.scene.getScene('Game').moveInput.fire = false; });
+const fired = await page.waitForFunction(() => {
+  const s = window.__WORMS__.scene.getScene('Game');
+  return s.turn.state !== 'aim' || s.projectiles.length > 0;
+}, null, { timeout: 5000 }).then(() => true).catch(() => false);
+check('прицел «кнопки»: на башне ▲▼ и «Огонь», удержание и отпускание — выстрел',
+  pillLabel && !btnHud.slingAim && btnHud.fire && btnHud.up && fired, JSON.stringify({ pillLabel, ...btnHud, fired }));
+
+// --- новичок: первая «Играть» — обучение, после него «В бой!» с «Новичком» ---
+{
+  const ctx = await browser.newContext({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true });
+  const p2 = await ctx.newPage();
+  p2.on('pageerror', (e) => errors.push(`pageerror(новичок): ${e.message}`));
+  await p2.addInitScript(() => {
+    // Бонус серии закрывает меню окном — для теста он уже забран
+    const d = new Date();
+    const k = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+    if (!localStorage.getItem('worms.daily.v1')) localStorage.setItem('worms.daily.v1', JSON.stringify({ streak: 1, streakDay: k }));
+  });
+  await p2.goto(BASE, { waitUntil: 'domcontentloaded' });
+  await p2.waitForFunction(() => window.__WORMS__?.scene.getScene('Menu')?.buttons?.play, null, { timeout: 40000 });
+  const tapIn = async (scene, key, from = 'buttons') => {
+    const r = await p2.evaluate(([sc, k, f]) => {
+      const g = window.__WORMS__; const c = g.canvas.getBoundingClientRect();
+      const b = g.scene.getScene(sc)[f][k];
+      return { x: c.left + (b.x * c.width) / g.scale.width, y: c.top + (b.y * c.height) / g.scale.height };
+    }, [scene, key, from]);
+    await p2.mouse.click(r.x, r.y);
+  };
+  await tapIn('Menu', 'play');
+  await p2.waitForFunction(() => window.__WORMS__.scene.getScene('Game')?.turn?.activeWorm, null, { timeout: 40000 });
+  const tut = await p2.evaluate(() => {
+    const s = window.__WORMS__.scene.getScene('Game');
+    return { mode: s.match.mode, id: s.match.challengeId, tutorial: Boolean(s.match.tutorial) };
+  });
+  check('новичок: первая «Играть» — обучение «Первый выстрел»',
+    tut.mode === 'challenge' && tut.id === 'first' && tut.tutorial, JSON.stringify(tut));
+  await p2.waitForFunction(() => window.__WORMS__.scene.getScene('Game').canPlayerAct(), null, { timeout: 40000 });
+  await p2.evaluate(() => {
+    const s = window.__WORMS__.scene.getScene('Game');
+    s.hud.setHelp(false);
+    const foe = s.worms.find((w) => w.team === 1);
+    s.explode(foe.x, foe.centerY, { radius: 30, damageRadius: 60, damage: 150, knockback: 50 });
+  });
+  await p2.waitForFunction(() => window.__WORMS__.scene.getScene('Game').overButtons?.next, null, { timeout: 30000 });
+  await p2.waitForTimeout(300);
+  await tapIn('Game', 'next', 'overButtons');
+  await p2.waitForFunction(() => window.__WORMS__.scene.getScene('Game')?.match?.mode === 'quick'
+    && window.__WORMS__.scene.getScene('Game').turn?.activeWorm, null, { timeout: 40000 });
+  const after = await p2.evaluate(() => {
+    const s = window.__WORMS__.scene.getScene('Game');
+    return { level: s.match.teams[1].level, shape: s.shape.id };
+  });
+  check('после обучения «В бой!» — башня против «Новичка»',
+    after.level === 'rookie' && after.shape === 'tower', JSON.stringify(after));
+  await ctx.close();
+}
+
 check('нет ошибок в консоли', errors.length === 0, errors.slice(0, 5).join(' | '));
 
 await browser.close();

@@ -1,6 +1,6 @@
 import {
   Weapon, ClusterWeapon, PlacedWeapon, InstantWeapon, BatWeapon, MineWeapon,
-  AirstrikeWeapon, TeleportWeapon,
+  AirstrikeWeapon, TeleportWeapon, SpringWeapon,
 } from './Weapon.js';
 
 /**
@@ -247,6 +247,49 @@ export const WEAPONS = [
     explosion: { radius: 0, damageRadius: 0, damage: 0, knockback: 0, shake: 0 },
   }),
 ];
+
+// --- Оружие башни: всё про этажи ---
+
+// Гиря: тяжёлая, ветер её не сносит. Первый пол, на который упадёт,
+// проламывает насквозь и рвётся этажом ниже — на того, кто под ним прятался.
+WEAPONS.push(new Weapon({
+  id: 'weight',
+  name: 'Гиря',
+  icon: '⚖',
+  color: 0x9aa0ac,
+  spriteKey: 'shot_weight',
+  startAmmo: 1,
+  crateAmmo: 1,
+  projectile: { radius: 7, windScale: 0, gravityScale: 1.5, pierce: 64, trail: false },
+  explosion: { radius: 36, damageRadius: 66, damage: 50, knockback: 280, shake: 0.009 },
+}));
+
+// Липкая бомба: прилипает к первой поверхности — стене, потолку, полу — и
+// рвётся через три секунды. Можно заминировать уступ над чужой головой.
+WEAPONS.push(new Weapon({
+  id: 'sticky',
+  name: 'Липучка',
+  icon: '◍',
+  color: 0x7ed650,
+  spriteKey: 'shot_sticky',
+  startAmmo: 1,
+  crateAmmo: 2,
+  projectile: { radius: 6, windScale: 0.5, sticky: true, stickFuse: 3 },
+  explosion: { radius: 42, damageRadius: 76, damage: 46, knockback: 320, shake: 0.007 },
+}));
+
+// Батут: пружина на полу. Свой — лифт на этаж выше, чужой — ловушка.
+WEAPONS.push(new SpringWeapon({
+  id: 'spring',
+  name: 'Батут',
+  icon: '⇞',
+  color: 0xec4848,
+  category: 'снаряжение',
+  startAmmo: 1,
+  crateAmmo: 1,
+  retreat: 5,
+  explosion: { radius: 0, damageRadius: 0, damage: 0, knockback: 0, shake: 0 },
+}));
 
 export const WEAPONS_BY_ID = Object.fromEntries(WEAPONS.map((w) => [w.id, w]));
 export { BOMBLET, AIR_MISSILE };

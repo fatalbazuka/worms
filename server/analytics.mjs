@@ -1,12 +1,14 @@
 /**
  * Статистика и напоминания.
  *
- * Игра присылает два вида событий (POST /api/event):
+ * Игра присылает три вида событий (POST /api/event):
  *   open   — открыл игру; в props.streak — серия дней на этот момент;
- *   battle — доиграл бой: режим, победа, ходов.
+ *   battle — доиграл бой: режим, победа, ходов;
+ *   step   — шаг воронки (STEPS): первый выстрел, первый трос, первая
+ *            победа, обучение пройдено, магазин открыт, «купить», «позвать».
  * Этого хватает, чтобы ответить на главные вопросы: сколько людей заходит,
- * сколько новых, сколько боёв, возвращаются ли на следующий день. Отчёт —
- * команда бота /metrics, только админу.
+ * сколько новых, сколько боёв, где новички отваливаются, возвращаются ли
+ * через день, три и семь. Отчёт — команда бота /metrics, только админу.
  *
  * Напоминание. Вечером (REMIND_HOUR по часовому поясу бота) бот пишет тем,
  * кто вчера заходил, а сегодня ещё нет: серия сгорит в полночь. Не чаще
@@ -19,7 +21,14 @@
 
 export const REMIND_HOUR = 19;
 const EVENTS_PER_DAY = 300;           // больше от одного игрока за сутки не пишем
-const MODES = new Set(['quick', 'campaign', 'online', 'fallback', 'hotseat']);
+const MODES = new Set(['quick', 'campaign', 'ascent', 'challenge', 'online', 'fallback', 'hotseat']);
+
+/** Шаги воронки и их подписи в отчёте — по порядку, как их проходит новичок. */
+export const STEPS = {
+  first_shot: 'выстрелил', first_hook: 'пустил трос', tutorial_done: 'прошёл обучение',
+  first_win: 'победил', shop_open: 'открыл магазин', buy_click: 'нажал «купить»',
+  invite: 'позвал друга',
+};
 
 export function createAnalytics({ db, now = () => Date.now(), tz = 'Europe/Moscow' }) {
   const q = {
@@ -43,6 +52,11 @@ export function createAnalytics({ db, now = () => Date.now(), tz = 'Europe/Mosco
     reminded: db.prepare('update player set reminded_day = ? where id = ?'),
     remindedCount: db.prepare('select count(*) as n from player where reminded_day = ?'),
     mute: db.prepare('update player set remind = ? where id = ?'),
+    steps: db.prepare(`select json_extract(props, '$.step') as step, count(distinct player_id) as n
+                       from event where day = ? and name = 'step' group by step`),
+    stepsOf: db.prepare(`select count(distinct player_id) as n from event
+                         where name = 'step' and json_extract(props, '$.step') = ?
+                           and player_id in (select id from player where created_at >= ? and created_at < ?)`),
   };
 
   /** Части даты в поясе бота. */
@@ -81,6 +95,7 @@ export function createAnalytics({ db, now = () => Date.now(), tz = 'Europe/Mosco
     if (name === 'battle') {
       return { mode: MODES.has(p.mode) ? p.mode : 'quick', won: p.won ? 1 : 0, turns: int(p.turns, 1000) };
     }
+    if (name === 'step') return Object.hasOwn(STEPS, p.step) ? { step: p.step } : null;
     return null;
   }
 
@@ -109,7 +124,23 @@ export function createAnalytics({ db, now = () => Date.now(), tz = 'Europe/Mosco
     const y = day(yesterday);
     const week = q.activeRange.get(shiftDay(today, -6), today).n;
     const back = y.fresh.filter((p) => q.seenOn.get(p.id, today)).length;
-    const names = { quick: 'свои правила', campaign: 'кампания', online: 'по сети', fallback: 'бот вместо соперника', hotseat: 'вдвоём' };
+    // Возврат через 3 и 7 дней: пришли тогда — заходили сегодня
+    const backOn = (n) => {
+      const d = shiftDay(today, -n);
+      const fresh = q.newPlayers.all(dayStart(d), dayStart(shiftDay(d, 1)));
+      return { all: fresh.length, back: fresh.filter((p) => q.seenOn.get(p.id, today)).length };
+    };
+    const d3 = backOn(3), d7 = backOn(7);
+    // Воронка новичков за 7 дней: из пришедших — сколько дошли до каждого шага
+    const weekFrom = dayStart(shiftDay(today, -6)), weekTo = dayStart(shiftDay(today, 1));
+    const weekFresh = q.newPlayers.all(weekFrom, weekTo).length;
+    const funnel = Object.entries(STEPS)
+      .map(([id, label]) => `${label} ${q.stepsOf.get(id, weekFrom, weekTo).n}`).join(' · ');
+    const todaySteps = Object.fromEntries(q.steps.all(today).map((r) => [r.step, r.n]));
+    const names = {
+      quick: 'с ботом', campaign: 'классика', ascent: 'подъём', challenge: 'испытания', online: 'по сети',
+      fallback: 'бот вместо соперника', hotseat: 'вдвоём',
+    };
     const modes = t.rows.length
       ? t.rows.map((r) => `${names[r.mode] ?? r.mode} ${r.n}`).join(' · ')
       : 'пока ни одного';
@@ -119,6 +150,9 @@ export function createAnalytics({ db, now = () => Date.now(), tz = 'Europe/Mosco
       `Вчера: игроков ${y.active} · новых ${y.fresh.length} · боёв ${y.total}`,
       `За 7 дней: игроков ${week}`,
       `Вчерашние новички вернулись сегодня: ${back} из ${y.fresh.length}${pct(back, y.fresh.length)}`,
+      `Через 3 дня: ${d3.back} из ${d3.all}${pct(d3.back, d3.all)} · через 7: ${d7.back} из ${d7.all}${pct(d7.back, d7.all)}`,
+      `Новички за 7 дней (${weekFresh}): ${funnel}`,
+      `Сегодня: магазин ${todaySteps.shop_open ?? 0} · «купить» ${todaySteps.buy_click ?? 0} · позвали ${todaySteps.invite ?? 0}`,
       `Бои сегодня: ${modes}`,
       `Напоминаний о серии сегодня: ${q.remindedCount.get(today).n}`,
     ].join('\n');

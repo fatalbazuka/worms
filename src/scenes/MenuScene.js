@@ -3,14 +3,22 @@ import { CFG } from '../config.js';
 import { MISSIONS, loadProgress, isUnlocked } from '../campaign/missions.js';
 import { objectiveText } from '../campaign/objectives.js';
 import {
-  quickMatch, campaignMatch, onlineMatch, towerMatch, fallbackMatch, QUICK_OPTIONS,
+  quickMatch, campaignMatch, onlineMatch, towerMatch, fallbackMatch, challengeMatch, ascentMatch, QUICK_OPTIONS,
 } from '../core/match.js';
+import { CHALLENGES, challengeOpen, totalStars, STAR_COINS } from '../campaign/challenges.js';
+import { ASCENT, CHAPTERS, ascentOpen } from '../campaign/ascent.js';
+import { ascentDone } from '../platform/ascent.js';
+import { challengeStars } from '../platform/challenges.js';
+import { onboardStage } from '../platform/onboard.js';
 import { SHAPES } from '../core/shapes.js';
 import { randomRoom, copyText } from '../net/transport.js';
 import { isCasualRoom, isTowerRoom } from '../net/rooms.js';
 import { Lobby } from '../net/lobby.js';
 import { pendingSession, forgetSession } from '../net/session.js';
-import { syncMe, fetchTop, myRank, loggedIn, onAccountChange, track } from '../net/server.js';
+import {
+  syncMe, fetchTop, myRank, loggedIn, onAccountChange, track, fetchShop, buyShopItem,
+  trackStep,
+} from '../net/server.js';
 import { openAccountDialog } from '../ui/AccountDialog.js';
 import { openTournaments } from '../ui/Tournaments.js';
 import { askText, closeOverlay } from '../ui/Overlay.js';
@@ -18,14 +26,16 @@ import { makeTransport } from '../net/connect.js';
 import { player } from '../platform/player.js';
 import {
   inviteLink as tgInviteLink, shareRoom, canOfferHomeScreen, addToHomeScreen, onHomeScreenChange,
-  haptic, inTelegram, botLink,
+  haptic, inTelegram, botLink, openInvoice, refLink, shareLink,
 } from '../platform/telegram.js';
 import { leagueOf, nextLeague, leagueProgress, toNextLeague, leagueLabel } from '../platform/league.js';
 import { BOT_LEVELS } from '../ai/Bot.js';
-import { isDesktop, setUiMode } from '../platform/device.js';
+import { isDesktop, setUiMode, aimScheme, setAimScheme } from '../platform/device.js';
 import { sfx } from '../audio/Sfx.js';
-import { SKINS, SKIN_BY_ID, rewardMissions } from '../core/skins.js';
-import { skinState, equippedSkin, equipSkin, openSkinBox, syncCampaignBoxes } from '../platform/skins.js';
+import { SKINS, SKIN_BY_ID, SKIN_STARS, rewardMissions } from '../core/skins.js';
+import {
+  skinState, equippedSkin, equipSkin, openSkinBox, syncCampaignBoxes, applyServerOwned,
+} from '../platform/skins.js';
 import {
   TASK_BY_ID, BOX_PRICE, STREAK_COINS, STREAK_BOX_DAY, streakReady, dayKey, prevDay as prevDayOf,
 } from '../core/daily.js';
@@ -94,6 +104,15 @@ export default class MenuScene extends Phaser.Scene {
 
     // Вернулись из турнирного матча — сразу к сетке. Пришли по кнопке бота
     // (?tour=ID или ?tour=list) — к турнирам, один раз за запуск.
+    // Из испытания — обратно к их списку
+    if (this.registry.get('returnTo') === 'challenges') {
+      this.registry.set('returnTo', null);
+      this.time.delayedCall(30, () => this.showChallenges());
+    }
+    if (this.registry.get('returnTo') === 'ascent') {
+      this.registry.set('returnTo', null);
+      this.time.delayedCall(30, () => this.showAscent());
+    }
     const back = this.registry.get('returnTour');
     const params = new URLSearchParams(globalThis.location?.search ?? '');
     const fromLink = params.get('tour');
@@ -376,7 +395,8 @@ export default class MenuScene extends Phaser.Scene {
   get playChoice() {
     let saved = null;
     try { saved = JSON.parse(localStorage.getItem('worms.play.v1') ?? 'null'); } catch { saved = null; }
-    const level = saved && 'level' in saved ? saved.level : 'fighter';
+    // Пока игрок не выбрал бота сам и ни разу не победил — «Новичок»
+    const level = saved && 'level' in saved ? saved.level : (onboardStage() === 'rookie' ? 'rookie' : 'fighter');
     return { level: level === null || BOT_LEVELS[level] ? level : 'fighter' };
   }
 
@@ -429,6 +449,11 @@ export default class MenuScene extends Phaser.Scene {
     };
     if (canOfferHomeScreen()) pill('home', '⌂ На экран Домой', 250, () => addToHomeScreen());
     const desktop = isDesktop();
+    if (!desktop) {
+      const sling = aimScheme() === 'sling';
+      pill('aim-mode', sling ? 'Прицел: рогатка' : 'Прицел: кнопки', 230,
+        () => { setAimScheme(sling ? 'buttons' : 'sling'); this.showRoot(); });
+    }
     if (!inTelegram()) {
       pill('ui-mode', desktop ? 'Управление: ПК' : 'Управление: сенсор', 260,
         () => { setUiMode(desktop ? 'touch' : 'desktop'); this.showRoot(); });
@@ -438,9 +463,12 @@ export default class MenuScene extends Phaser.Scene {
     const playH = portrait ? 128 : 104;
     const playY = bottom - tabH - (portrait ? 168 : 124);
     const choice = this.playChoice;
+    // Самый первый раз «Играть» — это обучение: мишень, без ветра
+    const tutorial = onboardStage() === 'tutorial';
     this._button('play', cx, playY, 'ИГРАТЬ',
-      choice.level ? `Башня · бот «${BOT_LEVELS[choice.level].name}»` : 'Башня · вдвоём на одном телефоне',
-      () => this.start(towerMatch(choice.level)),
+      tutorial ? 'Первый бой · научим стрелять'
+        : choice.level ? `Башня · бот «${BOT_LEVELS[choice.level].name}»` : 'Башня · вдвоём на одном телефоне',
+      () => this.start(tutorial ? { ...challengeMatch('first'), tutorial: true } : towerMatch(choice.level)),
       { w: Math.min(W - 72, 560), h: playH, variant: 'primary', big: true });
     this._button('modes', cx, playY + playH / 2 + (portrait ? 48 : 36), 'другие режимы', '',
       () => this.showModes(), { w: 300, h: portrait ? 56 : 48, titleSize: 22 });
@@ -601,11 +629,14 @@ export default class MenuScene extends Phaser.Scene {
     this._clear();
     const st = dailyState();
     this._title('Задания', 'обновляются каждый день в полночь');
-    const W = this.W, cx = W / 2;
+    const W = this.W;
     this._coinBadge(W - 40, 72, true);
-
-    const cw = Math.min(W - 48, 660), ch = 132;
-    let y = 196;
+    // В вертикальном экране всё в один столбец; в горизонтальном задания
+    // слева, серия, коробка и друг — справа: иначе не влезает по высоте
+    const wide = !this.portrait;
+    let cx = wide ? W * 0.32 : W / 2;
+    const cw = Math.min(wide ? W * 0.56 : W - 48, 660), ch = wide ? 112 : 132;
+    let y = wide ? 150 : 196;
     st.tasks.forEach((t) => {
       const def = TASK_BY_ID[t.id];
       const done = t.progress >= def.goal;
@@ -617,7 +648,7 @@ export default class MenuScene extends Phaser.Scene {
       const ink = done && !t.claimed ? '#2a1c06' : UI.text;
       this.items.push(this.add.text(left, y + 20, def.text, font(25, 800, ink)).setOrigin(0, 0));
       // Полоса прогресса и число
-      const bw = cw - 230, by = y + 84;
+      const bw = cw - 230, by = y + ch - 48;
       this.items.push(this.add.rectangle(left, by, bw, 16, 0x0b1220, 0.85).setOrigin(0, 0.5));
       const k = Math.min(1, t.progress / def.goal);
       if (k > 0) this.items.push(this.add.rectangle(left, by, Math.max(6, bw * k), 16, done ? 0x6ee36e : 0xffc247).setOrigin(0, 0.5));
@@ -637,15 +668,16 @@ export default class MenuScene extends Phaser.Scene {
         this.items.push(this.add.text(rx - 12, y + ch / 2, t.claimed ? '✓' : `${def.coins}`,
           font(26, 800, t.claimed ? '#8ef0a0' : '#ffe27a')).setOrigin(0, 0.5));
       }
-      y += ch + 16;
+      y += ch + (wide ? 10 : 16);
     });
 
     // Серия дней
+    if (wide) { cx = W * 0.79; y = 150; }
     y += 10;
     this.items.push(this.add.text(cx, y, st.streak > 0
       ? `Серия: ${st.streak} ${plural(st.streak, 'день', 'дня', 'дней')} подряд · на ${STREAK_BOX_DAY}-й день — коробка`
       : `Заходи каждый день: на ${STREAK_BOX_DAY}-й день подряд — коробка`,
-      font(19, 700, UI.textDim)).setOrigin(0.5, 0).setAlign('center').setWordWrapWidth(cw));
+      font(19, 700, UI.textDim)).setOrigin(0.5, 0).setAlign('center').setWordWrapWidth(wide ? W * 0.36 : cw));
 
     // Коробка за монеты
     y += 76;
@@ -656,6 +688,16 @@ export default class MenuScene extends Phaser.Scene {
       this.items.push(this.add.image(cx - Math.min(cw, 460) / 2 + 40, y, 'shot_crate_weapon')
         .setScale(fitScale(this, 'shot_crate_weapon', 52)).setAlpha(can ? 1 : 0.5));
     }
+
+    // Позвать друга: новичку и тебе — по коробке
+    const link = refLink();
+    this._button('invite', cx, y + 106, 'Позвать друга', link ? 'вам обоим — по коробке со скином' : 'работает в Telegram',
+      () => {
+        trackStep('invite');
+        if (!shareLink(link, 'Залетай в бой на башне! По этой ссылке нам обоим дадут коробку со скином 🎁')) {
+          copyText(link);
+        }
+      }, { w: Math.min(cw, 460), h: 90, titleSize: 25, hintSize: 17, enabled: Boolean(link), variant: 'primary' });
     this._tabs('tasks');
   }
 
@@ -699,8 +741,8 @@ export default class MenuScene extends Phaser.Scene {
     }
     this.items.push(this.add.text(cx - 140, boxY - 24, `Коробок: ${st.boxes}`, font(24, 800)).setOrigin(0, 0));
     this.items.push(this.add.text(cx - 140, boxY + 8,
-      full ? 'все скины собраны' : st.boxes > 0 ? 'внутри — случайный скин' : 'за кампанию, серию дней и монеты',
-      font(17, 700, UI.textDim)).setOrigin(0, 0));
+      full ? 'все скины собраны' : st.boxes > 0 ? 'внутри — случайный скин' : 'за кампанию, серию и монеты',
+      font(17, 700, UI.textDim)).setOrigin(0, 0).setWordWrapWidth(220));
     if (st.boxes > 0 || full) {
       this._button('open-box', cx + 190, boxY, 'Открыть', '', () => this._openBox(),
         { w: 170, h: 64, variant: 'primary', enabled: st.boxes > 0 && !full, titleSize: 24 });
@@ -709,6 +751,11 @@ export default class MenuScene extends Phaser.Scene {
       this._button('buy-box', cx + 190, boxY, `Купить · ${BOX_PRICE}`, '', () => this._buyBox(),
         { w: 190, h: 64, enabled: dailyState().coins >= BOX_PRICE, titleSize: 22 });
     }
+
+    // Что ещё можно получить: скины, которых нет, минус неоткрытые коробки.
+    // Коробку, в которой заведомо ничего не будет, не продаём
+    const left = SKINS.length - st.owned.length - st.boxes;
+    const can = inTelegram() && loggedIn();
 
     // --- сетка скинов ---
     const cols = this.portrait ? 4 : 8;
@@ -730,15 +777,76 @@ export default class MenuScene extends Phaser.Scene {
       if (owned) face.play(`${sheet}_idle`);
       else face.setTintFill(0x10141f).setAlpha(0.85);
       this.items.push(face);
-      this.items.push(this.add.text(x, y + ch / 2 - 16, owned ? (on ? 'надет' : skin.name) : '???',
-        font(17, 800, on ? '#2a1c06' : owned ? UI.text : UI.textDim)).setOrigin(0.5));
+      // Закрытый скин можно купить сразу — тап по силуэту открывает счёт
+      const buy = !owned && can;
+      this.items.push(this.add.text(x, y + ch / 2 - 16,
+        owned ? (on ? 'надет' : skin.name) : buy ? `${SKIN_STARS} ⭐` : '???',
+        font(17, 800, on ? '#2a1c06' : owned ? UI.text : buy ? UI.accent : UI.textDim)).setOrigin(0.5));
       if (owned) {
         plate.setInteractive({ useHandCursor: true });
         plate.on('pointerup', () => { haptic('select'); equipSkin(skin.id); this.showSkins(); });
+      } else if (buy) {
+        plate.setInteractive({ useHandCursor: true });
+        plate.on('pointerup', () => { haptic('select'); this._buy(`skin-${skin.id}`); });
       }
-      this.buttons[`skin-${skin.id}`] = { x, y: y + this.oy, w: cw - 10, h: ch, enabled: owned };
+      this.buttons[`skin-${skin.id}`] = { x, y: y + this.oy, w: cw - 10, h: ch, enabled: owned || buy };
     });
+
+    // --- магазин: коробки за звёзды ---
+    const rows = Math.ceil(SKINS.length / cols);
+    const sy = y0 + rows * (ch + 10) - ch / 2 + 26;
+    this.items.push(this.add.text(cx, sy, 'Магазин', font(26, 800, UI.accent)).setOrigin(0.5, 0));
+    trackStep('shop_open');
+    const bw = Math.min(300, (W - 60) / 2);
+    const shopRow = [['box1', 'Коробка', '25 ⭐', 1], ['box5', '5 коробок', '99 ⭐', 5]];
+    shopRow.forEach(([id, label, price, n], i) => {
+      this._button(`shop-${id}`, cx + (i ? 1 : -1) * (bw / 2 + 8), sy + 96, label, price,
+        () => this._buy(id), { w: bw, h: 88, titleSize: 25, hintSize: 20, enabled: can && left >= n });
+    });
+    this.items.push(this.add.text(cx, sy + 152, !can
+      ? 'покупки за звёзды работают в Telegram'
+      : left <= 0 ? 'все скины уже твои или ждут в коробках'
+        : `в коробке — скин, которого у тебя ещё нет; закрытый скин — тап, ${SKIN_STARS} ⭐`,
+      font(17, 700, UI.textDim)).setOrigin(0.5, 0).setAlign('center').setWordWrapWidth(W - 48));
     this._back();
+  }
+
+  /**
+   * Покупка за звёзды: счёт выписывает сервер, оплату показывает Telegram.
+   * После «оплачено» ждём, пока сервер запишет платёж (он узнаёт о нём от
+   * бота чуть позже), и кладём покупку в профиль.
+   */
+  async _buy(item) {
+    trackStep('buy_click');
+    const toast = (msg, color = '#ff9a9a') => {
+      const t = this.add.text(this.W / 2, 150, msg, font(22, 800, color)).setOrigin(0.5).setDepth(60);
+      this.items.push(t);
+      this.tweens.add({ targets: t, alpha: 0, delay: 1800, duration: 400 });
+    };
+    let link;
+    try { link = await buyShopItem(item); } catch (e) { toast(e.message || 'не вышло'); return; }
+    const status = await openInvoice(link);
+    if (status !== 'paid') {
+      if (status !== 'cancelled') toast('оплата не прошла');
+      return;
+    }
+    haptic('win');
+    const before = skinState().boxes;
+    const skin = /^skin-(\w+)$/.exec(item)?.[1];
+    for (let i = 0; i < 8; i++) {
+      const shop = await fetchShop();
+      const got = shop?.owned ? applyServerOwned(shop.owned) : null;
+      if (got && (got.boxes || got.skins.length)) break;
+      await new Promise((r) => setTimeout(r, 1500));
+    }
+    if (this.section !== this.showSkins) return;
+    if (skin && skinState().owned.includes(skin)) equipSkin(skin);
+    this.showSkins();
+    if (skin) {
+      if (skinState().owned.includes(skin)) toast(`Готово! «${SKIN_BY_ID[skin]?.name}» уже на тебе`, '#8ef0a0');
+      else toast('Оплата прошла — скин появится через минуту', '#ffd166');
+    } else if (skinState().boxes > before) toast('Готово! Коробки уже здесь', '#8ef0a0');
+    else toast('Оплата прошла — коробки появятся через минуту', '#ffd166');
   }
 
   /**
@@ -816,17 +924,144 @@ export default class MenuScene extends Phaser.Scene {
     this._clear();
     this._title('Режимы');
     const cx = this.W / 2;
-    const y0 = 186, step = 106;
-    const big = { w: Math.min(this.W - 64, 620), h: 92, titleSize: 28, hintSize: 18 };
-    this._button('tower', cx, y0, 'Башня', 'высокая арена и трос · выбрать соперника',
-      () => this.showTower(), { ...big, variant: 'primary' });
-    this._button('online', cx, y0 + step, 'Онлайн', 'бой с человеком на башне · рейтинг',
+    const y0 = 176, step = this.portrait ? 104 : 84;
+    const big = { w: Math.min(this.W - 64, 620), h: this.portrait ? 92 : 74, titleSize: 28, hintSize: 18 };
+    const stars = totalStars(challengeStars());
+    const done = ascentDone().size;
+    this._button('ascent', cx, y0, 'Кампания «Подъём»', `15 боёв на башне, монстры и Великан · пройдено ${done} из ${ASCENT.length}`,
+      () => this.showAscent(), { ...big, variant: 'primary' });
+    this._button('tower', cx, y0 + step, 'Башня', 'высокая арена и трос · выбрать соперника',
+      () => this.showTower(), big);
+    this._button('challenges', cx, y0 + step * 2, 'Испытания', `задачи на три звезды · собрано ★ ${stars} из ${CHALLENGES.length * 3}`,
+      () => this.showChallenges(), big);
+    this._button('online', cx, y0 + step * 3, 'Онлайн', 'бой с человеком на башне · рейтинг',
       () => this.showOnline(), big);
-    this._button('campaign', cx, y0 + step * 2, 'Кампания', 'миссии с условиями · телефон горизонтально',
+    this._button('campaign', cx, y0 + step * 4, 'Классика', 'старые миссии на широких картах · горизонтально',
       () => this.showCampaign(), big);
-    this._button('quick', cx, y0 + step * 3, 'Свои правила', 'обычная карта, бот или вдвоём · горизонтально',
+    this._button('quick', cx, y0 + step * 5, 'Свои правила', 'обычная карта, бот или вдвоём · горизонтально',
       () => this.showQuick(), big);
     this._back();
+  }
+
+  // ------------------------------------------------------ кампания «Подъём»
+
+  /** Три главы: прогресс в каждой; закрытая — пока не пройдена предыдущая. */
+  showAscent() {
+    this.section = this.showAscent;
+    this._clear();
+    const done = ascentDone();
+    this._title('Подъём', `пройдено ${done.size} из ${ASCENT.length} · коробки со скинами по пути`);
+    const cx = this.W / 2;
+    const w = Math.min(this.W - 64, 620), h = this.portrait ? 120 : 96;
+    const step = h + 18;
+    CHAPTERS.forEach((ch, i) => {
+      const list = ASCENT.filter((m) => m.chapter === ch.id);
+      const first = ASCENT.indexOf(list[0]);
+      const open = ascentOpen(first, done);
+      const n = list.filter((m) => done.has(m.id)).length;
+      this._button(`chapter-${ch.id}`, cx, 196 + h / 2 + i * step, `${i + 1}. ${ch.title}`,
+        open ? `${n} из ${list.length}${n === list.length ? ' · пройдено' : ''}` : 'откроется после предыдущей главы',
+        () => this.showAscentChapter(ch), {
+          w, h, enabled: open, variant: open && n < list.length ? 'primary' : 'normal', titleSize: 30, hintSize: 20,
+        });
+    });
+    this._back(() => this.showModes());
+  }
+
+  showAscentChapter(ch) {
+    this.section = () => this.showAscentChapter(ch);
+    this._clear();
+    const done = ascentDone();
+    const list = ASCENT.filter((m) => m.chapter === ch.id);
+    this._title(ch.title, `${list.filter((m) => done.has(m.id)).length} из ${list.length}`);
+    const cx = this.W / 2;
+    const w = Math.min(this.W - 64, 620), h = this.portrait ? 96 : 76, gap = 12;
+    list.forEach((m, k) => {
+      const i = ASCENT.indexOf(m);
+      const open = ascentOpen(i, done);
+      const won = done.has(m.id);
+      const tag = m.boss && !/Великан/.test(m.title) ? ' · Великан' : '';
+      this._button(`up-${m.id}`, cx, 186 + h / 2 + k * (h + gap), `${i + 1}. ${m.title}${tag}`,
+        won ? '✓ пройдено' : open ? 'открыто' : 'откроется после предыдущего боя',
+        () => this.showAscentBrief(m), {
+          w, h, enabled: open, variant: open && !won ? 'primary' : 'normal', titleSize: 26, hintSize: 17,
+        });
+    });
+    this._back(() => this.showAscent());
+  }
+
+  showAscentBrief(m) {
+    this.section = () => this.showAscentBrief(m);
+    this._clear();
+    this._title(m.title, ascentDone().has(m.id) ? 'пройдено' : '');
+    const cx = this.W / 2;
+    const w = Math.min(640, this.W - 56);
+    const mons = m.monsters ?? {};
+    const parts = [];
+    if (m.boss) parts.push('Великан');
+    if (mons.slime) parts.push(`слизней: ${mons.slime}`);
+    if (mons.cactus) parts.push(`кактусов: ${mons.cactus}`);
+    const sides = m.teams.length > 1
+      ? `${m.teams[0].worms} против ${m.teams[1].worms}`
+      : `${m.teams[0].worms} бойца против Великана`;
+    const t = this.add.text(cx, 176, [m.brief, '', sides, parts.join(' · ')].join('\n'), font(this.fs(16), 700))
+      .setOrigin(0.5, 0).setAlign('center').setWordWrapWidth(w - 40).setLineSpacing(6);
+    this.items.push(t);
+    this._button('start', cx, 176 + t.height + 90, 'В бой', '', () => this.start(ascentMatch(m.id)),
+      this.portrait ? { variant: 'primary', w: 360, h: 88, titleSize: 30 } : { variant: 'primary', w: 300, h: 66 });
+    this._back(() => this.showAscentChapter(CHAPTERS.find((c) => c.id === m.chapter)));
+  }
+
+  // ----------------------------------------------------------- испытания
+
+  /** Список испытаний: звёзды у каждого, закрытые — до звезды в предыдущем. */
+  showChallenges() {
+    this.section = this.showChallenges;
+    this._clear();
+    const best = challengeStars();
+    this._title('Испытания', `★ ${totalStars(best)} из ${CHALLENGES.length * 3} · за новую звезду +${STAR_COINS} монет`);
+    const W = this.W;
+    const roomy = this.portrait;
+    const cols = roomy ? 1 : 3;
+    const w = roomy ? Math.min(W - 64, 620) : Math.min(440, (W - 80) / 3);
+    const h = roomy ? 96 : 84, gap = roomy ? 12 : 12;
+    const x0 = W / 2 - ((cols - 1) * (w + 16)) / 2;
+    const y0 = 172 + h / 2;
+    CHALLENGES.forEach((c, i) => {
+      const open = challengeOpen(i, best);
+      const n = best[c.id] ?? 0;
+      const x = x0 + (i % cols) * (w + 16), y = y0 + Math.floor(i / cols) * (h + gap);
+      const next = open && n === 0;
+      this._button(`ch-${c.id}`, x, y, `${i + 1}. ${c.title}`,
+        open ? `${'★'.repeat(n)}${'☆'.repeat(3 - n)}` : 'откроется после звезды в предыдущем',
+        () => this.showChallengeBrief(c), {
+          w, h, enabled: open, variant: next ? 'primary' : 'normal',
+          titleSize: roomy ? 26 : 22, hintSize: open ? (roomy ? 26 : 22) : (roomy ? 16 : 14),
+        });
+    });
+    this._back(() => this.showModes());
+  }
+
+  showChallengeBrief(c) {
+    this.section = () => this.showChallengeBrief(c);
+    this._clear();
+    const n = challengeStars()[c.id] ?? 0;
+    this._title(c.title, `лучший результат: ${n ? '★'.repeat(n) + '☆'.repeat(3 - n) : 'ещё не пройдено'}`);
+    const W = this.W, cx = W / 2;
+    const w = Math.min(640, W - 56);
+    const lines = [
+      c.brief,
+      '',
+      '★ — победить',
+      `★★ — победить не дольше чем за ${c.stars.turns} своих ${c.stars.turns < 5 ? 'хода' : 'ходов'}`,
+      '★★★ — и не потерять ни одного очка здоровья',
+    ];
+    const t = this.add.text(cx, 176, lines.join('\n'), font(this.fs(16), 700))
+      .setOrigin(0.5, 0).setAlign('center').setWordWrapWidth(w - 40).setLineSpacing(6);
+    this.items.push(t);
+    this._button('start', cx, 176 + t.height + 90, 'В бой', '', () => this.start(challengeMatch(c.id)),
+      this.portrait ? { variant: 'primary', w: 360, h: 88, titleSize: 30 } : { variant: 'primary', w: 300, h: 66 });
+    this._back(() => this.showChallenges());
   }
 
   // --------------------------------------------------------------- башня

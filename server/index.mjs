@@ -34,6 +34,8 @@
  *   POST /api/tournaments/:id/start       → {ok}             только админ
  *   POST /api/stars/donate {amount}       → {invoice}
  *   POST /api/event {name, props}         → {ok}             статистика: open | battle
+ *   GET  /api/shop                        → {items, skinStars, owned}  товары и что положено
+ *   POST /api/shop/buy {item}             → {invoice}        box1 | box5 | skin-<id>
  *   POST /api/bot/webhook                 ← обновления Telegram
  *   GET  /api/config, /api/health
  */
@@ -51,6 +53,7 @@ import { createPlayers } from './players.mjs';
 import { createTournaments } from './tournaments.mjs';
 import { createBot, webhookSecret } from './bot.mjs';
 import { createAnalytics } from './analytics.mjs';
+import { createShop, SHOP, SKIN_STARS, shopItem } from './shop.mjs';
 
 export function createApp({
   db, botToken = '', trustProxy = false, staticDir = null, now = () => Date.now(),
@@ -69,6 +72,7 @@ export function createApp({
     refund: (chargeId) => bot?.refund(chargeId) ?? false,
   });
   const analytics = createAnalytics({ db, now, tz });
+  const shop = createShop({ db, now });
   bot = createBot({ db, api, players, tournaments, analytics, adminIds: admins, publicUrl, tz, now, log });
   const hookSecret = botToken ? webhookSecret(botToken, secret) : '';
 
@@ -113,7 +117,21 @@ export function createApp({
     if (!v.ok) throw new HttpError(401, v.reason);
     const photo = typeof v.user.photo_url === 'string' && /^https:\/\//.test(v.user.photo_url)
       ? v.user.photo_url.slice(0, 300) : null;
+    // Новичок — кто игру ещё не открывал. Нажать /start в чате с ботом
+    // раньше, чем открыть игру по ссылке друга, — нормально, подарок от
+    // этого не пропадает
+    const was = players.byId(`tg${Number(v.user.id)}`);
+    const fresh = !was || !was.app_at;
     const p = players.upsertTg(v.user, photo);
+    if (fresh) players.markApp(p.id);
+    // Новичок по ссылке друга — обоим по коробке; другу — сообщение в бот
+    if (fresh) {
+      const host = shop.referral(p, v.startParam, players);
+      if (host) {
+        bot.notify(host, `🎁 ${p.name} пришёл в игру по твоей ссылке — вам обоим по коробке со скином! `
+          + 'Открой игру, коробка уже там.').catch(() => {});
+      }
+    }
     return { token: issueToken(p.id), player: players.view(p, { self: true }) };
   }
 
@@ -254,6 +272,22 @@ export function createApp({
         return { items: tournaments.list(me.id), admin: players.isAdmin(me) };
       }
       case 'POST /api/stars/donate': { const me = auth(req); return donate(me, await readJson(req)); }
+      case 'GET /api/shop': {
+        const me = auth(req);
+        return { items: SHOP, skinStars: SKIN_STARS, owned: shop.owned(me.id), stars: api.enabled };
+      }
+      case 'POST /api/shop/buy': {
+        const me = auth(req);
+        const it = shopItem((await readJson(req)).item);
+        if (!it) throw new HttpError(400, 'нет такого товара');
+        // Скин, уже купленный за звёзды, второй раз не продаём
+        if (it.kind === 'skin' && shop.owned(me.id).skins.includes(it.skin)) {
+          throw new HttpError(409, 'этот скин уже куплен');
+        }
+        const link = await bot.shopInvoice(me, it);
+        if (!link) throw new HttpError(503, 'оплата звёздами сейчас недоступна');
+        return { invoice: link };
+      }
       case 'POST /api/event': {
         const me = auth(req);
         const body = await readJson(req);

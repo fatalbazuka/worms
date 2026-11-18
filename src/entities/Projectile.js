@@ -95,6 +95,11 @@ export class Projectile {
 
     if (this.digging) { this._digStep(dt); return; }
 
+    if (this.stuck) {
+      // Прилипла. Стену под ней снесли — отваливается и липнет заново
+      if (!this._touchesGround(p.radius + 3)) { this.stuck = false; } else return;
+    }
+
     if (this.resting) {
       // Лежит на земле (граната). Если землю под ней снесли — снова падает.
       if (!this.terrain.solidInRow(this.x - p.radius, this.x + p.radius, this.y + p.radius + 1)) {
@@ -155,6 +160,33 @@ export class Projectile {
     }
 
     // --- касание земли ---
+    if (p.sticky) {
+      this.x = ray.freeX; this.y = ray.freeY;
+      this.vx = 0; this.vy = 0;
+      this.stuck = true;
+      if (this.fuseLeft <= 0) this.fuseLeft = p.stickFuse || 3;
+      this.scene.fx?.sound('thunk');
+      return;
+    }
+
+    // Гиря: первый пол проламывает насквозь и летит дальше вниз. Пролом
+    // считается одинаково и при показе хода сопернику — как ходы крота
+    if (p.pierce > 0 && !this.pierced) {
+      this.pierced = true;
+      const r = 13;
+      for (let d = 0; d <= p.pierce; d += 6) {
+        const cx = Math.round(ray.x), cy = Math.round(ray.y + d);
+        this.terrain.destroyCircle(cx, cy, r);
+        if (!this.scene.replaying) this.scene.explosionHistory?.push({ x: cx, y: cy, r });
+      }
+      this.x = ray.x; this.y = ray.y;
+      this.vx *= 0.25;
+      this.vy = Math.max(this.vy, 260);
+      this.scene.rig.shake(120, 0.004);
+      this.scene.fx?.sound('thunk');
+      return;
+    }
+
     if (p.digRadius > 0) {
       this.digging = true;
       this.digLeft = p.digTime;
@@ -221,11 +253,24 @@ export class Projectile {
     }
   }
 
+  /** Есть ли земля вплотную — по восьми направлениям на расстоянии r. */
+  _touchesGround(r) {
+    for (let i = 0; i < 8; i++) {
+      const a = (i / 8) * Math.PI * 2;
+      if (this.terrain.solidAt(this.x + Math.cos(a) * r, this.y + Math.sin(a) * r)) return true;
+    }
+    return false;
+  }
+
   _wormAt(x, y) {
     for (const w of this.scene.worms) {
       if (!w.alive) continue;
       if (w === this.owner && this.ownerGrace > 0) continue;
       if (w.containsPoint(x, y)) return w;
+    }
+    // Монстры кампании ловят снаряд так же, как бойцы
+    for (const m of this.scene.monsters ?? []) {
+      if (m.alive && m.containsPoint(x, y)) return m;
     }
     return null;
   }
@@ -257,7 +302,7 @@ export class Projectile {
 
   _syncView() {
     this.view.setPosition(this.x, this.y);
-    if (this.own && !this.resting && (this.vx || this.vy)) {
+    if (this.own && !this.resting && !this.stuck && (this.vx || this.vy)) {
       if (this.pointed) this.view.setRotation(Math.atan2(this.vy, this.vx) + this.tilt);
       else this.view.rotation += (this.vx >= 0 ? 1 : -1) * 0.14;
     }

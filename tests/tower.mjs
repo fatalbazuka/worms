@@ -68,7 +68,8 @@ await Promise.all(pages.map((p) => p.waitForTimeout(1200)));
 const info = (p) => p.evaluate(() => {
   const s = window.__WORMS__.scene.getScene('Game');
   return {
-    shape: s.shape.id, sling: s.sling, hooks: s.hookPerTurn, flood: !!s.rules.flood,
+    shape: s.shape.id, sling: s.sling, hooks: s.hookPerTurn, flood: !!s.rules.flood, variant: s.variant?.id,
+    biome: s.terrain.biome.id,
     myTeam: s.net.myTeam, team: s.turn.currentTeam, turn: s.turn.turnNumber, state: s.turn.state,
     terrain: s.terrain.hash(),
     hp: s.worms.map((w) => `${w.health}${w.alive ? '' : '†'}`).join(','),
@@ -83,6 +84,8 @@ check('оба получили башню с тросом по коду комн
   a.shape === 'tower' && b.shape === 'tower' && a.sling && b.sling && a.hooks === 3 && a.flood,
   `${a.shape}/${b.shape}, тросов ${a.hooks}`);
 check('карта и расстановка у обоих одни', a.terrain === b.terrain && a.pos === b.pos, `${a.pos} | ${b.pos}`);
+check('вид башни и тема у обоих одни', a.variant && a.variant === b.variant && a.biome === b.biome,
+  `${a.variant}/${a.biome} | ${b.variant}/${b.biome}`);
 check('в портрете бой идёт, «поверни телефон» не показан', a.rotate === 'none' && b.rotate === 'none');
 check('команды разные, ход у одного', a.myTeam !== b.myTeam && a.team === b.team);
 
@@ -118,6 +121,17 @@ check('соперник видит бойца там, куда его подтя
 await watcher.waitForTimeout(700);
 const w2 = await at(watcher);
 check('у соперника висящий боец не падает', Math.abs(w2.y - m1.y) <= 3, `${w2.y} против ${m1.y}`);
+
+// --- эмоция: соперник видит, как мой боец корчит рожу ---
+const sentEmote = await mover.evaluate(() => {
+  const s = window.__WORMS__.scene.getScene('Game');
+  return s.showEmote(s.myTeamIndex, 'laugh', { send: true });
+});
+const seen = await watcher.waitForFunction((team) => {
+  const s = window.__WORMS__.scene.getScene('Game');
+  return s.worms.some((w) => w.team === team && w.mood === 'worm_win');
+}, a.team, { timeout: 5000 }).then(() => true).catch(() => false);
+check('эмоция дошла до соперника', sentEmote && seen);
 
 // --- выстрел: итог хода у обоих один ---
 const turnBefore = a.turn;

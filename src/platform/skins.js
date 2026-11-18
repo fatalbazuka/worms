@@ -7,9 +7,12 @@
  * останутся теми же снаружи.
  */
 import {
-  SKINS, SKIN_BY_ID, DEFAULT_SKIN, normalize, claimBoxes, openBox, equip,
+  SKINS, SKIN_BY_ID, DEFAULT_SKIN, normalize, claimBoxes, openBox, equip, mergeSkins, applyOwned,
 } from '../core/skins.js';
+import { inTelegram, cloudGet, cloudSet } from './telegram.js';
 import { MISSIONS, loadProgress } from '../campaign/missions.js';
+import { ASCENT } from '../campaign/ascent.js';
+import { ascentDone } from './ascent.js';
 
 const STORE_KEY = 'worms.skins.v1';
 
@@ -18,8 +21,30 @@ function load() {
 }
 
 function save(state) {
-  try { localStorage.setItem(STORE_KEY, JSON.stringify(state)); } catch { /* инкогнито */ }
+  const raw = JSON.stringify(state);
+  try { localStorage.setItem(STORE_KEY, raw); } catch { /* инкогнито */ }
+  // Копия в облаке Telegram: сменил телефон — скины с тобой
+  if (inTelegram()) cloudSet(STORE_KEY, raw);
   return state;
+}
+
+/** Подтянуть облачную копию и свести с местной. Зовётся при запуске. */
+export async function syncSkinsCloud() {
+  if (!inTelegram()) return;
+  let cloud = null;
+  try { cloud = JSON.parse((await cloudGet(STORE_KEY)) ?? 'null'); } catch { cloud = null; }
+  if (cloud) save(mergeSkins(load(), cloud));
+}
+
+/**
+ * Применить то, что положено с сервера (покупки за звёзды, подарки).
+ * @returns {{boxes:number, skins:string[]}} что прибавилось
+ */
+export function applyServerOwned(owned) {
+  const before = load();
+  const res = applyOwned(before, owned);
+  if (res.boxes || res.skins.length || res.state.paidSeen !== before.paidSeen) save(res.state);
+  return { boxes: res.boxes, skins: res.skins };
 }
 
 export function skinState() { return load(); }
@@ -54,7 +79,10 @@ export function allSkinsOwned() {
  * @returns {number} сколько коробок выдано сейчас
  */
 export function syncCampaignBoxes() {
-  const res = claimBoxes(load(), [...loadProgress()], MISSIONS.map((m) => m.id));
+  // И за «Подъём»: первый бой, дальше через один и последний
+  const old = claimBoxes(load(), [...loadProgress()], MISSIONS.map((m) => m.id));
+  const up = claimBoxes(old.state, [...ascentDone()], ASCENT.map((m) => m.id));
+  const res = { state: up.state, gained: old.gained + up.gained };
   if (res.gained) save(res.state);
   return res.gained;
 }

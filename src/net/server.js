@@ -136,6 +136,33 @@ export function track(name, props = {}) {
   call('POST', '/event', { name, props }).catch(() => {});
 }
 
+/**
+ * Шаг воронки (server/analytics.mjs, STEPS). once — только первый раз на
+ * этом устройстве: «первый выстрел» второй раз не первый.
+ */
+export function trackStep(step, { once = false } = {}) {
+  if (once) {
+    let seen = {};
+    try { seen = JSON.parse(localStorage.getItem('worms.steps.v1') ?? '{}') || {}; } catch { seen = {}; }
+    if (seen[step]) return;
+    seen[step] = 1;
+    try { localStorage.setItem('worms.steps.v1', JSON.stringify(seen)); } catch { /* инкогнито */ }
+  }
+  track('step', { step });
+}
+
+/** Магазин: товары, цены и что положено игроку (куплено и подарено). */
+export async function fetchShop() {
+  if (!token) return null;
+  try { return await call('GET', '/shop'); } catch { return null; }
+}
+
+/** Счёт на покупку: box1 | box5 | skin-<id>. @returns {Promise<string>} ссылка на счёт */
+export async function buyShopItem(item) {
+  const r = await call('POST', '/shop/buy', { item });
+  return r.invoice;
+}
+
 let lastSync = 0;
 
 /**

@@ -1,0 +1,188 @@
+import { CFG, DEPTH } from '../config.js';
+import { has } from '../core/assets.js';
+import { subRng } from '../core/rng.js';
+
+/**
+ * Эмодзи на башне: фон и предметы на этажах.
+ *
+ * Фон — крупные эмодзи за башней (горы, солнце, облака, деревья), на
+ * параллаксе, полупрозрачные. Их не трогает ничего.
+ *
+ * Предметы на этажах — деревья, грибы, камни, ящики, бочки. Бойцам не
+ * мешают и пули не ловят, но взрыв рядом их ломает: предмет лопается
+ * осколками. Бочка ещё и взрывается сама — цепочка через бочки рядом.
+ * Пол под предметом снесли — падает вместе с обломками.
+ *
+ * Расстановка — от зерна партии, поэтому у обоих игроков по сети она
+ * одинаковая. Ломает их взрыв; у смотрящего чужой ход взрывы приходят
+ * снимком (protocol.applyState → hit), и бочки там не рвутся второй раз:
+ * их взрыв уже лежит в журнале ходившего.
+ */
+
+const SALT = 0x51ed;
+
+// Наборы по виду башни: что стоит на этажах и что видно за башней
+const THEMES = {
+  classic: {
+    props: ['tree', 'pine', 'mushroom', 'herb', 'sunflower', 'rock', 'box', 'barrel'],
+    back: ['mountain', 'tree', 'pine', 'cloud', 'sun'],
+  },
+  wind: {
+    props: ['palm', 'herb', 'rock', 'box', 'barrel', 'sunflower'],
+    back: ['cloud', 'cloud', 'palm', 'mountain', 'sun'],
+  },
+  ice: {
+    props: ['pine', 'snowman', 'ice', 'rock', 'box', 'barrel'],
+    back: ['mountain', 'snowflake', 'pine', 'cloud', 'snowflake'],
+  },
+  lava: {
+    props: ['rock', 'mushroom', 'bricks', 'box', 'barrel', 'barrel'],
+    back: ['volcano', 'fire', 'mountain', 'cloud', 'volcano'],
+  },
+};
+
+const SIZE = {
+  tree: 84, pine: 84, palm: 88, mushroom: 52, herb: 46, sunflower: 62, rock: 52, box: 48,
+  barrel: 52, snowman: 70, ice: 48, bricks: 54,
+};
+
+const BARREL_BLAST = { radius: 34, damageRadius: 70, damage: 30, knockback: 300, shake: 0.008 };
+
+export class Props {
+  constructor(scene, seed, variantId = 'classic') {
+    this.scene = scene;
+    this.terrain = scene.terrain;
+    this.theme = THEMES[variantId] ?? THEMES.classic;
+    this.rng = subRng(seed >>> 0, SALT);
+    this.items = [];
+    this.backs = [];
+    this._tick = 0;
+  }
+
+  /** Расставить всё. avoid — точки, рядом с которыми предметы не ставим. */
+  build(avoid = []) {
+    this._buildBack();
+    this._buildProps(avoid);
+    return this;
+  }
+
+  _img(name, x, y, size) {
+    const key = `emoji_${name}`;
+    if (!has(this.scene, key)) return null;
+    const img = this.scene.add.image(x, y, key).setOrigin(0.5, 1);
+    img.setScale(size / 128);
+    return img;
+  }
+
+  _buildBack() {
+    const r = this.rng;
+    const W = this.terrain.width;
+    const ground = CFG.WATER_Y;
+    // Горы и деревья у подножия, облака и солнце выше — на параллаксе
+    const n = 7;
+    for (let i = 0; i < n; i++) {
+      const name = this.theme.back[r.int(0, this.theme.back.length - 1)];
+      const high = name === 'cloud' || name === 'sun' || name === 'snowflake';
+      const x = (W / n) * (i + 0.2 + r() * 0.6);
+      const y = high ? ground - 520 - r() * 900 : ground + 10;
+      const size = high ? 130 + r() * 80 : 240 + r() * 160;
+      const img = this._img(name, x, y, size);
+      if (!img) continue;
+      img.setAlpha(high ? 0.35 : 0.3).setTint(0xb8c4dd).setScrollFactor(0.55, 0.85)
+        .setDepth(DEPTH.PARALLAX + 1);
+      this.scene.rig.world(img);
+      this.backs.push(img);
+    }
+  }
+
+  _buildProps(avoid) {
+    const spots = this.terrain.standSpots(10, 40);
+    const r = this.rng;
+    for (let i = spots.length - 1; i > 0; i--) {
+      const j = r.int(0, i);
+      [spots[i], spots[j]] = [spots[j], spots[i]];
+    }
+    const want = Math.min(14, Math.max(6, Math.round(spots.length / 14)));
+    for (const p of spots) {
+      if (this.items.length >= want) break;
+      if (avoid.some((a) => Math.hypot(a.x - p.x, a.y - p.y) < 56)) continue;
+      if (this.items.some((q) => Math.hypot(q.x - p.x, q.y - p.y) < 100)) continue;
+      const name = this.theme.props[r.int(0, this.theme.props.length - 1)];
+      const size = SIZE[name] ?? 36;
+      const img = this._img(name, p.x, p.y + 3, size);
+      if (!img) continue;
+      img.setDepth(DEPTH.WORM - 2).setFlipX(r() < 0.5);
+      this.scene.rig.world(img);
+      this.items.push({ name, x: p.x, y: p.y + 3, size, img, vy: 0, alive: true });
+    }
+  }
+
+  /**
+   * Взрыв в (x, y) радиусом r: всё, что в нём, ломается. chain — бочки
+   * взрываются (кроме показа чужого хода и применения снимка).
+   */
+  hit(x, y, r, chain = true) {
+    for (const it of this.items) {
+      if (!it.alive) continue;
+      if (Math.hypot(it.x - x, it.y - it.size / 2 - y) > r + it.size / 3) continue;
+      this._break(it, chain);
+    }
+  }
+
+  _break(it, chain) {
+    it.alive = false;
+    const s = this.scene;
+    const { img } = it;
+    // Лопается: подскок, разворот, тает — и пара осколков-копий
+    s.tweens.add({
+      targets: img, y: img.y - 26, angle: img.flipX ? -40 : 40, scale: img.scale * 1.25, alpha: 0,
+      duration: 380, ease: 'Quad.easeOut', onComplete: () => img.destroy(),
+    });
+    for (let k = 0; k < 3; k++) {
+      const bit = this._img(it.name, it.x, it.y - it.size / 2, it.size * 0.35);
+      if (!bit) break;
+      s.rig.world(bit.setDepth(DEPTH.FX).setOrigin(0.5));
+      const dx = (k - 1) * 40 + (it.x % 7) * 2;
+      s.tweens.add({
+        targets: bit, x: bit.x + dx, y: bit.y - 30 - k * 8, angle: dx * 4, alpha: 0,
+        duration: 520, ease: 'Quad.easeOut', onComplete: () => bit.destroy(),
+      });
+    }
+    if (it.name === 'barrel' && chain && !s.replaying) {
+      // Не сразу: взрыв из взрыва в том же кадре ушёл бы в рекурсию
+      const { x } = it;
+      const y = it.y - it.size / 2;
+      s.time.delayedCall(140, () => s.explode(x, y, BARREL_BLAST, null));
+      s.barrelsPending = (s.barrelsPending ?? 0) + 1;
+      s.time.delayedCall(160, () => { s.barrelsPending -= 1; });
+    }
+  }
+
+  /** Предмет без опоры падает; в воду — пропадает. */
+  update(dt) {
+    this._tick += dt;
+    if (this._tick < 0.05) return;
+    const step = this._tick;
+    this._tick = 0;
+    for (const it of this.items) {
+      if (!it.alive) continue;
+      const below = this.terrain.solidInRow(it.x - 6, it.x + 6, it.y);
+      if (below && it.vy === 0) continue;
+      it.vy = Math.min(it.vy + CFG.GRAVITY * step, 800);
+      const ny = it.y + it.vy * step;
+      const ray = this.terrain.raycast(it.x, it.y - 1, it.x, ny);
+      if (ray.hit) { it.y = ray.freeY + 1; it.vy = 0; } else it.y = ny;
+      it.img.setY(it.y);
+      if (it.y > CFG.DROWN_Y) { it.alive = false; it.img.destroy(); }
+    }
+  }
+
+  get count() { return this.items.filter((it) => it.alive).length; }
+
+  destroy() {
+    for (const it of this.items) if (it.alive) it.img.destroy();
+    for (const b of this.backs) b.destroy();
+    this.items = [];
+    this.backs = [];
+  }
+}

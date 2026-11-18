@@ -1,4 +1,6 @@
 import { MISSION_BY_ID } from '../campaign/missions.js';
+import { CHALLENGE_BY_ID } from '../campaign/challenges.js';
+import { ASCENT_BY_ID, chapterOf } from '../campaign/ascent.js';
 import { isTowerRoom } from '../net/rooms.js';
 
 /**
@@ -84,6 +86,39 @@ export function campaignMatch(missionId) {
     shape: m.shape ?? 'island',
     teams: m.teams.map((t) => ({ ...t })),
     rules: { ...m.rules },
+  };
+}
+
+/** Испытание на башне: его зерно, вид башни, стороны и правила. */
+/** Бой кампании «Подъём»: башня главы, монстры, Великан в конце главы. */
+export function ascentMatch(id) {
+  const m = ASCENT_BY_ID[id];
+  if (!m) return towerMatch('rookie');
+  return {
+    mode: 'ascent',
+    ascentId: m.id,
+    seed: m.seed,
+    shape: 'tower',
+    variant: chapterOf(m).variant,
+    teams: m.teams.map((t) => ({ ...t })),
+    rules: { flood: { after: 9, step: 85 }, ...m.rules },
+    monsters: { ...(m.monsters ?? {}) },
+    boss: Boolean(m.boss),
+    bossHp: m.bossHp ?? null,
+  };
+}
+
+export function challengeMatch(id) {
+  const c = CHALLENGE_BY_ID[id];
+  if (!c) return towerMatch('rookie');
+  return {
+    mode: 'challenge',
+    challengeId: c.id,
+    seed: c.seed,
+    shape: 'tower',
+    variant: c.variant,
+    teams: c.teams.map((t) => ({ ...t })),
+    rules: { flood: { after: 8, step: 85 }, ...c.rules },
   };
 }
 

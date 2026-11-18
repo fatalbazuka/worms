@@ -56,3 +56,27 @@ export function setUiMode(mode) {
 export function applyUiClass() {
   globalThis.document?.body.classList.toggle('ui-desktop', isDesktop());
 }
+
+/**
+ * Как целиться пальцем на башне: рогатка (тянешь от бойца назад) или
+ * прежние кнопки — ▲▼ крутят угол, «Огонь» держишь и отпускаешь, плюс
+ * свайп по бойцу к цели. По умолчанию рогатка. ?aim=buttons|sling в
+ * адресе — для отладки и тестов. Трос в обеих схемах — тап по стене.
+ */
+const AIM_KEY = 'worms.aim';
+export const AIM_SCHEMES = ['sling', 'buttons'];
+
+export function aimScheme() {
+  const fromUrl = new URLSearchParams(globalThis.location?.search ?? '').get('aim');
+  if (AIM_SCHEMES.includes(fromUrl)) return fromUrl;
+  try {
+    const saved = localStorage.getItem(AIM_KEY);
+    if (AIM_SCHEMES.includes(saved)) return saved;
+  } catch { /* инкогнито */ }
+  return 'sling';
+}
+
+export function setAimScheme(scheme) {
+  if (!AIM_SCHEMES.includes(scheme)) return;
+  try { localStorage.setItem(AIM_KEY, scheme); } catch { /* инкогнито */ }
+}

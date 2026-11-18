@@ -1,6 +1,7 @@
 import { CFG } from '../config.js';
 import { Crate } from '../entities/Crate.js';
 import { Mine } from '../entities/Mine.js';
+import { Spring } from '../entities/Spring.js';
 import { WEAPONS_BY_ID } from '../weapons/index.js';
 
 /**
@@ -175,6 +176,9 @@ export function captureState(scene) {
         x: Math.round(m.x), y: Math.round(m.y),
         weapon: m.weapon.id, armed: m.armed, owner: scene.worms.indexOf(m.owner),
       })),
+    springs: (scene.springs ?? [])
+      .filter((sp) => sp.alive)
+      .map((sp) => ({ x: Math.round(sp.x), y: Math.round(sp.y), uses: sp.uses })),
   };
 }
 
@@ -190,6 +194,7 @@ export function applyState(scene, state) {
 
   for (const e of state.explosions ?? []) {
     scene.terrain.destroyCircle(e.x, e.y, e.r);
+    scene.props?.hit(e.x, e.y, e.r * 1.8, false);
   }
 
   state.worms.forEach((s, i) => {
@@ -234,6 +239,10 @@ export function applyState(scene, state) {
     if (m.armed) { mine.armed = true; mine.armTimer = 0; }
     return mine;
   });
+
+  // Батуты — так же: ставят и ломают по ходу партии
+  for (const sp of scene.springs ?? []) sp.destroy();
+  scene.springs = (state.springs ?? []).map((sp) => new Spring(scene, sp.x, sp.y, null, sp.uses));
 
   scene.replaying = false;
   scene.explosionLog = [];

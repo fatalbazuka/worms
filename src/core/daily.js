@@ -197,6 +197,33 @@ export function payForBox(state) {
   return { state: { ...state, coins: state.coins - BOX_PRICE }, ok: true };
 }
 
+/**
+ * Свести две копии (устройство и облако Telegram). Кошелёк — больший; день
+ * заданий — более поздний, в один день — прогресс по максимуму; серия — с
+ * более поздней отметкой.
+ */
+export function mergeDaily(a, b) {
+  const x = normalize(a), y = normalize(b);
+  const later = (x.day ?? '') >= (y.day ?? '') ? x : y;
+  const other = later === x ? y : x;
+  let tasks = later.tasks;
+  if (other.day === later.day) {
+    tasks = later.tasks.map((t) => {
+      const o = other.tasks.find((z) => z.id === t.id);
+      return o ? { id: t.id, progress: Math.max(t.progress, o.progress), claimed: t.claimed || o.claimed } : t;
+    });
+  }
+  const streakSrc = (x.streakDay ?? '') >= (y.streakDay ?? '') ? x : y;
+  return {
+    coins: Math.max(x.coins, y.coins),
+    day: later.day,
+    tasks,
+    battlesToday: other.day === later.day ? Math.max(x.battlesToday, y.battlesToday) : later.battlesToday,
+    streak: streakSrc.streak,
+    streakDay: streakSrc.streakDay,
+  };
+}
+
 /** Есть ли что забрать: выполненное задание или бонус серии. */
 export function hasReward(state, day) {
   const st = rollDay(state, day);

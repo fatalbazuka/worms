@@ -374,7 +374,8 @@ export class Worm {
 
     if (this.grounded) {
       this.vy = 0;
-      const damp = Math.exp(-CFG.GROUND_FRICTION * dt);
+      // На льду (rules.groundFriction) после толчка катишься далеко
+      const damp = Math.exp(-(this.scene.rules?.groundFriction ?? CFG.GROUND_FRICTION) * dt);
       this.vx *= damp;
       if (Math.abs(this.vx) < 6) this.vx = 0;
       if (this.vx !== 0) this._slideStep(dt);
@@ -537,7 +538,7 @@ export class Worm {
     this.grounded = true;
     const drop = this.y - this.fallStartY;
     this.vy = 0;
-    this.vx *= 0.3;
+    this.vx *= this.scene.rules?.landKeep ?? 0.3;
     if (this.parachuting) { this.foldChute(); this.fallStartY = this.y; return; }
     if (drop > 26) {
       this.squash = Math.min(1, 0.4 + drop / 260);

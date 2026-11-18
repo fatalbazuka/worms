@@ -128,6 +128,28 @@ const MIGRATIONS = [
   alter table player add column last_streak integer not null default 0;
   alter table player add column reminded_day text;
   `,
+  // 4 — подарки (коробка за приглашённого друга) и кто кого пригласил
+  `
+  create table bonus (
+    id         integer primary key,
+    player_id  text not null references player (id) on delete cascade,
+    boxes      integer not null,
+    reason     text not null,                     -- ref-host | ref-guest
+    ref        text,
+    created_at integer not null
+  );
+  create index bonus_player on bonus (player_id);
+  alter table player add column referred_by text;
+  `,
+  // 5: когда игрок впервые открыл саму игру (а не только /start в чате с
+  // ботом). Новичок для подарка за друга — тот, кто игру ещё не открывал.
+  // Кто уже что-то делал в игре, тот её открывал
+  `
+  alter table player add column app_at integer;
+  update player set app_at = created_at
+    where exists (select 1 from event e where e.player_id = player.id)
+       or wins + losses > 0;
+  `,
 ];
 
 export function openDb(path) {
