@@ -1513,6 +1513,11 @@ export default class GameScene extends Phaser.Scene {
 
   // ------------------------------------------------------------ монстры
 
+  /** Множитель тяжести поверх правил партии (аффикс «скачок гравитации»). */
+  setGravityMul(k) {
+    CFG.GRAVITY = BASE_GRAVITY * (Number(this.rules.gravity) || 1) * k;
+  }
+
   addMonster(kind, x, y, hp = null) {
     const m = new Monster(this, kind, x, y, hp);
     this.monsters.push(m);

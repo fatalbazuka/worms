@@ -1,4 +1,5 @@
-import { CFG, DEPTH } from '../config.js';
+import { CFG, DEPTH, canvasSize } from '../config.js';
+import { has } from '../core/assets.js';
 import { subRng } from '../core/rng.js';
 import { Projectile } from './Projectile.js';
 import { Weapon } from '../weapons/Weapon.js';
@@ -17,7 +18,14 @@ import { Weapon } from '../weapons/Weapon.js';
  *   gust     — порыв метели: всех стоящих бойцов толкает по ветру;
  *   icicles  — сосульки: над бойцами под потолком вырастают сосульки и
  *              через полный круг ходов падают; место падения — метка;
- *   meteors  — метеоритный дождь наискосок, место — метка.
+ *   meteors  — метеоритный дождь наискосок, место — метка;
+ *   storm    — гроза: над самой высокой точкой башни собирается туча, через
+ *              круг ходов бьёт молния и выбивает кусок вершины;
+ *   gravity  — скачок гравитации: на один ход тяжесть слабеет вдвое.
+ *
+ * Где подходит эмодзи — он и есть картинка, оживлённый анимацией: дым 💨
+ * из трещины, столб 🔥, метка ⚠️, удар 💥, ветер 🌬️, комета ☄️, туча 🌩️ и
+ * ⚡, воронка 🌀 и ✨. Нет картинки — рисуем простыми фигурами.
  *
  * Всё решается от зерна партии и номера хода — у двух игроков это было бы
  * одинаково, поэтому аффиксы потом можно включить и в сетевой игре. Пока
@@ -30,6 +38,8 @@ export const AFFIXES = {
   gust: { name: 'Метель', desc: 'порывы ветра толкают бойцов' },
   icicles: { name: 'Сосульки', desc: 'с потолков над бойцами падают сосульки' },
   meteors: { name: 'Метеориты', desc: 'метеоритный дождь наискосок' },
+  storm: { name: 'Гроза', desc: 'молния бьёт в вершину башни и выбивает кусок' },
+  gravity: { name: 'Скачок гравитации', desc: 'на ход тяжесть слабеет — всё летит выше' },
 };
 
 /** Аффиксы по виду башни, если уровень не задал свои. */
@@ -45,7 +55,7 @@ const LAVA_BOMB = new Weapon({
   explosion: { radius: 34, damageRadius: 64, damage: 24, knockback: 260, shake: 0.008 },
 });
 const METEOR = new Weapon({
-  id: 'rock', name: 'Метеорит', color: 0x9a8a7a,
+  id: 'meteor', name: 'Метеорит', color: 0x9a8a7a,
   projectile: { radius: 8, windScale: 0, gravityScale: 1 },
   explosion: { radius: 30, damageRadius: 60, damage: 22, knockback: 240, shake: 0.007 },
 });
@@ -55,6 +65,7 @@ const ICICLE = new Weapon({
   explosion: { radius: 18, damageRadius: 40, damage: 30, knockback: 160, shake: 0.004 },
 });
 const VENT_BLAST = { radius: 34, damageRadius: 62, damage: 38, knockback: 480, shake: 0.012 };
+const BOLT = { radius: 46, damageRadius: 72, damage: 45, knockback: 380, shake: 0.016 };
 
 /** Сколько фаз ждать до срабатывания: полный круг — каждая команда походила. */
 const ROUND = 2;
@@ -68,6 +79,49 @@ export class Affixes {
     this.pending = 0;     // снаряды, которые вот-вот вылетят
     this.phase = 0;
     this._iceTex();
+    this._meteorTex();
+  }
+
+  /** Эмодзи-картинка в мире (или null, если не загрузилась). */
+  _emoji(name, x, y, size, depth = DEPTH.FX) {
+    const s = this.scene;
+    const key = `emoji_${name}`;
+    if (!has(s, key)) return null;
+    return s.rig.world(s.add.image(x, y, key).setScale(size / 128).setDepth(depth));
+  }
+
+  /** Эмодзи поверх экрана (камера интерфейса, под кнопками). */
+  _emojiUi(name, x, y, size) {
+    const s = this.scene;
+    const key = `emoji_${name}`;
+    if (!has(s, key)) return null;
+    return s.rig.ui(s.add.image(x, y, key).setScale(size / 128).setScrollFactor(0).setDepth(DEPTH.HUD - 4));
+  }
+
+  /** Метка «сюда упадёт»: ⚠️ пульсирует (или круг, если эмодзи нет). */
+  _mark(x, y, color = 0xff4a2a) {
+    const s = this.scene;
+    const m = this._emoji('warning', x, y - 18, 34)
+      ?? s.rig.world(s.add.circle(x, y - 3, 16, color, 0.35).setStrokeStyle(3, 0xffd166, 0.9).setDepth(DEPTH.FX));
+    s.tweens.add({ targets: m, scale: m.scale * 0.7, alpha: 0.75, yoyo: true, repeat: -1, duration: 260 });
+    return m;
+  }
+
+  /** 💥 на месте удара. */
+  _boom(x, y, size = 70) {
+    const s = this.scene;
+    const b = this._emoji('boom', x, y, size * 0.4, DEPTH.FX + 1);
+    if (!b) return;
+    s.tweens.add({ targets: b, scale: (size / 128) * 1.3, alpha: 0, duration: 520, ease: 'Back.easeOut', onComplete: () => b.destroy() });
+  }
+
+  /** Комета ☄️ как снаряд: копия эмодзи под ключом shot_meteor. */
+  _meteorTex() {
+    const s = this.scene;
+    if (s.textures.exists('shot_meteor') || !has(s, 'emoji_comet')) return;
+    const t = s.textures.createCanvas('shot_meteor', 72, 72);
+    t.getContext().drawImage(s.textures.get('emoji_comet').getSourceImage(), 0, 0, 72, 72);
+    t.refresh();
   }
 
   get list() { return this.ids.map((id) => ({ id, ...AFFIXES[id] })); }
@@ -132,9 +186,12 @@ export class Affixes {
       .setOrigin(0.5).setStroke('#1a0a05', 5).setDepth(DEPTH.FX));
     s.tweens.add({ targets: g, alpha: 0.7, yoyo: true, repeat: -1, duration: 320 });
     const smoke = s.time.addEvent({
-      delay: 380, loop: true, callback: () => {
-        const p = s.rig.world(s.add.circle(x + (Math.random() - 0.5) * 20, y - 4, 7, 0x3a3030, 0.55).setDepth(DEPTH.WORM - 1));
-        s.tweens.add({ targets: p, y: y - 70, scale: 2.4, alpha: 0, duration: 1500, onComplete: () => p.destroy() });
+      delay: 420, loop: true, callback: () => {
+        const dx = (Math.random() - 0.5) * 24;
+        const p = this._emoji('dash', x + dx, y - 4, 22, DEPTH.WORM - 1)
+          ?? s.rig.world(s.add.circle(x + dx, y - 4, 7, 0x3a3030, 0.55).setDepth(DEPTH.WORM - 1));
+        p.setAngle(-90);
+        s.tweens.add({ targets: p, y: y - 80, scale: p.scale * 2.2, alpha: 0, duration: 1500, onComplete: () => p.destroy() });
       },
     });
     s.fx.banner('Под бойцом трещит пол — уходи!', '#ffb37a', 1600);
@@ -144,9 +201,20 @@ export class Affixes {
       tick: (left) => label.setText(`${left}`),
       fire: () => {
         cleanup();
-        // Столб огня — и взрыв снизу вверх
-        const col = s.rig.world(s.add.rectangle(x, y, 26, 10, 0xff7a2a, 0.9).setOrigin(0.5, 1).setDepth(DEPTH.FX));
-        s.tweens.add({ targets: col, displayHeight: 220, alpha: 0, duration: 650, ease: 'Quad.easeOut', onComplete: () => col.destroy() });
+        // Столб огня 🔥 — и взрыв снизу вверх
+        for (let i = 0; i < 6; i++) {
+          const f = this._emoji('fire', x + (i % 2 ? 6 : -6), y - 10, 40 - i * 3, DEPTH.FX);
+          if (!f) break;
+          s.tweens.add({
+            targets: f, y: y - 40 - i * 34, alpha: 0, scale: f.scale * 1.4,
+            delay: i * 45, duration: 700, ease: 'Quad.easeOut', onComplete: () => f.destroy(),
+          });
+        }
+        if (!has(s, 'emoji_fire')) {
+          const col = s.rig.world(s.add.rectangle(x, y, 26, 10, 0xff7a2a, 0.9).setOrigin(0.5, 1).setDepth(DEPTH.FX));
+          s.tweens.add({ targets: col, displayHeight: 220, alpha: 0, duration: 650, ease: 'Quad.easeOut', onComplete: () => col.destroy() });
+        }
+        this._boom(x, y - 10, 80);
         s.explode(x, y - 6, VENT_BLAST, null);
       },
     });
@@ -184,8 +252,7 @@ export class Affixes {
       const ice = s.rig.world(s.add.image(x, cy, 'shot_icicle').setOrigin(0.05, 0.5).setAngle(90).setDepth(DEPTH.WORM));
       s.tweens.add({ targets: ice, angle: { from: 86, to: 94 }, yoyo: true, repeat: -1, duration: 160 });
       const floor = s.terrain.surfaceYAt(x, cy + 20) ?? CFG.WATER_Y;
-      const mark = s.rig.world(s.add.circle(x, floor - 3, 13, 0x9fd8ff, 0.3).setStrokeStyle(3, 0xffffff, 0.8).setDepth(DEPTH.FX));
-      s.tweens.add({ targets: mark, scale: 0.6, yoyo: true, repeat: -1, duration: 300 });
+      const mark = this._mark(x, floor, 0x9fd8ff);
       this.timers.push({
         kind: 'icicle', left: ROUND,
         fire: () => {
@@ -207,12 +274,121 @@ export class Affixes {
     const power = 150 + r() * 90;
     s.fx.banner(dir > 0 ? 'Порыв метели → ' : ' ← Порыв метели', '#cfeaff', 1400);
     s.ambience?.gust(dir);
+    const [cw, ch] = canvasSize();
+    const face = this._emojiUi('windface', dir > 0 ? -80 : cw + 80, ch * 0.32, 150);
+    if (face) {
+      face.setFlipX(dir < 0);
+      s.tweens.add({ targets: face, x: dir > 0 ? cw + 120 : -120, duration: 1300, ease: 'Sine.easeInOut', onComplete: () => face.destroy() });
+    }
+    for (let i = 0; i < 6; i++) {
+      const f = this._emojiUi('snowflake', dir > 0 ? -40 : cw + 40, ch * (0.2 + i * 0.1), 40);
+      if (!f) break;
+      s.tweens.add({
+        targets: f, x: dir > 0 ? cw + 60 : -60, angle: dir * 540, delay: i * 90,
+        duration: 1100, onComplete: () => f.destroy(),
+      });
+    }
     for (const w of s.worms) {
       if (!w.alive || !w.grounded || w.hang || w.zip) continue;
       w.applyImpulse(dir * power, -90);
     }
     s.rig.shake(300, 0.003);
     return true;
+  }
+
+  // ------------------------------------------------------------ гроза
+
+  /** Самая высокая точка башни: x и верх тверди. */
+  _peak() {
+    const t = this.scene.terrain;
+    let best = null;
+    for (let x = 30; x < t.width - 30; x += 6) {
+      const y = t.surfaceYAt(x, 0);
+      if (y !== null && y < CFG.WATER_Y - 40 && (!best || y < best.y)) best = { x, y };
+    }
+    return best;
+  }
+
+  _storm(r, turn) {
+    if (turn % 3 !== 0 || this.timers.some((t) => t.kind === 'storm')) return false;
+    const s = this.scene;
+    const p = this._peak();
+    if (!p) return false;
+    // Туча 🌩️ над вершиной покачивается и мигает; на вершине — ⚠️
+    // Вершина бывает у самого верха мира — туча не выше, чем видно под панелью
+    const cy = Math.max(150, p.y - 110);
+    const cloud = this._emoji('storm', p.x, cy, 110, DEPTH.FX)
+      ?? s.rig.world(s.add.ellipse(p.x, cy, 120, 50, 0x3a4050, 0.9).setDepth(DEPTH.FX));
+    s.tweens.add({ targets: cloud, x: p.x + 10, yoyo: true, repeat: -1, duration: 900, ease: 'Sine.easeInOut' });
+    const flicker = s.time.addEvent({
+      delay: 1100, loop: true, callback: () => {
+        cloud.setTintFill?.(0xfff6a8);
+        s.time.delayedCall(70, () => cloud.clearTint?.());
+      },
+    });
+    const mark = this._mark(p.x, p.y);
+    s.fx.banner('Гроза собирается над вершиной', '#ffe27a', 1500);
+    this.timers.push({
+      kind: 'storm', left: ROUND,
+      fire: () => {
+        flicker.remove(); mark.destroy();
+        // Бьёт в то, что сейчас выше всех у этой точки
+        const y = s.terrain.surfaceYAt(p.x, 0) ?? p.y;
+        this._bolt(p.x, y);
+        s.tweens.add({ targets: cloud, alpha: 0, delay: 400, duration: 500, onComplete: () => cloud.destroy() });
+        s.explode(p.x, y + 6, BOLT, null);
+      },
+    });
+    return true;
+  }
+
+  /** Молния ⚡: зигзаг сверху вниз, вспышка экрана. */
+  _bolt(x, y) {
+    const s = this.scene;
+    const g = s.rig.world(s.add.graphics().setDepth(DEPTH.FX + 2));
+    const pts = [[x, y - 520]];
+    for (let i = 1; i < 9; i++) pts.push([x + (i % 2 ? 1 : -1) * (10 + (i * 13) % 17), y - 520 + i * 58]);
+    pts.push([x, y]);
+    for (const [w, c, a] of [[12, 0x8fd0ff, 0.45], [5, 0xfff6c8, 1]]) {
+      g.lineStyle(w, c, a).beginPath();
+      g.moveTo(pts[0][0], pts[0][1]);
+      for (const [px, py] of pts.slice(1)) g.lineTo(px, py);
+      g.strokePath();
+    }
+    s.tweens.add({ targets: g, alpha: 0, delay: 180, duration: 260, onComplete: () => g.destroy() });
+    const z = this._emoji('zap', x, y - 30, 30, DEPTH.FX + 3);
+    if (z) s.tweens.add({ targets: z, scale: 0.9, alpha: 0, duration: 600, ease: 'Back.easeOut', onComplete: () => z.destroy() });
+    const [cw, ch] = canvasSize();
+    const flash = s.rig.ui(s.add.rectangle(0, 0, cw, ch, 0xffffff, 0.55).setOrigin(0).setScrollFactor(0).setDepth(DEPTH.HUD - 3));
+    s.tweens.add({ targets: flash, alpha: 0, duration: 260, onComplete: () => flash.destroy() });
+    s.fx.sound?.('explosion', { radius: 60 });
+  }
+
+  // ------------------------------------------------------------ гравитация
+
+  _gravity(r, turn) {
+    if (turn % 3 !== 1 || r() > 0.8 || this.timers.some((t) => t.kind === 'gravity')) return false;
+    const s = this.scene;
+    s.setGravityMul?.(0.5);
+    s.fx.banner('Скачок гравитации — на этот ход всё летит выше!', '#c9b8ff', 1800);
+    const [cw, ch] = canvasSize();
+    const vortex = this._emojiUi('cyclone', cw / 2, ch * 0.3, 130);
+    if (vortex) {
+      vortex.setAlpha(0.8);
+      s.tweens.add({ targets: vortex, angle: 720, scale: vortex.scale * 1.6, alpha: 0, duration: 1600, onComplete: () => vortex.destroy() });
+    }
+    // ✨ всплывают вверх, пока тяжесть слабая
+    const sparkle = s.time.addEvent({
+      delay: 260, loop: true, callback: () => {
+        const sp = this._emojiUi('sparkles', Math.random() * cw, ch + 10, 26 + Math.random() * 16);
+        if (sp) s.tweens.add({ targets: sp, y: ch * 0.2, alpha: 0, duration: 2600, onComplete: () => sp.destroy() });
+      },
+    });
+    this.timers.push({
+      kind: 'gravity', left: 1,
+      fire: () => { sparkle.remove(); s.setGravityMul?.(1); s.fx.banner('Тяжесть вернулась', '#c9b8ff', 1100); },
+    });
+    return false;
   }
 
   // ------------------------------------------------------- падает с неба
@@ -237,9 +413,7 @@ export class Affixes {
       const target = alive[Math.floor(r() * alive.length)];
       const tx = Math.round(Math.max(30, Math.min(s.terrain.width - 30, target.x + (r() - 0.5) * 260)));
       const floor = s.terrain.surfaceYAt(tx, 0) ?? CFG.WATER_Y;
-      const mark = s.rig.world(s.add.circle(tx, floor - 3, 16, 0xff4a2a, 0.35)
-        .setStrokeStyle(3, 0xffd166, 0.9).setDepth(DEPTH.FX));
-      s.tweens.add({ targets: mark, scale: 0.6, alpha: 0.9, yoyo: true, repeat: -1, duration: 260 });
+      const mark = this._mark(tx, floor);
       const fall = 520;
       const vx = slant * fall * (r() < 0.5 ? -1 : 1);
       this.pending += 1;

@@ -47,9 +47,9 @@ export class Projectile {
       this.own = true;
       this.sprited = false;
       // Огненный шар нарисован с хвостом пламени — летит хвостом назад
-      this.pointed = ['bazooka', 'mole', 'mortar', 'airmissile', 'fireball', 'icicle'].includes(this.weapon.id);
-      // Авиаракета нарисована носом вниз-вправо, остальные — вправо
-      this.tilt = this.weapon.id === 'airmissile' ? -Math.PI / 4 : 0;
+      this.pointed = ['bazooka', 'mole', 'mortar', 'airmissile', 'fireball', 'icicle', 'meteor'].includes(this.weapon.id);
+      // Авиаракета нарисована носом вниз-вправо, комета ☄️ — вниз-влево, остальные — вправо
+      this.tilt = { airmissile: -Math.PI / 4, meteor: (-3 * Math.PI) / 4 }[this.weapon.id] ?? 0;
       const size = Math.max(14, (meta(key)?.frameWidth ?? p.radius * 4) * 1.35);
       this.view = s.add.image(this.x, this.y, own).setScale(fitScale(s, own, size));
       if (this.pointed) this.view.setRotation(Math.atan2(this.vy, this.vx) + this.tilt);

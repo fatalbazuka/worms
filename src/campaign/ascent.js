@@ -152,9 +152,11 @@ export const ASCENT = [
 /**
  * Аффиксы уровней (entities/Affixes.js): чем дальше в главу, тем их больше.
  * Не указано — по виду башни (метель на льду, извержение в лаве, метеориты
- * в космосе); Подножие — без аффиксов.
+ * в космосе); на Подножии — гроза, кроме первого боя и «Гири».
  */
 const LEVEL_AFFIXES = {
+  'up-2': ['storm'], 'up-4': ['storm'], 'up-5': ['storm'],
+  'up-17': ['gravity'], 'up-18': ['gravity'], 'up-19': ['meteors', 'gravity'], 'up-20': ['gravity', 'meteors'],
   'up-6': ['gust'], 'up-7': ['icicles'], 'up-8': ['gust'], 'up-9': ['gust', 'icicles'], 'up-10': ['icicles'],
   'up-11': ['eruption'], 'up-12': ['vent'], 'up-13': ['vent'], 'up-14': ['eruption', 'vent'], 'up-15': ['vent'],
 };
