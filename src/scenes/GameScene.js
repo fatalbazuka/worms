@@ -692,6 +692,8 @@ export default class GameScene extends Phaser.Scene {
       grass: has(this, `${biome.id}_grass`)
         ? this.textures.get(`${biome.id}_grass`).getSourceImage() : null,
     });
+    // Форма башни — от места: карнизы, вулкан, астероиды (shapes.js)
+    this.terrain.layout = this.variant?.layout ?? null;
     this.terrain.generate(this.shape, shapeRng(this.seed));
 
     // По одной Phaser-текстуре на чанк: после взрыва в GPU уходит

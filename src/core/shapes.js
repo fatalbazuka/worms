@@ -202,6 +202,11 @@ export const SHAPES = [
         ctx.fill();
       };
 
+      // Своя форма у места (вид башни задаёт terrain.layout): ледяные
+      // карнизы, вулкан, астероиды. Без неё — обычные этажи ниже
+      const layout = TOWER_LAYOUTS[terrain.layout];
+      if (layout) { layout({ ctx, W, H, r, rng, slab, spike }); return; }
+
       // Основание — остров: края уходят под воду
       const baseY = H - 245;
       const f = r(0.006, 0.011), ph = r(0, 6.3);
@@ -257,6 +262,139 @@ export const SHAPES = [
   },
 ];
 
+/** Основание башни — остров, края уходят под воду. width — доля ширины. */
+function baseIsland({ ctx, W, H, r }, { y = H - 245, width = 1, lift = 0 } = {}) {
+  const f = r(0.006, 0.011), ph = r(0, 6.3);
+  const x0 = (W * (1 - width)) / 2, x1 = W - x0;
+  ctx.beginPath();
+  ctx.moveTo(x0, H);
+  for (let x = x0; x <= x1; x += 6) {
+    const e = Math.min(1, Math.min(x - x0, x1 - x) / 90);
+    const k = e * e * (3 - 2 * e);
+    // lift — горб посередине (вулкан начинается с холма)
+    const hump = lift * Math.max(0, 1 - Math.abs(x - W / 2) / (W * 0.35)) ** 2;
+    const yy = y - hump + Math.sin(x * f + ph) * 22 + Math.sin(x * 0.031 + ph * 2) * 6;
+    ctx.lineTo(x, yy + (CFG.WATER_Y + 50 - yy) * (1 - k));
+  }
+  ctx.lineTo(x1, H);
+  ctx.closePath();
+  ctx.fill();
+}
+
+/**
+ * Формы башни по месту. Каждая рисует маску целиком; что встать есть где,
+ * проверяет tests/single.mjs (все бои кампании собираются).
+ */
+const TOWER_LAYOUTS = {
+  /**
+   * Ледник: карнизы растут поочерёдно от левой и правой стены, зигзагом
+   * вверх; снизу свисают сосульки. Посередине — пара ледяных глыб.
+   */
+  shelves(g) {
+    const { W, H, r, rng, slab, spike } = g;
+    const baseY = H - 245;
+    baseIsland(g, { y: baseY });
+    const n = 7, gap = (baseY - 150) / n;
+    for (let i = 1; i <= n; i++) {
+      const y = baseY - gap * i + r(-10, 10);
+      const left = i % 2 === 1;
+      const len = r(W * 0.5, W * 0.68);
+      const [x0, x1] = left ? [-20, len] : [W - len, W + 20];
+      const thick = r(40, 52);
+      slab(x0, x1, y, thick);
+      // Сосульки под карнизом — укрытие и зацеп
+      for (let k = 0; k < 3; k++) {
+        if (rng() < 0.35) continue;
+        const sx = left ? r(60, len - 50) : r(W - len + 50, W - 60);
+        spike(sx, y + thick - 6, y + thick + r(40, 85), r(26, 40));
+      }
+      // Ледяная глыба по другую сторону — не всегда
+      if (rng() < 0.55) {
+        const cx = left ? r(W * 0.72, W - 70) : r(70, W * 0.28);
+        slab(cx - r(45, 65), cx + r(45, 65), y + r(-60, -30), r(34, 42));
+      }
+    }
+  },
+
+  /**
+   * Жерло: посередине вулкан — конус с кратером, на склонах выступы; над
+   * кратером и по бокам парят обломки скал.
+   */
+  caldera(g) {
+    const { ctx, W, H, r, rng, slab } = g;
+    const baseY = H - 245;
+    baseIsland(g, { y: baseY, lift: 40 });
+    // Конус: от широкого подножия к кратеру
+    const peakY = baseY - r(560, 640), rimW = r(130, 170), footW = W * 0.82;
+    const cx = W / 2 + r(-30, 30);
+    ctx.beginPath();
+    ctx.moveTo(cx - footW / 2, baseY + 30);
+    for (let t = 0; t <= 1; t += 0.05) {
+      const x = cx - footW / 2 + (footW / 2 - rimW / 2) * t;
+      ctx.lineTo(x + Math.sin(t * 9) * 8, baseY + 30 - (baseY + 30 - peakY) * t ** 0.8);
+    }
+    // Кратер: впадина между краями
+    ctx.lineTo(cx - rimW / 2 + 18, peakY - 6);
+    ctx.quadraticCurveTo(cx, peakY + 46, cx + rimW / 2 - 18, peakY - 6);
+    for (let t = 1; t >= 0; t -= 0.05) {
+      const x = cx + footW / 2 - (footW / 2 - rimW / 2) * t;
+      ctx.lineTo(x - Math.sin(t * 9) * 8, baseY + 30 - (baseY + 30 - peakY) * t ** 0.8);
+    }
+    ctx.closePath();
+    ctx.fill();
+    // Выступы на склонах — по ним карабкаются
+    for (let i = 1; i <= 3; i++) {
+      const y = baseY - i * (baseY - peakY) / 4 + r(-12, 12);
+      const t = (baseY + 30 - y) / (baseY + 30 - peakY);
+      const half = footW / 2 - (footW / 2 - rimW / 2) * t ** 1.25;
+      const w = r(90, 130);
+      if (rng() < 0.85) slab(cx - half - w + 30, cx - half + 36, y, r(34, 44));
+      if (rng() < 0.85) slab(cx + half - 36, cx + half + w - 30, y + r(-30, 30), r(34, 44));
+    }
+    // Обломки над кратером и по бокам
+    const rocks = [[0.18, 0.2], [0.82, 0.22], [0.5, 0.1], [0.12, 0.42], [0.88, 0.45]];
+    for (const [fx, fy] of rocks) {
+      const x = W * fx + r(-30, 30), y = peakY * fy + 120 + r(-30, 30);
+      const half = r(55, 85);
+      slab(x - half, x + half, y, r(38, 50));
+    }
+  },
+
+  /**
+   * Космос: маленькое основание и россыпь астероидов — неровные «камни»
+   * разного размера рядами, со сдвигом, чтобы между ними было куда лететь.
+   */
+  asteroids(g) {
+    const { ctx, W, H, r, rng } = g;
+    const baseY = H - 245;
+    baseIsland(g, { y: baseY + 30, width: 0.62 });
+    const rock = (cx, cy, rad) => {
+      // Неровный круг с приплюснутым верхом — на нём можно стоять
+      ctx.beginPath();
+      const n = 22, ph = r(0, 6.3);
+      for (let i = 0; i <= n; i++) {
+        const a = (i / n) * Math.PI * 2;
+        let rr = rad * (1 + Math.sin(a * 3 + ph) * 0.12 + Math.sin(a * 5 + ph * 2) * 0.06);
+        let y = cy + Math.sin(a) * rr * 0.78;
+        if (Math.sin(a) < -0.55) y = cy - rad * 0.6;        // плоская макушка
+        ctx.lineTo(cx + Math.cos(a) * rr, y);
+      }
+      ctx.closePath();
+      ctx.fill();
+    };
+    const rows = 6, gap = (baseY - 160) / rows;
+    for (let i = 1; i <= rows; i++) {
+      const y = baseY - gap * i + r(-15, 15);
+      const count = rng() < 0.5 ? 2 : 3;
+      for (let k = 0; k < count; k++) {
+        const slot = W / count;
+        const cx = slot * (k + 0.5) + r(-slot * 0.2, slot * 0.2) + (i % 2 ? 30 : -30);
+        rock(Math.max(70, Math.min(W - 70, cx)), y, r(48, 82));
+      }
+    }
+  },
+};
+
 export const SHAPE_BY_ID = Object.fromEntries(SHAPES.map((s) => [s.id, s]));
 
 /**
@@ -270,12 +408,12 @@ export const SHAPE_BY_ID = Object.fromEntries(SHAPES.map((s) => [s.id, s]));
 export const TOWER_VARIANTS = [
   { id: 'classic', name: 'Башня', weight: 2, biome: null, rules: {}, intro: null },
   {
-    id: 'ice', name: 'Ледяная башня', weight: 1, biome: 'snow',
+    id: 'ice', name: 'Ледяная башня', weight: 1, biome: 'snow', layout: 'shelves',
     rules: { groundFriction: 0.9, landKeep: 0.85 },
     intro: 'Ледяная башня: скользко — от взрыва катишься далеко',
   },
   {
-    id: 'lava', name: 'Лавовая башня', weight: 1, biome: 'hell',
+    id: 'lava', name: 'Лавовая башня', weight: 1, biome: 'hell', layout: 'caldera',
     rules: { flood: { after: 5, step: 90 }, liquid: 'lava' },
     intro: 'Лавовая башня: лава пойдёт вверх уже с 6-го хода',
   },
@@ -287,7 +425,7 @@ export const TOWER_VARIANTS = [
   // Только для кампании (вес 0 — случайно не выпадает): тяжесть вдвое
   // слабее, трос тянет дальше, ветра нет, внизу — пустота вместо воды
   {
-    id: 'space', name: 'Космическая башня', weight: 0, biome: 'urban',
+    id: 'space', name: 'Космическая башня', weight: 0, biome: 'urban', layout: 'asteroids',
     rules: { gravity: 0.55, hookRange: 1.35, wind: 0, liquid: 'void', flood: null },
     intro: 'Космос: всё летит дальше, трос тянет дальше, внизу — пустота',
   },

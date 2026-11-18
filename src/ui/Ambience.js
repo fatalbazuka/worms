@@ -102,7 +102,9 @@ export class Ambience {
         speedX: { min: -20, max: 20 }, scale: { min: 0.5, max: 1.3 }, frequency: 35, alpha: { min: 0.6, max: 1 },
       }, (ctx) => { ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.arc(8, 8, 7, 0, Math.PI * 2); ctx.fill(); }, 16, 16);
     } else if (this.kind === 'lava') {
-      this._tex('amb-glow', 8, 256, (ctx, w, h) => {
+      // Сторона не степень двойки — WebGL не повторяет текстуру, и верхний
+      // край не смешивается с ярким нижним (иначе поперёк неба полоса)
+      this._tex('amb-glow', 6, 250, (ctx, w, h) => {
         const g = ctx.createLinearGradient(0, 0, 0, h);
         g.addColorStop(0, 'rgba(255,80,20,0)'); g.addColorStop(0.35, 'rgba(255,80,20,0.12)');
         g.addColorStop(1, 'rgba(255,90,20,0.9)');
