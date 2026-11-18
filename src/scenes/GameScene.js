@@ -32,6 +32,8 @@ import { leagueOf, nextLeague, toNextLeague } from '../platform/league.js';
 import { OffscreenMarkers } from '../ui/OffscreenMarkers.js';
 import { SKIN_BY_ID, rivalSkin } from '../core/skins.js';
 import { equippedSkin, syncCampaignBoxes } from '../platform/skins.js';
+import { recordBattle } from '../platform/daily.js';
+import { TASK_BY_ID } from '../core/daily.js';
 import { CameraRig } from '../ui/CameraRig.js';
 import { askText, closeOverlay } from '../ui/Overlay.js';
 import { isDesktop } from '../platform/device.js';
@@ -44,6 +46,8 @@ export default class GameScene extends Phaser.Scene {
     // и тогда игра ведёт себя как раньше: обычный хотсит на одном устройстве.
     this.match = this.registry.get('match') ?? HOTSEAT;
     this.overButtons = null;
+    // Счётчики боя для ежедневных заданий: только за свою команду
+    this.battleStats = { hits: 0, damage: 0, kills: 0, hooks: 0, crates: 0, grenadeHits: 0 };
     this.rules = this.match.rules ?? {};
     this.turnTime = this.rules.turnTime ?? CFG.TURN_TIME;
 
@@ -189,6 +193,34 @@ export default class GameScene extends Phaser.Scene {
     return SKIN_BY_ID[id].sheet;
   }
 
+  // ------------------------------------------------------------ задания
+
+  /** Сейчас ходит моя команда — то, что случится, засчитывается мне. */
+  _myStrike() {
+    return !this.replaying && !this.isBotTurn() && this.turn?.currentTeam === this.myTeamIndex;
+  }
+
+  /** Попадание по чужому бойцу в свой ход. */
+  _countHit(worm, dmg) {
+    if (!this._myStrike() || worm.team === this.myTeamIndex) return;
+    this.battleStats.hits++;
+    this.battleStats.damage += dmg;
+    if (this.turn.weapon?.id === 'grenade') this.battleStats.grenadeHits++;
+  }
+
+  /**
+   * Итог боя — в задания и кошелёк. Вдвоём на одном телефоне не считаем:
+   * там обе стороны свои, и задания выполнялись бы игрой с самим собой.
+   * @returns {{coins:number, done:string[]}|null}
+   */
+  _recordDaily(won) {
+    const solo = this.bots?.some(Boolean) || this.net?.connected;
+    if (!solo) return null;
+    return recordBattle({
+      ...this.battleStats, battles: 1, wins: won ? 1 : 0, online: this.net?.connected ? 1 : 0,
+    }, won);
+  }
+
   // ------------------------------------------------------------------ крюк
 
   /**
@@ -232,6 +264,7 @@ export default class GameScene extends Phaser.Scene {
       return false;
     }
     this.hooksLeft--;
+    if (this._myStrike()) this.battleStats.hooks++;
     if (!this.isBotTurn()) this._countHookUse();
     w.startZip(a.x, a.y);
     w.setActiveMarker(false);
@@ -1084,6 +1117,7 @@ export default class GameScene extends Phaser.Scene {
 
   _takeCrate(crate, worm) {
     crate.destroy();
+    if (worm.team === this.myTeamIndex) this.battleStats.crates++;
     if (crate.kind === 'health') {
       worm.heal(CFG.CRATE_HEALTH);
       this.fx.pickup(crate.x, crate.y, `+${CFG.CRATE_HEALTH} здоровья`, '#7de07d');
@@ -1243,6 +1277,7 @@ export default class GameScene extends Phaser.Scene {
 
       w.damage(dmg, 'взрыв');
       if (dmg > 0) felt = Math.max(felt, this.isLocalTeam(w.team) ? 2 : 1);
+      if (dmg > 0) this._countHit(w, dmg);
     }
     // Отдача в руку: задели своего — сильно, чужого — коротко
     if (felt === 2) haptic('hurt');
@@ -1276,6 +1311,7 @@ export default class GameScene extends Phaser.Scene {
   onWormDied(worm) {
     // Добивание — главное событие хода: мир замирает на полсекунды
     if (!this.replaying) this._slow = { until: performance.now() + 520, k: 0.28 };
+    if (this._myStrike() && worm.team !== this.myTeamIndex) this.battleStats.kills++;
     this.fx.explosion(worm.x, worm.centerY, 26);
     // Тоже по целым: у соперника гибель приходит снимком с целыми координатами
     this.terrain.destroyCircle(Math.round(worm.x), Math.round(worm.centerY), 22);
@@ -1430,6 +1466,23 @@ export default class GameScene extends Phaser.Scene {
     this.rig.ui(sub);
 
     this.gameOverUi = [shade, title, sub];
+
+    // Монеты за бой и выполненные этим боем задания — над заголовком
+    const daily = this._recordDaily(winner >= 0 && winner === mine);
+    if (daily && (daily.coins || daily.done.length)) {
+      const parts = [];
+      if (daily.coins) parts.push(`+${daily.coins} монет`);
+      if (daily.done.length) {
+        parts.push(daily.done.length === 1
+          ? `задание выполнено: ${TASK_BY_ID[daily.done[0]].text.toLowerCase()}`
+          : `выполнено заданий: ${daily.done.length}`);
+      }
+      const line = this.rig.ui(this.add.text(CFG.VIEW_W / 2, CFG.VIEW_H / 2 - 96, parts.join(' · '),
+        font(22, 800, '#ffe27a')).setOrigin(0.5).setScrollFactor(0).setDepth(DEPTH.HUD + 11)
+        .setStroke('#10131a', 5).setScale(0.4));
+      this.tweens.add({ targets: line, scale: 1, duration: 380, delay: 250, ease: 'Back.easeOut' });
+      this.gameOverUi.push(line);
+    }
 
     // В сетевом бою тапом никуда не уходим: там есть выбор — реванш или
     // меню, — и случайное касание не должно решать за игрока.

@@ -228,6 +228,16 @@ const ICONS = {
     ctx.moveTo(s * 0.68, s * 0.28); ctx.quadraticCurveTo(s * 0.82, s * 0.3, s * 0.7, s * 0.44);
     ctx.stroke();
   },
+  // Список с галочкой: задания
+  tasks: (ctx, s) => {
+    stroke(ctx, s);
+    ctx.beginPath();
+    ctx.moveTo(s * 0.2, s * 0.32); ctx.lineTo(s * 0.28, s * 0.4); ctx.lineTo(s * 0.4, s * 0.24);
+    ctx.moveTo(s * 0.5, s * 0.32); ctx.lineTo(s * 0.8, s * 0.32);
+    ctx.moveTo(s * 0.2, s * 0.68); ctx.lineTo(s * 0.4, s * 0.68);
+    ctx.moveTo(s * 0.5, s * 0.68); ctx.lineTo(s * 0.8, s * 0.68);
+    ctx.stroke();
+  },
   // Пьедестал: рейтинг
   podium: (ctx, s) => {
     ctx.fillStyle = UI.text;

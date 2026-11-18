@@ -7,7 +7,7 @@
  * останутся теми же снаружи.
  */
 import {
-  SKIN_BY_ID, DEFAULT_SKIN, normalize, claimBoxes, openBox, equip,
+  SKINS, SKIN_BY_ID, DEFAULT_SKIN, normalize, claimBoxes, openBox, equip,
 } from '../core/skins.js';
 import { MISSIONS, loadProgress } from '../campaign/missions.js';
 
@@ -36,6 +36,17 @@ export function openSkinBox() {
   const res = openBox(load());
   save(res.state);
   return { skin: res.skin, full: res.full };
+}
+
+/** Добавить коробок (серия дней, покупка за монеты). */
+export function grantBoxes(n = 1) {
+  const st = load();
+  return save({ ...st, boxes: Math.min(99, st.boxes + n) });
+}
+
+/** Собраны ли все скины — тогда коробку покупать незачем. */
+export function allSkinsOwned() {
+  return load().owned.length >= SKINS.length;
 }
 
 /**

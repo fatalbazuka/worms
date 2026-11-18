@@ -26,6 +26,12 @@ import { isDesktop, setUiMode } from '../platform/device.js';
 import { sfx } from '../audio/Sfx.js';
 import { SKINS, SKIN_BY_ID, rewardMissions } from '../core/skins.js';
 import { skinState, equippedSkin, equipSkin, openSkinBox, syncCampaignBoxes } from '../platform/skins.js';
+import {
+  TASK_BY_ID, BOX_PRICE, STREAK_COINS, STREAK_BOX_DAY, streakReady, dayKey, prevDay as prevDayOf,
+} from '../core/daily.js';
+import {
+  dailyState, rewardWaiting, claimDailyTask, claimDailyStreak, buyBox,
+} from '../platform/daily.js';
 import { fitScale } from '../core/assets.js';
 
 /**
@@ -42,6 +48,14 @@ import { fitScale } from '../core/assets.js';
  * Кнопки складываются в this.buttons — по ним ходит тест, чтобы не считать
  * раскладку у себя заново.
  */
+/** Русское склонение: 1 день, 2 дня, 5 дней. */
+function plural(n, one, few, many) {
+  const m10 = n % 10, m100 = n % 100;
+  if (m10 === 1 && m100 !== 11) return one;
+  if (m10 >= 2 && m10 <= 4 && (m100 < 12 || m100 > 14)) return few;
+  return many;
+}
+
 /** Через сколько секунд поиска без соперника предлагается бой с ботом. */
 const FALLBACK_AFTER = 20;
 
@@ -325,11 +339,12 @@ export default class MenuScene extends Phaser.Scene {
     this.items.push(this.add.rectangle(0, y0, W, 2, 0xffffff, 0.09).setOrigin(0, 0));
     const tabs = [
       ['battle', 'Бой', 'battle', () => this.showRoot()],
+      ['tasks', 'Задания', 'tasks', () => this.showTasks()],
       ['tournaments', 'Турниры', 'trophy', () => this.openTournaments()],
       ['top', 'Топ', 'podium', () => { this.topFrom = 'tab'; this.showTop(); }],
       ['account', 'Профиль', 'profile', () => this.openAccount()],
     ];
-    const span = Math.min(W, 880);
+    const span = Math.min(W, 960);
     const cell = span / tabs.length;
     const x0 = (W - span) / 2;
     tabs.forEach(([key, label, icon, onTap], i) => {
@@ -340,7 +355,12 @@ export default class MenuScene extends Phaser.Scene {
         .setAlpha(on ? 1 : 0.6);
       if (on) glyph.setTint(0xffc247);
       const text = this.add.text(x, y0 + h * 0.76, label,
-        font(this.portrait ? 20 : 18, 800, on ? UI.accent : UI.textDim)).setOrigin(0.5);
+        font(this.portrait ? 18 : 18, 800, on ? UI.accent : UI.textDim)).setOrigin(0.5);
+      // Есть что забрать — красная точка на «Заданиях»
+      if (key === 'tasks' && !on && rewardWaiting()) {
+        this.items.push(this.add.circle(x + size * 0.55, y0 + h * 0.36 - size * 0.45, 9, 0xff4d4d)
+          .setStrokeStyle(3, 0x0b1018));
+      }
       const zone = this.add.zone(x, y0 + h / 2, cell, h).setInteractive({ useHandCursor: true });
       zone.on('pointerdown', () => { glyph.setScale(0.9); haptic('tap'); });
       zone.on('pointerout', () => glyph.setScale(1));
@@ -398,6 +418,7 @@ export default class MenuScene extends Phaser.Scene {
     this.items.push(this.add.text(W - pad - 76, top + 18,
       `${me.rating}${me.rank ? ` · место ${me.rank}` : ''}`, font(28, 800, UI.accent)).setOrigin(1, 0));
     this._leagueBar(cx, top + 84, me.rating, Math.min(W - pad * 2, 760), 18);
+    this._coinBadge(W - pad - 76, top + 156, true);
 
     // Редкое — мелкими плашками под лигой: иконка на экран Домой (пока
     // Telegram говорит, что её нет) и схема управления (вне Telegram)
@@ -441,6 +462,12 @@ export default class MenuScene extends Phaser.Scene {
     // --- твой боец ---
     const areaTop = top + 196;
     const areaH = areaBottom - areaTop;
+    // Первый вход за день — бонус серии, одним окном поверх экрана
+    if (streakReady(dailyState(), dayKey()) && !this.streakShown) {
+      this.streakShown = true;
+      this.time.delayedCall(350, () => { if (this.section === this.showRoot) this._streakPopup(); });
+    }
+
     const sheet = this.textures.exists(equippedSkin().sheet) ? equippedSkin().sheet : 'smiley';
     if (areaH > 110 && this.textures.exists(sheet)) {
       const k = Phaser.Math.Clamp(areaH / 175, 1, 2.8);
@@ -474,6 +501,179 @@ export default class MenuScene extends Phaser.Scene {
     }
   }
 
+  // ------------------------------------------------------------- монеты
+
+  /** Значок монеты, нарисованный один раз. */
+  _coinTexture() {
+    const key = 'menu-coin';
+    if (!this.textures.exists(key)) {
+      const tex = this.textures.createCanvas(key, 44, 44);
+      const c = tex.getContext();
+      c.fillStyle = '#b8860b'; c.beginPath(); c.arc(22, 23, 19, 0, Math.PI * 2); c.fill();
+      c.fillStyle = '#ffd23f'; c.beginPath(); c.arc(22, 21, 18, 0, Math.PI * 2); c.fill();
+      c.strokeStyle = '#e0a800'; c.lineWidth = 3; c.beginPath(); c.arc(22, 21, 12, 0, Math.PI * 2); c.stroke();
+      c.fillStyle = 'rgba(255,255,255,0.65)'; c.beginPath(); c.arc(15, 14, 4, 0, Math.PI * 2); c.fill();
+      tex.refresh();
+    }
+    return key;
+  }
+
+  /** Монеты игрока: значок и число. right — прижать к правому краю по x. */
+  _coinBadge(x, y, right = false) {
+    const n = dailyState().coins;
+    const t = this.add.text(x, y, `${n}`, font(28, 800, '#ffe27a')).setOrigin(right ? 1 : 0, 0.5);
+    const icon = this.add.image(right ? x - t.width - 24 : x - 26, y, this._coinTexture()).setScale(0.9);
+    this.items.push(icon, t);
+    return { icon, text: t };
+  }
+
+  /**
+   * Бонус серии дней: окно поверх главного экрана. Дни серии кружками,
+   * сегодняшний подсвечен; на седьмом — коробка.
+   */
+  _streakPopup() {
+    const W = this.W, H = this.H, cx = W / 2;
+    const st = dailyState();
+    const yesterday = st.streakDay && st.streakDay === prevDayOf(dayKey());
+    const day = yesterday ? st.streak + 1 : 1;
+    const coins = STREAK_COINS[Math.min(day, STREAK_COINS.length) - 1];
+    const box = day % STREAK_BOX_DAY === 0;
+    const cy = this.topY(H * 0.42);
+    const layer = [];
+    const add = (o) => { o.setDepth(50); layer.push(o); this.items.push(o); return o; };
+    const shade = add(this.add.rectangle(0, this.topY(0), W, H, 0x05070c, 0.78).setOrigin(0, 0));
+    shade.setInteractive();
+    const pw = Math.min(W - 48, 640), ph = 420;
+    ensureButton(this, `menu-streak-${pw}x${ph}`, pw, ph, 'normal');
+    add(this.add.image(cx, cy, `menu-streak-${pw}x${ph}`));
+    add(this.add.text(cx, cy - 160, `День ${day} подряд`, font(36, 800, UI.accent)).setOrigin(0.5));
+    add(this.add.text(cx, cy - 116, 'заходи каждый день — награда растёт', font(18, 700, UI.textDim)).setOrigin(0.5));
+    // Семь кружков недели
+    const n = STREAK_BOX_DAY, step = Math.min(78, (pw - 60) / n);
+    const inWeek = ((day - 1) % n) + 1;
+    for (let i = 1; i <= n; i++) {
+      const x = cx + (i - (n + 1) / 2) * step, y = cy - 40;
+      const past = i < inWeek, now = i === inWeek;
+      add(this.add.circle(x, y, now ? 30 : 24, now ? 0xffc247 : past ? 0x4f7a3a : 0x22293a)
+        .setStrokeStyle(3, now ? 0xffffff : 0x0b1018));
+      if (i === n && this.textures.exists('shot_crate_weapon')) {
+        add(this.add.image(x, y, 'shot_crate_weapon').setScale(fitScale(this, 'shot_crate_weapon', now ? 40 : 32)));
+      } else {
+        add(this.add.text(x, y, past ? '✓' : `${STREAK_COINS[i - 1]}`, font(now ? 20 : 16, 800, now ? '#2a1c06' : UI.text)).setOrigin(0.5));
+      }
+    }
+    add(this.add.image(cx - 70, cy + 52, this._coinTexture()).setScale(1.3));
+    add(this.add.text(cx - 40, cy + 52, `+${coins}${box ? '  и коробка!' : ''}`, font(34, 800, '#ffe27a')).setOrigin(0, 0.5));
+    const before = this.items.length;
+    this._button('streak-claim', cx, cy + 140, 'Забрать', '', () => {
+      const res = claimDailyStreak();
+      haptic('win');
+      sfx.play('pickup');
+      for (const o of layer) o.destroy();
+      if (res) this._coinBurst(cx, cy);
+      this.showRoot();
+    }, { w: 300, h: 80, variant: 'primary', titleSize: 30 });
+    for (const o of this.items.slice(before)) o.setDepth(51);
+  }
+
+  /** Россыпь монет — награда должна быть видна, а не только посчитана. */
+  _coinBurst(x, y) {
+    const em = this.add.particles(x, y, this._coinTexture(), {
+      speed: { min: 180, max: 460 }, angle: { min: 200, max: 340 }, gravityY: 900,
+      lifespan: { min: 700, max: 1100 }, scale: { start: 0.8, end: 0.5 }, rotate: { min: -180, max: 180 },
+      emitting: false,
+    }).setDepth(60);
+    em.explode(18);
+    this.time.delayedCall(1300, () => em.destroy());
+  }
+
+  // ------------------------------------------------------------ задания
+
+  /**
+   * Задания дня: три карточки с прогрессом, монеты за каждое. Выполненное
+   * забирается кнопкой — с россыпью монет. Ниже — серия дней и коробка за
+   * монеты.
+   */
+  showTasks() {
+    this.section = this.showTasks;
+    this._clear();
+    const st = dailyState();
+    this._title('Задания', 'обновляются каждый день в полночь');
+    const W = this.W, cx = W / 2;
+    this._coinBadge(W - 40, 72, true);
+
+    const cw = Math.min(W - 48, 660), ch = 132;
+    let y = 196;
+    st.tasks.forEach((t) => {
+      const def = TASK_BY_ID[t.id];
+      const done = t.progress >= def.goal;
+      const variant = t.claimed ? 'normal' : done ? 'active' : 'normal';
+      const key = `menu-task-${cw}x${ch}-${variant}`;
+      ensureButton(this, key, cw, ch, variant);
+      this.items.push(this.add.image(cx, y + ch / 2, key).setAlpha(t.claimed ? 0.5 : 1));
+      const left = cx - cw / 2 + 24;
+      const ink = done && !t.claimed ? '#2a1c06' : UI.text;
+      this.items.push(this.add.text(left, y + 20, def.text, font(25, 800, ink)).setOrigin(0, 0));
+      // Полоса прогресса и число
+      const bw = cw - 230, by = y + 84;
+      this.items.push(this.add.rectangle(left, by, bw, 16, 0x0b1220, 0.85).setOrigin(0, 0.5));
+      const k = Math.min(1, t.progress / def.goal);
+      if (k > 0) this.items.push(this.add.rectangle(left, by, Math.max(6, bw * k), 16, done ? 0x6ee36e : 0xffc247).setOrigin(0, 0.5));
+      this.items.push(this.add.text(left + bw + 12, by, `${t.progress}/${def.goal}`, font(19, 800, ink)).setOrigin(0, 0.5));
+      // Справа — награда или кнопка «Забрать»
+      const rx = cx + cw / 2 - 80;
+      if (done && !t.claimed) {
+        const before = this.items.length;
+        this._button(`task-${t.id}`, rx, y + ch / 2, `+${def.coins}`, 'забрать', () => {
+          const got = claimDailyTask(t.id);
+          if (got) { haptic('win'); sfx.play('pickup'); this._coinBurst(rx, y + ch / 2); }
+          this.showTasks();
+        }, { w: 140, h: 84, variant: 'primary', titleSize: 26, hintSize: 16 });
+        for (const o of this.items.slice(before)) o.setDepth(2);
+      } else {
+        this.items.push(this.add.image(rx - 34, y + ch / 2, this._coinTexture()).setScale(0.8).setAlpha(t.claimed ? 0.5 : 1));
+        this.items.push(this.add.text(rx - 12, y + ch / 2, t.claimed ? '✓' : `${def.coins}`,
+          font(26, 800, t.claimed ? '#8ef0a0' : '#ffe27a')).setOrigin(0, 0.5));
+      }
+      y += ch + 16;
+    });
+
+    // Серия дней
+    y += 10;
+    this.items.push(this.add.text(cx, y, st.streak > 0
+      ? `Серия: ${st.streak} ${plural(st.streak, 'день', 'дня', 'дней')} подряд · на ${STREAK_BOX_DAY}-й день — коробка`
+      : `Заходи каждый день: на ${STREAK_BOX_DAY}-й день подряд — коробка`,
+      font(19, 700, UI.textDim)).setOrigin(0.5, 0).setAlign('center').setWordWrapWidth(cw));
+
+    // Коробка за монеты
+    y += 76;
+    const can = st.coins >= BOX_PRICE;
+    this._button('buy-box', cx, y, `Коробка со скином · ${BOX_PRICE}`, can ? 'купить за монеты' : `не хватает ${BOX_PRICE - st.coins}`,
+      () => this._buyBox(), { w: Math.min(cw, 460), h: 90, titleSize: 25, hintSize: 17, enabled: can });
+    if (this.textures.exists('shot_crate_weapon')) {
+      this.items.push(this.add.image(cx - Math.min(cw, 460) / 2 + 40, y, 'shot_crate_weapon')
+        .setScale(fitScale(this, 'shot_crate_weapon', 52)).setAlpha(can ? 1 : 0.5));
+    }
+    this._tabs('tasks');
+  }
+
+  /** Купить коробку и сразу перейти к скинам, где её можно открыть. */
+  _buyBox() {
+    const res = buyBox();
+    if (res === 'ok') {
+      haptic('win');
+      sfx.play('pickup');
+      this.showSkins();
+      return;
+    }
+    haptic('warn');
+    this.showTasks();
+    const msg = res === 'full' ? 'все скины уже собраны' : 'не хватает монет';
+    const t = this.add.text(this.W / 2, 150, msg, font(22, 800, '#ff9a9a')).setOrigin(0.5);
+    this.items.push(t);
+    this.tweens.add({ targets: t, alpha: 0, delay: 1400, duration: 400 });
+  }
+
   // --------------------------------------------------------------- скины
 
   /**
@@ -497,10 +697,16 @@ export default class MenuScene extends Phaser.Scene {
     }
     this.items.push(this.add.text(cx - 140, boxY - 24, `Коробок: ${st.boxes}`, font(24, 800)).setOrigin(0, 0));
     this.items.push(this.add.text(cx - 140, boxY + 8,
-      full ? 'все скины собраны' : st.boxes > 0 ? 'внутри — случайный скин' : 'дают за миссии кампании',
+      full ? 'все скины собраны' : st.boxes > 0 ? 'внутри — случайный скин' : 'за кампанию, серию дней и монеты',
       font(17, 700, UI.textDim)).setOrigin(0, 0));
-    this._button('open-box', cx + 190, boxY, 'Открыть', '', () => this._openBox(),
-      { w: 170, h: 64, variant: 'primary', enabled: st.boxes > 0 && !full, titleSize: 24 });
+    if (st.boxes > 0 || full) {
+      this._button('open-box', cx + 190, boxY, 'Открыть', '', () => this._openBox(),
+        { w: 170, h: 64, variant: 'primary', enabled: st.boxes > 0 && !full, titleSize: 24 });
+    } else {
+      // Коробок нет — можно купить за монеты
+      this._button('buy-box', cx + 190, boxY, `Купить · ${BOX_PRICE}`, '', () => this._buyBox(),
+        { w: 190, h: 64, enabled: dailyState().coins >= BOX_PRICE, titleSize: 22 });
+    }
 
     // --- сетка скинов ---
     const cols = this.portrait ? 4 : 8;
