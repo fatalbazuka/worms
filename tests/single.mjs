@@ -448,7 +448,7 @@ const envEvent = async (id) => {
     s.hud.setHelp(false);
     const before = s.worms.map((w) => w.x);
     let turn = 0;
-    for (let t = 2; t <= 40 && !turn; t++) if (s.ambience.run(t)) turn = t;
+    for (let t = 2; t <= 40 && !turn; t++) if (s.affixes.run(t)) turn = t;
     return { turn, before };
   });
 };
@@ -461,6 +461,29 @@ const erupt = await envEvent('up-11');
 const bombs = await page.waitForFunction(() => window.__WORMS__.scene.getScene('Game').projectiles
   .filter((p) => p.weapon.id === 'fireball').length, null, { timeout: 5000 }).then((h) => h.jsonValue()).catch(() => 0);
 check('Жерло: извержение — с неба падают лавовые бомбы', erupt.turn > 0 && bombs >= 1, `ход ${erupt.turn}, бомб ${bombs}`);
+// Жерло под ногами: трещина под бойцом, через круг ходов — извержение
+const vent = await envEvent('up-12');
+const ventFire = await page.evaluate(() => {
+  const s = window.__WORMS__.scene.getScene('Game');
+  const t = s.affixes.timers.find((x) => x.kind === 'vent');
+  if (!t) return null;
+  const hp = s.worms.reduce((a, w) => a + w.health, 0);
+  s.affixes.run(100); s.affixes.run(101);   // две фазы — круг ходов
+  return { left: s.affixes.timers.filter((x) => x.kind === 'vent').length, hpBefore: hp };
+});
+await page.waitForTimeout(700);
+const ventHp = await page.evaluate(() => window.__WORMS__.scene.getScene('Game').worms.reduce((a, w) => a + w.health, 0));
+check('жерло под ногами: трещина под бойцом, через круг ходов извергается и ранит',
+  vent.turn > 0 && ventFire && ventHp < ventFire.hpBefore, JSON.stringify({ turn: vent.turn, ...ventFire, ventHp }));
+// Сосульки: растут под потолком над бойцами и через круг падают
+const ice = await envEvent('up-7');
+const fell = await page.evaluate(() => {
+  const s = window.__WORMS__.scene.getScene('Game');
+  const n = s.affixes.timers.filter((x) => x.kind === 'icicle').length;
+  s.affixes.run(100); s.affixes.run(101);
+  return { n, falling: s.projectiles.filter((p) => p.weapon.id === 'icicle').length };
+});
+check('сосульки: растут над бойцами и через круг падают', ice.turn > 0 && fell.n > 0 && fell.falling === fell.n, JSON.stringify({ turn: ice.turn, ...fell }));
 
 // Башня дня: одна и та же башня от даты, бойцы и монстры на этажах
 await page.evaluate(async () => {

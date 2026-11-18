@@ -6,7 +6,8 @@ import {
   quickMatch, campaignMatch, onlineMatch, towerMatch, fallbackMatch, challengeMatch, ascentMatch, dailyMatch, QUICK_OPTIONS,
 } from '../core/match.js';
 import { CHALLENGES, challengeOpen, totalStars, STAR_COINS } from '../campaign/challenges.js';
-import { ASCENT, CHAPTERS, ascentOpen, bossName } from '../campaign/ascent.js';
+import { ASCENT, CHAPTERS, ascentOpen, bossName, chapterOf } from '../campaign/ascent.js';
+import { AFFIXES, DEFAULT_AFFIXES } from '../entities/Affixes.js';
 import { ascentDone } from '../platform/ascent.js';
 import { challengeStars } from '../platform/challenges.js';
 import { onboardStage } from '../platform/onboard.js';
@@ -1141,7 +1142,10 @@ export default class MenuScene extends Phaser.Scene {
     const sides = m.teams.length > 1
       ? `${m.teams[0].worms} против ${m.teams[1].worms}`
       : `${m.teams[0].worms} бойца против босса`;
-    const t = this.add.text(cx, 176, [m.brief, '', sides, parts.join(' · ')].join('\n'), font(this.fs(16), 700))
+    // Аффиксы уровня — что здесь особенного
+    const affixes = (m.affixes ?? DEFAULT_AFFIXES[chapterOf(m).variant] ?? []).map((id) => AFFIXES[id]).filter(Boolean);
+    const affixLines = affixes.length ? ['', ...affixes.map((a) => `◆ ${a.name}: ${a.desc}`)] : [];
+    const t = this.add.text(cx, 176, [m.brief, '', sides, parts.join(' · '), ...affixLines].join('\n'), font(this.fs(16), 700))
       .setOrigin(0.5, 0).setAlign('center').setWordWrapWidth(w - 40).setLineSpacing(6);
     this.items.push(t);
     this._button('start', cx, 176 + t.height + 90, 'В бой', '', () => this.start(ascentMatch(m.id)),

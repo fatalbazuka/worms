@@ -47,7 +47,7 @@ export class Projectile {
       this.own = true;
       this.sprited = false;
       // Огненный шар нарисован с хвостом пламени — летит хвостом назад
-      this.pointed = ['bazooka', 'mole', 'mortar', 'airmissile', 'fireball'].includes(this.weapon.id);
+      this.pointed = ['bazooka', 'mole', 'mortar', 'airmissile', 'fireball', 'icicle'].includes(this.weapon.id);
       // Авиаракета нарисована носом вниз-вправо, остальные — вправо
       this.tilt = this.weapon.id === 'airmissile' ? -Math.PI / 4 : 0;
       const size = Math.max(14, (meta(key)?.frameWidth ?? p.radius * 4) * 1.35);

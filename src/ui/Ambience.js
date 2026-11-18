@@ -1,45 +1,19 @@
 import { CFG, DEPTH, canvasSize } from '../config.js';
 import { subRng } from '../core/rng.js';
-import { Projectile } from '../entities/Projectile.js';
-import { Weapon } from '../weapons/Weapon.js';
 
 /**
- * Атмосфера вида башни: дальний фон, частицы в воздухе и события между
- * ходами.
+ * Атмосфера вида башни: дальний фон и частицы в воздухе — только для
+ * красоты, у всех и везде (и в сетевой игре).
  *
- *   classic — холмы в два слоя и птицы; падают листья. Без событий:
- *             первая глава спокойная;
- *   ice     — северное сияние и ледяные пики; метель по ветру. Событие —
- *             порыв метели: толкает всех стоящих бойцов по ветру (на льду
- *             они ещё и скользят);
- *   lava    — зарево снизу и столбы дыма; искры летят вверх. Событие —
- *             извержение: с неба падают лавовые бомбы;
- *   wind    — облака несутся по ветру; пыль. Без событий;
- *   space   — туманности; падающие звёзды. Событие — метеоритный дождь.
+ *   classic — холмы в два слоя и птицы; падают листья;
+ *   ice     — северное сияние и ледяные пики; метель по ветру;
+ *   lava    — зарево снизу и дым; искры летят вверх;
+ *   wind    — пыль несётся по ветру;
+ *   space   — туманности и падающие звёзды.
  *
- * Фон и частицы — для красоты, везде. События меняют бой, поэтому только
- * без сети (кампания, башня дня, бой с ботом): в сетевой партии их пришлось
- * бы передавать сопернику. Случайность событий — от зерна и номера хода.
- * Куда упадёт бомба или метеорит, видно заранее: на месте падения мигает
- * метка — увернуться можно, если успеть.
+ * Правила, которые меняют бой (метель толкает, извержение, сосульки…), —
+ * в entities/Affixes.js.
  */
-
-const LAVA_BOMB = new Weapon({
-  id: 'fireball', name: 'Лавовая бомба', color: 0xff7a2a,
-  projectile: { radius: 9, windScale: 0, gravityScale: 1 },
-  explosion: { radius: 34, damageRadius: 64, damage: 24, knockback: 260, shake: 0.008 },
-});
-const METEOR = new Weapon({
-  id: 'rock', name: 'Метеорит', color: 0x9a8a7a,
-  projectile: { radius: 8, windScale: 0, gravityScale: 1 },
-  explosion: { radius: 30, damageRadius: 60, damage: 22, knockback: 240, shake: 0.007 },
-});
-
-const EVENTS = {
-  ice: { every: 2, chance: 0.6 },     // порыв метели
-  lava: { every: 3, chance: 1 },      // извержение
-  space: { every: 3, chance: 1 },     // метеоритный дождь
-};
 
 export class Ambience {
   constructor(scene, variantId = 'classic', seed = 0) {
@@ -47,7 +21,6 @@ export class Ambience {
     this.kind = variantId;
     this.seed = seed >>> 0;
     this.items = [];
-    this.marks = [];
     this._build();
   }
 
@@ -230,83 +203,15 @@ export class Ambience {
     if (this.dust) this.dust.speedX = 200 + Math.abs(wind);
   }
 
-  // ------------------------------------------------------------ события
-
-  /**
-   * Событие между ходами. turn — номер только что отыгранного хода.
-   * @returns {boolean} есть ли чего ждать (летят бомбы, катятся бойцы)
-   */
-  run(turn) {
-    const s = this.scene;
-    const ev = EVENTS[this.kind];
-    if (!ev || s.net || turn < 2 || turn % ev.every !== 0) return false;
-    const r = subRng(this.seed ^ 0x9e37, turn);
-    if (r() > ev.chance) return false;
-    if (this.kind === 'ice') return this._gust(r);
-    if (this.kind === 'lava') return this._fallers(r, LAVA_BOMB, 'Извержение! Берегись лавовых бомб', '#ffb37a', 3, 0);
-    if (this.kind === 'space') return this._fallers(r, METEOR, 'Метеоритный дождь!', '#c9b8ff', 3, 0.35);
-    return false;
+  /** Порыв метели (аффикс gust): снег на секунду несёт вбок. */
+  gust(dir) {
+    if (!this.snow) return;
+    this.snow.speedX = dir * 600;
+    this.scene.time.delayedCall(1200, () => { if (this.snow) this.snow.speedX = (this.scene.wind ?? 0) * 0.5; });
   }
-
-  /** Порыв метели: всех стоящих бойцов толкает по ветру. */
-  _gust(r) {
-    const s = this.scene;
-    const dir = (s.wind ?? 0) >= 0 ? 1 : -1;
-    const power = 150 + r() * 90;
-    s.fx.banner(dir > 0 ? 'Порыв метели → ' : ' ← Порыв метели', '#cfeaff', 1400);
-    if (this.snow) {
-      this.snow.speedX = dir * 600;
-      s.time.delayedCall(1200, () => { if (this.snow) this.snow.speedX = (s.wind ?? 0) * 0.5; });
-    }
-    for (const w of s.worms) {
-      if (!w.alive || !w.grounded || w.hang || w.zip) continue;
-      w.applyImpulse(dir * power, -90);
-    }
-    s.rig.shake(300, 0.003);
-    return true;
-  }
-
-  /**
-   * С неба падают снаряды. Места — над бойцами и рядом, метка на полу за
-   * секунду до удара. slant — снос по горизонтали (метеориты летят наискосок).
-   */
-  _fallers(r, weapon, text, color, count, slant) {
-    const s = this.scene;
-    const alive = s.worms.filter((w) => w.alive);
-    if (!alive.length) return false;
-    s.fx.banner(text, color, 1600);
-    for (let i = 0; i < count; i++) {
-      const target = alive[Math.floor(r() * alive.length)];
-      const tx = Math.round(Math.max(30, Math.min(s.terrain.width - 30, target.x + (r() - 0.5) * 260)));
-      // Куда ляжет: первая твердь под точкой сверху
-      const floor = s.terrain.surfaceYAt(tx, 0) ?? CFG.WATER_Y;
-      const mark = s.rig.world(s.add.circle(tx, floor - 3, 16, 0xff4a2a, 0.35)
-        .setStrokeStyle(3, 0xffd166, 0.9).setDepth(DEPTH.FX));
-      s.tweens.add({ targets: mark, scale: 0.6, alpha: 0.9, yoyo: true, repeat: -1, duration: 260 });
-      this.marks.push(mark);
-      const fall = 520;
-      const vx = slant * fall * (r() < 0.5 ? -1 : 1);
-      s.time.delayedCall(700 + i * 380, () => {
-        mark.destroy();
-        if (!s.sys.isActive()) return;
-        // Стартуем над экраном так, чтобы прийти точно в метку
-        const h = 700;
-        const t = (-fall + Math.sqrt(fall * fall + 2 * CFG.GRAVITY * h)) / CFG.GRAVITY;
-        const p = new Projectile(s, tx - vx * t, floor - h, vx, fall, weapon, null);
-        s.projectiles.push(p);
-      });
-    }
-    this.pending = (this.pending ?? 0) + 1;
-    s.time.delayedCall(700 + count * 380 + 50, () => { this.pending -= 1; });
-    return true;
-  }
-
-  /** Ждать ли: снаряды события ещё не вылетели. */
-  get busy() { return (this.pending ?? 0) > 0; }
 
   destroy() {
-    for (const o of [...this.items, ...this.marks]) o?.destroy?.();
+    for (const o of this.items) o?.destroy?.();
     this.items = [];
-    this.marks = [];
   }
 }

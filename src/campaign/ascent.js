@@ -149,6 +149,17 @@ export const ASCENT = [
   },
 ];
 
+/**
+ * Аффиксы уровней (entities/Affixes.js): чем дальше в главу, тем их больше.
+ * Не указано — по виду башни (метель на льду, извержение в лаве, метеориты
+ * в космосе); Подножие — без аффиксов.
+ */
+const LEVEL_AFFIXES = {
+  'up-6': ['gust'], 'up-7': ['icicles'], 'up-8': ['gust'], 'up-9': ['gust', 'icicles'], 'up-10': ['icicles'],
+  'up-11': ['eruption'], 'up-12': ['vent'], 'up-13': ['vent'], 'up-14': ['eruption', 'vent'], 'up-15': ['vent'],
+};
+for (const m of ASCENT) m.affixes ??= LEVEL_AFFIXES[m.id] ?? (m.chapter === 'foot' ? [] : null);
+
 const BOSS_NAMES = { yeti: 'Йети', golem: 'Лавовый голем', slimeking: 'Король слизней' };
 /** Имя босса боя для меню; null — боя без босса. */
 export const bossName = (m) => (m.boss ? BOSS_NAMES[m.boss] ?? 'Великан' : null);

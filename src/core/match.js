@@ -130,6 +130,8 @@ export function ascentMatch(id) {
     monsters: { ...(m.monsters ?? {}) },
     boss: m.boss === true ? true : (m.boss || false),
     bossHp: m.bossHp ?? null,
+    // null — по виду башни (entities/Affixes.js, DEFAULT_AFFIXES)
+    affixes: m.affixes ?? null,
   };
 }
 
