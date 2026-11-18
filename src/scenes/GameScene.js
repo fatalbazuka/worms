@@ -941,6 +941,25 @@ export default class GameScene extends Phaser.Scene {
     return { x: Math.cos(this.aimAngle) * face, y: -Math.sin(this.aimAngle) };
   }
 
+  /**
+   * Куда боец сейчас держит оружие. Рогатку тянут — по её направлению;
+   * целятся кнопками, мышью или ходит бот — по прицелу; иначе просто
+   * перед собой, в сторону, куда смотрит.
+   */
+  heldDirection() {
+    const w = this.turn.activeWorm;
+    const face = { x: w ? w.facing : 1, y: 0 };
+    if (!this.sling) return this.aimDirection();
+    if (this.aim?.mode === 'aim') {
+      const shot = this.aim.computeShot();
+      if (!shot) return face;
+      const d = Math.hypot(shot.vx, shot.vy) || 1;
+      return { x: shot.vx / d, y: shot.vy / d };
+    }
+    if (this.charging || this.isBotTurn() || isDesktop() || this.remoteAim) return this.aimDirection();
+    return face;
+  }
+
   beginCharge() {
     if (!this.canAct()) return;      // заряд набирает и бот, той же кнопкой
     this.charging = true;

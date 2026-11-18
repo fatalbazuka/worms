@@ -1,6 +1,6 @@
 import { CFG, DEPTH, TEAM_COLORS, TEAM_NAMES } from '../config.js';
 import { WEAPONS } from '../weapons/index.js';
-import { has as hasAsset } from '../core/assets.js';
+import { has as hasAsset, weaponIcon, fitScale } from '../core/assets.js';
 import { UI, font, ensureButton, ensureRoundButton, ensureIcon } from './theme.js';
 import { Inventory } from './Inventory.js';
 import { isDesktop } from '../platform/device.js';
@@ -700,8 +700,10 @@ export class Hud {
     const w = WEAPONS[i];
     if (!w || !this.slot) return;
     this.slot.name.setText(w.name);
-    if (hasAsset(this.scene, w.iconKey)) {
-      this.slot.icon.setTexture(w.iconKey).setVisible(true);
+    const key = weaponIcon(this.scene, w);
+    if (key) {
+      this.slot.icon.setTexture(key).setVisible(true)
+        .setScale(fitScale(this.scene, key, this.compact ? 60 : 46));
     } else {
       this.slot.icon.setVisible(false);
     }

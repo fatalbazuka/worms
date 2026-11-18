@@ -1,6 +1,6 @@
 import { CFG, DEPTH } from '../config.js';
 import { WEAPONS } from '../weapons/index.js';
-import { has as hasAsset } from '../core/assets.js';
+import { weaponIcon, fitScale } from '../core/assets.js';
 import { UI, font, ensureButton, ensureRoundButton } from './theme.js';
 import { isDesktop } from '../platform/device.js';
 
@@ -223,8 +223,10 @@ export class Inventory {
 
     // Иконки может не быть (assets собираются отдельным скриптом и файла
     // может не оказаться) — тогда рисуем юникодный значок из реестра.
-    const icon = hasAsset(s, weapon.iconKey)
-      ? this.fix(s.add.image(cx, y + fz(24), weapon.iconKey).setOrigin(0.5).setScale(K), D + 2)
+    const iconKey = weaponIcon(s, weapon);
+    const icon = iconKey
+      ? this.fix(s.add.image(cx, y + fz(24), iconKey).setOrigin(0.5)
+        .setScale(fitScale(s, iconKey, fz(38))), D + 2)
       : this.fix(s.add.text(cx, y + fz(24), weapon.icon, font(fz(20), 800)).setOrigin(0.5), D + 2);
 
     const name = this.fix(s.add.text(cx, y + fz(43), weapon.name, font(fz(12), 700, UI.textDim))

@@ -1,5 +1,5 @@
 import { CFG, DEPTH } from '../config.js';
-import { has } from '../core/assets.js';
+import { has, fitScale } from '../core/assets.js';
 
 /**
  * Мина.
@@ -30,7 +30,12 @@ export class Mine {
     this.vy = 0;
 
     const key = has(scene, 'proj_mine') ? 'proj_mine' : null;
-    if (key) {
+    if (has(scene, 'shot_mine')) {
+      // Своя мина: две картинки — спокойная и взведённая, с красным огнём
+      this.own = true;
+      this.view = scene.add.image(x, y, 'shot_mine').setOrigin(0.5, 0.8)
+        .setScale(fitScale(scene, 'shot_mine', 30));
+    } else if (key) {
       this.view = scene.add.sprite(x, y, key);
     } else {
       this.view = scene.add.circle(x, y, 6, 0xb04040);
@@ -72,7 +77,9 @@ export class Mine {
       this.armTimer -= dt;
       if (this.armTimer <= 0) {
         this.armed = true;
-        if (this.view.setTexture && has(this.scene, 'proj_mine_on')) {
+        if (this.own && has(this.scene, 'shot_mine_on')) {
+          this.view.setTexture('shot_mine_on');
+        } else if (this.view.setTexture && has(this.scene, 'proj_mine_on')) {
           this.view.setTexture('proj_mine_on');
           if (this.scene.anims.exists('proj_mine_on')) this.view.play('proj_mine_on');
         }

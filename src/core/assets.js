@@ -36,6 +36,19 @@ export const IMAGES = {
   icon_mortar: 'assets/icon_mortar.png',
 };
 
+/**
+ * Своё оружие и предметы (tools/build_items.py): по картинке на штуку.
+ * hand_<id> — оружие в перчатке: значок арсенала и то, что боец держит;
+ * shot_<id> — снаряд в полёте, мина, ящик, парашют, крюк. Где своей
+ * картинки нет, остаётся прежняя.
+ */
+const HANDS = ['bazooka', 'grenade', 'cluster', 'mole', 'banana', 'holy', 'dynamite', 'mine',
+  'airstrike', 'shotgun', 'bat', 'teleport', 'mortar', 'hook'];
+const SHOTS = ['bazooka', 'grenade', 'cluster', 'bomblet', 'mole', 'banana', 'holy', 'dynamite',
+  'mine', 'mine_on', 'mortar', 'airmissile', 'crate_weapon', 'crate_health', 'chute', 'hook'];
+for (const id of HANDS) IMAGES[`hand_${id}`] = `assets/items/hand_${id}.png`;
+for (const id of SHOTS) IMAGES[`shot_${id}`] = `assets/items/shot_${id}.png`;
+
 /** Текстуры ландшафта: по четыре файла на каждую тему из biomes.js. */
 for (const b of BIOMES) {
   IMAGES[`${b.id}_soil`] = `assets/terrain/${b.id}/soil.png`;
@@ -122,6 +135,22 @@ const EXTRA_META = {
 export function meta(key) {
   return SPRITE_META[key] ?? EXTRA_META[key] ?? null;
 }
+
+/** Масштаб, при котором картинка вписывается в квадрат box. */
+export function fitScale(scene, key, box) {
+  const src = scene.textures.get(key).getSourceImage();
+  return box / Math.max(src.width, src.height, 1);
+}
+
+/** Значок оружия: свой, если загрузился, иначе прежний; null — картинки нет. */
+export function weaponIcon(scene, weapon) {
+  const own = `hand_${weapon.id}`;
+  if (has(scene, own)) return own;
+  return has(scene, weapon.iconKey) ? weapon.iconKey : null;
+}
+
+/** Оружие, которое в руках смотрит стволом на цель; остальное просто держат. */
+export const AIMED = new Set(['bazooka', 'mole', 'shotgun', 'bat']);
 
 /** Индекс предрассчитанного поворота для направления (vx, vy). */
 export function rotFrame(vx, vy) {

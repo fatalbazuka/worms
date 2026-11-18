@@ -1,5 +1,5 @@
 import { CFG, DEPTH, TEAM_COLORS } from '../config.js';
-import { has, meta } from '../core/assets.js';
+import { has, meta, fitScale, weaponIcon, AIMED } from '../core/assets.js';
 import { font } from '../ui/theme.js';
 
 /**
@@ -60,9 +60,11 @@ export class Worm {
       this.chuteWhole = true;
       this.view.setVisible(false);
       this.eye?.setVisible(false);
-    } else if (has(s, 'crate_chute')) {
-      this.chute = s.rig.world(s.add.image(this.x, this.y - CFG.WORM_H - 8, 'crate_chute')
+    } else if (has(s, 'shot_chute') || has(s, 'crate_chute')) {
+      const key = has(s, 'shot_chute') ? 'shot_chute' : 'crate_chute';
+      this.chute = s.rig.world(s.add.image(this.x, this.y - CFG.WORM_H - 8, key)
         .setOrigin(0.5, 1).setDepth(DEPTH.WORM + 1));
+      if (key === 'shot_chute') this.chute.setScale(fitScale(s, key, 62));
       this.chuteWhole = false;
     }
   }
@@ -579,6 +581,10 @@ export class Worm {
     this.hang = null;
     this.rope?.destroy();
     this.rope = null;
+    this.hookTip?.destroy();
+    this.hookTip = null;
+    this.held?.destroy();
+    this.held = null;
     this.alive = false;
     this.health = 0;
     this.marker.setVisible(false);
@@ -652,6 +658,7 @@ export class Worm {
     else if (this.hang === 'right') { this.view.setPosition(rx + hw, ry - CFG.WORM_H / 2); this.view.setRotation(-Math.PI / 2); }
     else { this.view.setPosition(rx, ry); this.view.setRotation(0); }
     this._drawRope();
+    this._syncHeld(rx);
     // Сплющивание и вытягивание: приземлился, получил, прыгнул. Затухает
     // само за несколько кадров; знак минус — вытянут вверх
     const base = this.smiley ? meta('smiley').scale : 1;
@@ -736,8 +743,46 @@ Worm.prototype._syncSmiley = function _syncSmiley(rx, ry) {
   else this._setAnim('worm_idle');
 };
 
+/**
+ * Оружие в руках. Держит его только тот, чей сейчас ход: выбранное оружие
+ * в перчатке висит у бойца со стороны, куда он целится. Стволы (базука,
+ * дробовик, бита, крот) поворачиваются по прицелу, остальное — граната,
+ * мина, пульт — просто держат перед собой.
+ */
+Worm.prototype._syncHeld = function _syncHeld(rx) {
+  const s = this.scene;
+  const turn = s.turn;
+  const mine = turn?.activeWorm === this && turn.state === 'aim' && !this.zip && !s.landing?.();
+  const key = mine ? weaponIcon(s, turn.weapon) : null;
+  if (!key || !key.startsWith('hand_')) { this.held?.setVisible(false); return; }
+  if (!this.held) {
+    this.held = s.rig.world(s.add.image(0, 0, key).setDepth(DEPTH.WORM + 1));
+  }
+  if (this.heldKey !== key) {
+    this.heldKey = key;
+    this.held.setTexture(key).setScale(fitScale(s, key, 34));
+  }
+  const d = s.heldDirection?.() ?? { x: this.facing, y: 0 };
+  const left = d.x < 0;
+  const cy = this.centerY + 2;
+  if (AIMED.has(turn.weapon.id)) {
+    this.held.setPosition(rx + d.x * 17, cy + d.y * 17);
+    this.held.setRotation(Math.atan2(d.y, d.x));
+    this.held.setFlipX(false).setFlipY(left);      // влево — не вверх ногами
+  } else {
+    this.held.setPosition(rx + (left ? -17 : 17), cy + 2);
+    this.held.setRotation(0);
+    this.held.setFlipY(false).setFlipX(left);
+  }
+  this.held.setVisible(true);
+};
+
 Worm.prototype._drawRope = function _drawRope() {
-  if (!this.zip) { if (this.rope) this.rope.clear(); return; }
+  if (!this.zip) {
+    if (this.rope) this.rope.clear();
+    this.hookTip?.setVisible(false);
+    return;
+  }
   const s = this.scene;
   if (!this.rope) this.rope = s.rig.world(s.add.graphics().setDepth(DEPTH.WORM - 1));
   const g = this.rope;
@@ -745,7 +790,17 @@ Worm.prototype._drawRope = function _drawRope() {
   g.clear();
   g.lineStyle(4, 0x1a1208, 0.55).lineBetween(this.x, this.centerY, ax, ay);
   g.lineStyle(2, 0xe8d9a8, 1).lineBetween(this.x, this.centerY, ax, ay);
-  g.fillStyle(0xe8d9a8, 1).fillCircle(ax, ay, 4);
+  // На конце троса — крюк, носом в стену
+  if (has(s, 'shot_hook')) {
+    if (!this.hookTip) {
+      this.hookTip = s.rig.world(s.add.image(0, 0, 'shot_hook').setDepth(DEPTH.WORM)
+        .setOrigin(0.8, 0.5).setScale(fitScale(s, 'shot_hook', 30)));
+    }
+    this.hookTip.setPosition(ax, ay).setVisible(true)
+      .setRotation(Math.atan2(ay - this.centerY, ax - this.x));
+  } else {
+    g.fillStyle(0xe8d9a8, 1).fillCircle(ax, ay, 4);
+  }
 };
 
 /** Ширина полоски здоровья над бойцом. */
