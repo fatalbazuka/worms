@@ -1,4 +1,4 @@
-Задача: развернуть Telegram-игру Worms на моём сервере по адресу https://fatalbazuka.ru/worms — мини-приложение, бот, кабинет, турниры, звёзды.
+Задача: развернуть Telegram-игру Smiles на моём сервере по адресу https://fatalbazuka.ru/worms — мини-приложение, бот, кабинет, турниры, звёзды.
 
 Репозиторий: https://github.com/fatalbazuka/worms (ветка main)
 Инструкция: DEPLOY.md — разделы «Игра по пути, а не в корне домена» и «Telegram-бот».

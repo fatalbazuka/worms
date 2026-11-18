@@ -225,7 +225,7 @@ export function createBot({ db, api, players, tournaments, analytics = null, adm
 
     switch (cmd) {
       case '/start':
-        return send(chat, `Привет, ${me.name}! Это пошаговая артиллерия со смайликами.\n\n`
+        return send(chat, `Привет, ${me.name}! Это Smiles — пошаговая артиллерия со смайликами.\n\n`
           + 'Жми «Играть»: бои на башне с тросом и рогаткой, задания каждый день, скины, '
           + 'онлайн и турниры. /stats — твоя статистика, '
           + '/top — лучшие, /tours — турниры.', playButton());
@@ -412,8 +412,8 @@ export function createBot({ db, api, players, tournaments, analytics = null, adm
         title: 'Вызов на бой ⚔️',
         description: `${player.name} зовёт на башню`,
         input_message_content: {
-          message_text: `⚔️ ${player.name} вызывает тебя на бой на башне!\n`
-            + 'Тросы, рогатка и смайлики. Жми кнопку — и сразу в бой.',
+          message_text: `⚔️ ${player.name} вызывает тебя на бой в Smiles!\n`
+            + 'Башня, тросы, рогатка и смайлики. Жми кнопку — и сразу в бой.',
         },
         reply_markup: { inline_keyboard: [[{ text: '⚔️ Принять вызов', url: link }]] },
       },
