@@ -10,7 +10,7 @@ import { randomRoom, copyText } from '../net/transport.js';
 import { isCasualRoom, isTowerRoom } from '../net/rooms.js';
 import { Lobby } from '../net/lobby.js';
 import { pendingSession, forgetSession } from '../net/session.js';
-import { syncMe, fetchTop, myRank, loggedIn, onAccountChange } from '../net/server.js';
+import { syncMe, fetchTop, myRank, loggedIn, onAccountChange, track } from '../net/server.js';
 import { openAccountDialog } from '../ui/AccountDialog.js';
 import { openTournaments } from '../ui/Tournaments.js';
 import { askText, closeOverlay } from '../ui/Overlay.js';
@@ -567,6 +567,8 @@ export default class MenuScene extends Phaser.Scene {
     const before = this.items.length;
     this._button('streak-claim', cx, cy + 140, 'Забрать', '', () => {
       const res = claimDailyStreak();
+      // Серия выросла — серверу, чтобы вечернее напоминание знало число
+      if (res) track('streak', { streak: res.streak });
       haptic('win');
       sfx.play('pickup');
       for (const o of layer) o.destroy();

@@ -205,6 +205,52 @@ check('при запуске: вебхук с секретом и кнопка �
   && calls('setChatMenuButton').at(-1)?.params.menu_button.web_app.url === 'https://example.test/worms/');
 check('«твой ход» бот не пишет', !calls('sendMessage').some((x) => /твой ход/i.test(x.params.text)));
 
+// ------------------------------------------------- статистика и напоминания
+{
+  // Полдень по Москве в известный день — чтобы «вчера», «сегодня» и вечер не
+  // зависели от того, когда идёт тест
+  clock = Date.UTC(2026, 10, 17, 9, 0);            // 17 ноября, 12:00 МСК
+  const ann = await login(41, 'Аня');
+  const ivan = await login(42, 'Иван');
+  const r1 = await call('POST', '/api/event', { name: 'open', props: { streak: 3 } }, ann.token);
+  await call('POST', '/api/event', { name: 'open', props: { streak: 1 } }, ivan.token);
+  await call('POST', '/api/event', { name: 'battle', props: { mode: 'fallback', won: true, turns: 9 } }, ann.token);
+  const bad = await call('POST', '/api/event', { name: 'hack', props: {} }, ann.token);
+  const anon = await call('POST', '/api/event', { name: 'open', props: {} });
+  check('события принимаются от вошедших; чужие имена и анонимы — нет',
+    r1.data?.ok === true && bad.data?.ok === false && anon.status === 401);
+  check('серия из события запоминается', app.players.byId('tg41').last_streak === 3);
+
+  // На следующий день Аня зашла, Иван — нет. В обед ещё рано
+  clock = Date.UTC(2026, 10, 18, 9, 0);            // 18 ноября, 12:00 МСК
+  await call('POST', '/api/event', { name: 'open', props: { streak: 4 } }, ann.token);
+  const before = calls('sendMessage').length;
+  check('днём не напоминаем', await app.bot.remind() === 0 && calls('sendMessage').length === before);
+
+  clock = Date.UTC(2026, 10, 18, 16, 30);          // 19:30 МСК
+  const sent = await app.bot.remind();
+  const msg = calls('sendMessage').at(-1)?.params;
+  check('вечером напоминаем тому, кто был вчера и не был сегодня',
+    sent === 1 && msg?.chat_id === 42 && /Серия 1 день/.test(msg.text)
+      && msg.reply_markup?.inline_keyboard?.[0]?.[0]?.web_app, msg?.text?.split('\n')[0]);
+  check('дважды за вечер не напоминаем', await app.bot.remind() === 0);
+
+  // Отписка: на следующий вечер Аня (была вчера, сегодня нет) — отписана
+  await hook({ message: { from: { id: 41, first_name: 'Аня' }, chat: { id: 41, type: 'private' }, text: '/mute' } });
+  clock = Date.UTC(2026, 10, 19, 16, 30);          // 19 ноября, 19:30 МСК
+  const muted = await app.bot.remind();
+  check('после /mute не напоминаем', muted === 0 && !calls('sendMessage').slice(-2).some((c) => c.params.chat_id === 41 && /Серия/.test(c.params.text)));
+
+  clock = Date.UTC(2026, 10, 18, 16, 40);
+  await hook({ message: { from: { id: ADMIN }, chat: { id: ADMIN, type: 'private' }, text: '/metrics' } });
+  const rep = calls('sendMessage').at(-1)?.params.text ?? '';
+  check('/metrics у админа: игроки, новички, бои, возврат',
+    /Сегодня \(2026-11-18\): игроков 1/.test(rep) && /Вчера: игроков 2/.test(rep)
+      && /Вчерашние новички вернулись сегодня: 1 из 2/.test(rep), rep.split('\n').slice(0, 4).join(' | '));
+  await hook({ message: { from: { id: 3 }, chat: { id: 3, type: 'private' }, text: '/metrics' } });
+  check('/metrics не админу не показывается', !/игроков/.test(calls('sendMessage').at(-1)?.params.text ?? ''));
+}
+
 server.close();
 fakeTg.close();
 db.close();

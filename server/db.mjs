@@ -111,6 +111,23 @@ const MIGRATIONS = [
     refunded_at integer
   );
   `,
+  // 3 — статистика (события игроков) и напоминания о серии дней
+  `
+  create table event (
+    id         integer primary key,
+    player_id  text not null references player (id) on delete cascade,
+    day        text not null,                     -- YYYY-MM-DD в поясе бота
+    name       text not null,                     -- open | battle
+    props      text,                              -- JSON
+    created_at integer not null
+  );
+  create index event_day on event (day, name);
+  create index event_player on event (player_id, day);
+
+  alter table player add column remind integer not null default 1;   -- 0 — отписался (/mute)
+  alter table player add column last_streak integer not null default 0;
+  alter table player add column reminded_day text;
+  `,
 ];
 
 export function openDb(path) {

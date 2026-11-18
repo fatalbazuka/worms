@@ -27,7 +27,7 @@ import { Bot } from '../ai/Bot.js';
 import { markDone, MISSION_BY_ID } from '../campaign/missions.js';
 import { checkObjective, snapshot, objectiveText } from '../campaign/objectives.js';
 import { player, eloDelta, recordResult } from '../platform/player.js';
-import { reportResult, serverAvailable } from '../net/server.js';
+import { reportResult, serverAvailable, track } from '../net/server.js';
 import { leagueOf, nextLeague, toNextLeague } from '../platform/league.js';
 import { OffscreenMarkers } from '../ui/OffscreenMarkers.js';
 import { SKIN_BY_ID, rivalSkin } from '../core/skins.js';
@@ -1466,6 +1466,13 @@ export default class GameScene extends Phaser.Scene {
     this.rig.ui(sub);
 
     this.gameOverUi = [shade, title, sub];
+
+    // Бой — в статистику: режим, итог, сколько ходов
+    track('battle', {
+      mode: this.match.fallback ? 'fallback' : this.net?.connected ? 'online'
+        : this.match.mode === 'campaign' ? 'campaign' : solo ? 'quick' : 'hotseat',
+      won: winner >= 0 && winner === mine, turns: this.turn.turnNumber,
+    });
 
     // Монеты за бой и выполненные этим боем задания — над заголовком
     const daily = this._recordDaily(winner >= 0 && winner === mine);

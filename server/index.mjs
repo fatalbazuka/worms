@@ -33,6 +33,7 @@
  *   POST /api/tournaments/:id/leave       → {ok}
  *   POST /api/tournaments/:id/start       → {ok}             только админ
  *   POST /api/stars/donate {amount}       → {invoice}
+ *   POST /api/event {name, props}         → {ok}             статистика: open | battle
  *   POST /api/bot/webhook                 ← обновления Telegram
  *   GET  /api/config, /api/health
  */
@@ -49,6 +50,7 @@ import { createTelegramApi } from './tgapi.mjs';
 import { createPlayers } from './players.mjs';
 import { createTournaments } from './tournaments.mjs';
 import { createBot, webhookSecret } from './bot.mjs';
+import { createAnalytics } from './analytics.mjs';
 
 export function createApp({
   db, botToken = '', trustProxy = false, staticDir = null, now = () => Date.now(),
@@ -66,7 +68,8 @@ export function createApp({
     notifyAdmins: (...a) => bot?.notifyAdmins(...a),
     refund: (chargeId) => bot?.refund(chargeId) ?? false,
   });
-  bot = createBot({ db, api, players, tournaments, adminIds: admins, publicUrl, tz, now, log });
+  const analytics = createAnalytics({ db, now, tz });
+  bot = createBot({ db, api, players, tournaments, analytics, adminIds: admins, publicUrl, tz, now, log });
   const hookSecret = botToken ? webhookSecret(botToken, secret) : '';
 
   const q = {
@@ -251,6 +254,11 @@ export function createApp({
         return { items: tournaments.list(me.id), admin: players.isAdmin(me) };
       }
       case 'POST /api/stars/donate': { const me = auth(req); return donate(me, await readJson(req)); }
+      case 'POST /api/event': {
+        const me = auth(req);
+        const body = await readJson(req);
+        return { ok: analytics.record(me, body.name, body.props) };
+      }
       default: throw new HttpError(404, 'нет такого адреса');
     }
   }
@@ -277,6 +285,7 @@ export function createApp({
   }
 
   handle.tournaments = tournaments;
+  handle.analytics = analytics;
   handle.bot = bot;
   handle.players = players;
   handle.webhookSecret = hookSecret;
@@ -317,6 +326,7 @@ if (isMain) {
   // Турниры живут по часам: автостарт и матчи, вышедшие за окно
   const ticker = setInterval(() => {
     try { handle.tournaments.tick(); } catch (e) { console.error('[tournaments] tick', e); }
+    handle.bot.remind().catch((e) => console.error('[bot] напоминания', e));
   }, 30_000);
   const stop = () => {
     clearInterval(ticker);
