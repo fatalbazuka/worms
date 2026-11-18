@@ -249,6 +249,55 @@ export class Terrain {
     }
   }
 
+  // ------------------------------------------------------------- предметы
+
+  /**
+   * Впечатать предмет в землю: дерево, камень, ящик становятся частью
+   * ландшафта — ловят снаряды, на них можно встать, взрыв выгрызает из них
+   * куски, как из земли.
+   *
+   * Твердь — простой силуэт (shapes: прямоугольники и овалы в целых
+   * координатах), а не альфа картинки: растр SVG в разных браузерах может
+   * разойтись на пиксель, а земля у двух игроков по сети обязана совпадать.
+   * Картинка рисуется поверх, в видимой текстуре, и откусывается взрывами
+   * вместе с ней.
+   *
+   * @param shapes [{kind:'rect'|'ellipse', x, y, w, h}] — мировые координаты
+   * @param image  что нарисовать (необязательно) и где: {src, x, y, w, h}
+   */
+  stamp(shapes, image = null) {
+    let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+    const ctx = this.maskCtx;
+    ctx.fillStyle = '#fff';
+    for (const s of shapes) {
+      const x = Math.round(s.x), y = Math.round(s.y), w = Math.round(s.w), h = Math.round(s.h);
+      ctx.beginPath();
+      if (s.kind === 'ellipse') ctx.ellipse(x + w / 2, y + h / 2, w / 2, h / 2, 0, 0, Math.PI * 2);
+      else ctx.rect(x, y, w, h);
+      ctx.fill();
+      x0 = Math.min(x0, x); y0 = Math.min(y0, y); x1 = Math.max(x1, x + w); y1 = Math.max(y1, y + h);
+    }
+    // solid[] — по маске в задетом прямоугольнике
+    x0 = Math.max(0, x0 - 1); y0 = Math.max(0, y0 - 1);
+    x1 = Math.min(this.width, x1 + 1); y1 = Math.min(this.height, y1 + 1);
+    if (x1 > x0 && y1 > y0) {
+      const img = ctx.getImageData(x0, y0, x1 - x0, y1 - y0).data;
+      for (let y = y0, p = 3; y < y1; y++) {
+        const row = y * this.width;
+        for (let x = x0; x < x1; x++, p += 4) if (img[p] > 8) this.solid[row + x] = 1;
+      }
+    }
+    if (image?.src) {
+      for (const i of this._chunksIn(image.x, image.x + image.w)) {
+        const chunk = this.chunks[i];
+        chunk.ctx.setTransform(1, 0, 0, 1, -chunk.x0, 0);
+        chunk.ctx.globalCompositeOperation = 'source-over';
+        chunk.ctx.drawImage(image.src, image.x, image.y, image.w, image.h);
+        this.dirtyChunks.add(i);
+      }
+    }
+  }
+
   // ------------------------------------------------------------- разрушение
 
   /**

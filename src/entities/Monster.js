@@ -25,9 +25,9 @@ import { Weapon } from '../weapons/Weapon.js';
  */
 
 const KINDS = {
-  slime: { hp: 30, w: 30, h: 22, image: 'mon_slime', size: 38, name: 'Слизень' },
-  cactus: { hp: 40, w: 30, h: 46, image: 'emoji_cactus', size: 60, name: 'Кактус' },
-  boss: { hp: 400, w: 96, h: 100, image: 'emoji_ogre', size: 132, name: 'Великан' },
+  slime: { hp: 30, w: 32, h: 26, image: 'mon_slime', size: 44, name: 'Слизень' },
+  cactus: { hp: 40, w: 30, h: 52, image: 'mon_cactus', size: 64, name: 'Кактус' },
+  boss: { hp: 400, w: 100, h: 140, image: 'mon_boss', size: 156, name: 'Великан' },
 };
 
 const SLIME_STEP = 95;          // сколько проползает за ход монстров, px
@@ -67,7 +67,9 @@ export class Monster {
       this.view = sheet
         ? scene.add.sprite(x, y, k.image, 0).setOrigin(0.5, 0.92)
         : scene.add.image(x, y, k.image).setOrigin(0.5, 1);
-      this.view.setScale(sheet ? k.size / 100 : fitScale(scene, k.image, k.size));
+      // Размер — по высоте: тролль на картинке шире, чем выше
+      const src = scene.textures.get(k.image).getSourceImage();
+      this.view.setScale(sheet ? k.size / 100 : k.size / (src.height || k.size));
       if (sheet && scene.anims.exists(`${k.image}_idle`)) this.view.play(`${k.image}_idle`);
     } else {
       this.view = scene.add.ellipse(x, y - k.h / 2, k.w, k.h, kind === 'cactus' ? 0x4caf50 : 0x8bd34a);
@@ -146,10 +148,23 @@ export class Monster {
     const p = new Projectile(this.scene, this.x + dir * (this.def.w / 2 + 14), this.top - 14,
       dir * v * cos, -v * Math.sin(ang), ROCK, null);
     this.scene.projectiles.push(p);
-    this.view.setScale(this.baseScale * 1.08);
-    this.scene.tweens.add({ targets: this.view, scale: this.baseScale, duration: 260 });
+    // Поза броска: камень над головой — и обратно
+    this._pose('mon_boss_throw', 650);
     this.scene.fx.sound('shot');
     return true;
+  }
+
+  /** Сменить картинку на время (поза), размер — по той же высоте. */
+  _pose(key, ms) {
+    if (!has(this.scene, key) || !this.view?.setTexture) return;
+    const h = this.def.size;
+    const set = (k) => {
+      if (!this.alive || !this.view?.active) return;
+      this.view.setTexture(k);
+      this.view.setScale(h / (this.scene.textures.get(k).getSourceImage().height || h));
+    };
+    set(key);
+    this.scene.time.delayedCall(ms, () => set(this.def.image));
   }
 
   damage(amount) {
@@ -172,6 +187,14 @@ export class Monster {
     else if (this.kind === 'slime') this.scene.fx.splash?.(x, this.y);
     else if (this.kind === 'boss') {
       this.scene.fx.banner('Великан повержен!', '#ffe27a', 2000);
+      // Сидит, оглушённый, со звёздочками — и тает
+      if (has(this.scene, 'mon_boss_down')) {
+        const k = 'mon_boss_down';
+        const down = this.scene.rig.world(this.scene.add.image(x, this.y, k).setOrigin(0.5, 1)
+          .setScale((this.def.size * 0.82) / (this.scene.textures.get(k).getSourceImage().height || 1))
+          .setDepth(DEPTH.WORM).setFlipX(this.facing > 0));
+        this.scene.tweens.add({ targets: down, alpha: 0, delay: 2600, duration: 900, onComplete: () => down.destroy() });
+      }
       this.scene.explode(x, y, { radius: 50, damageRadius: 0, damage: 0, knockback: 0, shake: 0.014 }, null);
     }
     this.scene.onMonsterDied?.(this);

@@ -407,18 +407,28 @@ for (const id of ['bazooka', 'grenade', 'cluster', 'mole', 'banana', 'holy', 'mo
     s.addSpring(w.x, w.y - 2, null);
     const y0 = w.y; let minY = y0;
     for (let i = 0; i < 60; i++) { s.springs[0]?.update(1 / 60); w.update(1 / 60); minY = Math.min(minY, w.y); }
-    // Предметы: есть на этажах, взрыв рядом их ломает
-    const it = s.props.items.find((x) => x.alive && x.name !== 'barrel');
-    const before = s.props.count;
-    s.explode(it.x, it.y - 10, { radius: 10, damageRadius: 30, damage: 0, knockback: 0, shake: 0 });
-    return { weight, sticky: { stuck, exploded: !ps.alive }, rise: y0 - minY, props: before, after: s.props.count };
+    // Укрытия впечатаны в землю: твердь там, где предмет, взрыв её выгрызает
+    const st = s.props.stamped[0];
+    const solidIn = () => {
+      let n = 0;
+      for (let y = Math.round(st.y - st.size * 0.6); y < st.y - 2; y += 2) {
+        for (let x = Math.round(st.x - st.size * 0.2); x < st.x + st.size * 0.2; x += 2) n += s.terrain.solidAt(x, y) ? 1 : 0;
+      }
+      return n;
+    };
+    const before = solidIn();
+    s.explode(st.x, st.y - st.size * 0.35, { radius: 22, damageRadius: 30, damage: 0, knockback: 0, shake: 0 });
+    return {
+      weight, sticky: { stuck, exploded: !ps.alive }, rise: y0 - minY,
+      stamped: s.props.stamped.length, before, after: solidIn(), name: st.name,
+    };
   });
   check('гиря: проламывает пол и рвётся этажом ниже',
     r.weight.pierced && r.weight.exploded && r.weight.below, JSON.stringify(r.weight));
   check('липучка: прилипает к поверхности и взрывается по фитилю', r.sticky.stuck && r.sticky.exploded);
   check('батут: подбрасывает вставшего на него бойца', r.rise > 60, `${Math.round(r.rise)} px`);
-  check('на башне стоят эмодзи-предметы, взрыв рядом их ломает',
-    r.props >= 6 && r.after < r.props, `${r.props} → ${r.after}`);
+  check('укрытия впечатаны в землю, взрыв выгрызает из них кусок',
+    r.stamped >= 3 && r.before > 20 && r.after < r.before * 0.7, `${r.name}: ${r.before} → ${r.after} (всего ${r.stamped})`);
   await tp.close();
 }
 

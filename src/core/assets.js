@@ -47,10 +47,13 @@ const HANDS = ['bazooka', 'grenade', 'cluster', 'mole', 'banana', 'holy', 'dynam
   'airstrike', 'shotgun', 'bat', 'teleport', 'mortar', 'hook', 'weight', 'sticky', 'spring'];
 const SHOTS = ['bazooka', 'grenade', 'cluster', 'bomblet', 'mole', 'banana', 'holy', 'dynamite',
   'mine', 'mine_on', 'mortar', 'airmissile', 'crate_weapon', 'crate_health', 'chute', 'hook',
-  'weight', 'sticky', 'spring'];
+  'weight', 'sticky', 'spring', 'rock'];
 for (const id of HANDS) IMAGES[`hand_${id}`] = `assets/items/hand_${id}.png`;
 for (const id of SHOTS) IMAGES[`shot_${id}`] = `assets/items/shot_${id}.png`;
-IMAGES.mon_slime = 'assets/items/mon_slime.png';
+// Монстры «Подъёма» (tools/build_tower_sheet.py): слизень, кактус, тролль-Великан в трёх позах
+for (const id of ['mon_slime', 'mon_cactus', 'mon_boss', 'mon_boss_throw', 'mon_boss_down']) {
+  IMAGES[id] = `assets/items/${id}.png`;
+}
 
 /**
  * Эмодзи как графика: декор башни, разрушаемые предметы, монстры.
