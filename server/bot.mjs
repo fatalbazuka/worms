@@ -26,7 +26,7 @@ export function webhookSecret(token, explicit = '') {
   return createHash('sha256').update(`worms-webhook:${token}`).digest('hex').slice(0, 48);
 }
 
-export function createBot({ db, api, players, tournaments, adminIds = new Set(), publicUrl = '',
+export function createBot({ db, api, players, tournaments, analytics = null, adminIds = new Set(), publicUrl = '',
   tz = 'Europe/Moscow', now = () => Date.now(), log = console }) {
   const q = {
     payAdd: db.prepare(`insert or ignore into payment (charge_id, player_id, tg_id, amount, purpose, ref, created_at)
@@ -193,6 +193,7 @@ export function createBot({ db, api, players, tournaments, adminIds = new Set(),
     '/settle МАТЧ 1|2 — решить спорный матч',
     '/refund CHARGE_ID — вернуть платёж звёздами',
     '/stars — сколько звёзд пришло',
+    '/metrics — игроки, новички, бои, возврат на второй день',
   ].join('\n');
 
   async function onCommand(msg) {
@@ -205,15 +206,23 @@ export function createBot({ db, api, players, tournaments, adminIds = new Set(),
 
     switch (cmd) {
       case '/start':
-        return send(chat, `Привет, ${me.name}! Это Worms — пошаговая артиллерия.\n\n`
-          + 'Жми «Играть»: быстрые бои, кампания, онлайн и турниры. /stats — твоя статистика, '
+        return send(chat, `Привет, ${me.name}! Это пошаговая артиллерия со смайликами.\n\n`
+          + 'Жми «Играть»: бои на башне с тросом и рогаткой, задания каждый день, скины, '
+          + 'онлайн и турниры. /stats — твоя статистика, '
           + '/top — лучшие, /tours — турниры.', playButton());
       case '/stats': return send(chat, statsText(me), playButton());
       case '/top': return send(chat, topText(), playButton());
       case '/tours': return send(chat, toursText(), playButton('🏆 Турниры', '?tour=list'));
       case '/help':
         return send(chat, '/stats — статистика\n/top — топ-10\n/tours — турниры'
+          + '\n/mute — не напоминать о серии\n/unmute — снова напоминать'
           + (admin ? `\n\n${ADMIN_HELP}` : ''), playButton());
+      case '/mute':
+        analytics?.setRemind(me.id, false);
+        return send(chat, 'Хорошо, больше не напоминаю о серии. /unmute — вернуть напоминания.');
+      case '/unmute':
+        analytics?.setRemind(me.id, true);
+        return send(chat, 'Буду напоминать вечером, если серия дней вот-вот сгорит.');
       default: break;
     }
     if (!admin) return send(chat, 'Не знаю такой команды. /help — что я умею.', playButton());
@@ -261,6 +270,8 @@ export function createBot({ db, api, players, tournaments, adminIds = new Set(),
         const s = q.payTotal.get();
         return send(chat, `Платежей: ${s.n}, звёзд: ${s.s} ⭐ (без возвратов).`);
       }
+      case '/metrics':
+        return send(chat, analytics ? analytics.report() : 'Статистика не подключена.');
       default:
         return send(chat, `Не знаю такой команды.\n${ADMIN_HELP}`);
     }
@@ -280,6 +291,34 @@ export function createBot({ db, api, players, tournaments, adminIds = new Set(),
       log.error?.('[bot] обновление не обработано', e);
     }
     return null;
+  }
+
+  // -------------------------------------------------------- напоминания
+
+  let reminding = false;
+  /**
+   * Вечернее напоминание о серии. Зовётся раз в полминуты; кому писать,
+   * решает analytics (вчера был, сегодня нет, не отписался, сегодня ещё не
+   * напоминали). Отметка ставится и при неудаче — одна попытка в день.
+   */
+  async function remind() {
+    if (!api.enabled || !analytics || reminding) return 0;
+    reminding = true;
+    let sent = 0;
+    try {
+      for (const p of analytics.remindDue()) {
+        analytics.markReminded(p.id);
+        const n = p.last_streak;
+        const word = n % 10 === 1 && n % 100 !== 11 ? 'день'
+          : n % 10 >= 2 && n % 10 <= 4 && (n % 100 < 12 || n % 100 > 14) ? 'дня' : 'дней';
+        const ok = await send(p.tg_id, `🔥 Серия ${n} ${word} подряд сгорит в полночь.\n`
+          + 'Загляни: бонус дня и новые задания уже ждут.\n\n/mute — не напоминать', playButton());
+        if (ok) sent++;
+      }
+    } finally {
+      reminding = false;
+    }
+    return sent;
   }
 
   /** Настроить бота при старте: вебхук, кнопка меню, команды. */
@@ -303,6 +342,7 @@ export function createBot({ db, api, players, tournaments, adminIds = new Set(),
       { command: 'stats', description: 'Моя статистика' },
       { command: 'top', description: 'Топ-10 по рейтингу' },
       { command: 'tours', description: 'Турниры' },
+      { command: 'mute', description: 'Не напоминать о серии' },
     ];
     await api.call('setMyCommands', { commands: base });
     for (const id of adminIds) {
@@ -313,7 +353,8 @@ export function createBot({ db, api, players, tournaments, adminIds = new Set(),
           { command: 'starttour', description: 'Начать турнир' },
           { command: 'canceltour', description: 'Отменить турнир' },
           { command: 'settle', description: 'Решить спорный матч' },
-          { command: 'stars', description: 'Звёзды' }],
+          { command: 'stars', description: 'Звёзды' },
+          { command: 'metrics', description: 'Статистика игры' }],
       });
     }
     if (!hooked) { log.warn?.('[bot] вебхук не поставлен — повторю позже'); return false; }
@@ -322,7 +363,7 @@ export function createBot({ db, api, players, tournaments, adminIds = new Set(),
   }
 
   return {
-    handleUpdate, setup, notify, notifyAdmins, refund, donateInvoice, tourInvoice,
+    handleUpdate, setup, notify, notifyAdmins, refund, donateInvoice, tourInvoice, remind,
     get username() { return username; },
   };
 }

@@ -1,4 +1,5 @@
 import { MISSION_BY_ID } from '../campaign/missions.js';
+import { isTowerRoom } from '../net/rooms.js';
 
 /**
  * Описание партии: что именно строить сцене.
@@ -41,6 +42,30 @@ export function quickMatch(botLevel = null, opts = {}) {
   };
 }
 
+/**
+ * Башня: высокая арена, крюк-трос, короткий ход. Соперник — бот или
+ * человек рядом. Играется в любой ориентации телефона.
+ */
+export function towerMatch(botLevel = null) {
+  return {
+    mode: 'quick',
+    shape: 'tower',
+    teams: [
+      { worms: 2, control: 'human' },
+      botLevel
+        ? { worms: 2, control: 'bot', level: botLevel }
+        : { worms: 2, control: 'human' },
+    ],
+    // bounce и roll — граната на тесных этажах прыгает и катится вдвое слабее
+    // flood — с 9-го хода вода каждый ход поднимается на 85 px: бой сам
+    // сжимается к верхним этажам и кончается за несколько минут
+    rules: {
+      turnTime: 25, hook: 3, crateChance: 0.3, bounce: 0.5, roll: 0.7,
+      flood: { after: 8, step: 85 },
+    },
+  };
+}
+
 /** Варианты настроек быстрой игры — для меню и проверки сохранённых. */
 export const QUICK_OPTIONS = {
   worms: [2, 3, 4, 1],
@@ -63,8 +88,22 @@ export function campaignMatch(missionId) {
 }
 
 /** Сетевая партия: обе стороны — люди, состав как в обычной быстрой игре. */
-export function onlineMatch() {
-  return { ...HOTSEAT, mode: 'online' };
+export function onlineMatch(room = null) {
+  // Все сетевые бои — на башне: и рейтинг, и без рейтинга, и турниры, и
+  // с другом по ссылке. Режим по-прежнему зашит в код комнаты, карта — нет.
+  // ?map=classic в адресе — прежняя широкая карта: для отладки и для
+  // проверки сетевого движка в tests/net.mjs
+  const classic = new URLSearchParams(globalThis.location?.search ?? '').get('map') === 'classic';
+  if (classic && !isTowerRoom(room)) return { ...HOTSEAT, mode: 'online' };
+  return { ...towerMatch(null), mode: 'online' };
+}
+
+/**
+ * Быстрый бой, где соперник не нашёлся: башня против бота. В рейтинг не
+ * идёт — бой с ботом рейтинг не двигает нигде. Игроку это говорится прямо.
+ */
+export function fallbackMatch() {
+  return { ...towerMatch('fighter'), fallback: true };
 }
 
 /** Есть ли в партии хоть один бот. */

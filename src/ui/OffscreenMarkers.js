@@ -20,6 +20,8 @@ export class OffscreenMarkers {
     const scene = this.scene;
     const m = CFG.CAM_EDGE_MARGIN;
     this.gfx.clear();
+    // Высокая арена: бойцы прячутся и сверху, и снизу — там свои указатели
+    if (scene.sling) { this._around(); return; }
 
     // Раскладываем по столбикам у краёв. Класть указатель на высоту бойца
     // нельзя: бойцы стоят примерно на одном уровне, и метки слипаются.
@@ -69,6 +71,38 @@ export class OffscreenMarkers {
       y += 30;
     }
     return used;
+  }
+
+  /**
+   * Указатели по всему периметру: стрелка стоит на краю экрана там, где
+   * луч от центра к бойцу его пересекает, и смотрит на бойца.
+   */
+  _around() {
+    const scene = this.scene;
+    const rig = scene.rig;
+    const W = CFG.VIEW_W, H = CFG.VIEW_H;
+    const x0 = 26, x1 = W - 26, y0 = 62 + 26, y1 = H - 150;
+    let used = 0;
+    for (const w of scene.worms) {
+      if (!w.alive) continue;
+      const sx = rig.uiX(w.x);
+      const sy = (w.centerY - rig.viewTop) * rig.zoom - CFG.FRAME.top;
+      if (sx >= 0 && sx <= W && sy >= 62 && sy <= H) continue;
+      const x = Phaser.Math.Clamp(sx, x0, x1), y = Phaser.Math.Clamp(sy, y0, y1);
+      const a = Math.atan2(sy - y, sx - x);
+      const color = TEAM_COLORS[w.team % TEAM_COLORS.length];
+      const c = Math.cos(a), sn = Math.sin(a);
+      this.gfx.fillStyle(color, 0.95);
+      this.gfx.beginPath();
+      this.gfx.moveTo(x + c * 14, y + sn * 14);
+      this.gfx.lineTo(x - c * 8 - sn * 11, y - sn * 8 + c * 11);
+      this.gfx.lineTo(x - c * 8 + sn * 11, y - sn * 8 - c * 11);
+      this.gfx.closePath();
+      this.gfx.fillPath();
+      if (w === scene.turn.activeWorm) { this.gfx.lineStyle(2, 0xffffff, 0.9); this.gfx.strokePath(); }
+      this._label(used++, x - c * 26, y - sn * 26, `${w.health}`, color, 0.5);
+    }
+    for (let i = used; i < this.labels.length; i++) this.labels[i].setVisible(false);
   }
 
   _label(i, x, y, text, color, originX) {

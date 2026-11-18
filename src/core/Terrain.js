@@ -65,6 +65,16 @@ export class Terrain {
     const { width: w, height: h, rng } = this;
     const gen = this.biome.gen;
 
+    // Форма рисует карту сама (башня): профиля поверхности у неё нет,
+    // «верхов» в каждом столбце несколько — по этажу на каждый
+    if (shape?.build && srng) {
+      shape.build(this, srng);
+      this._syncSolidFromMask();
+      this._findTops();
+      this._paintTexture();
+      return;
+    }
+
     // Фазы синусоид — свои на каждой карте
     const phases = gen.octaves.map(() => rng() * Math.PI * 2);
     const noise = makeNoise1D(rng, w, gen.noiseCell);
@@ -115,6 +125,30 @@ export class Terrain {
       ctx.fill();
     }
     ctx.globalCompositeOperation = 'source-over';
+  }
+
+  /**
+   * Все «верхи» в каждом столбце: где сверху вниз воздух сменяется землёй.
+   * Нужны многоэтажной карте — трава рисуется на каждом этаже, а не только
+   * на самой верхней кромке. Вместе с верхом запоминается толщина земли
+   * под ним: полоса травы не должна свисать ниже тонкой плиты.
+   */
+  _findTops() {
+    const { width: w, height: h, solid } = this;
+    this.tops = new Array(w);
+    for (let x = 0; x < w; x++) {
+      const list = [];
+      let prev = 0, start = -1;
+      for (let y = 0; y < h; y++) {
+        const v = solid[y * w + x];
+        if (v && !prev) start = y;
+        if (!v && prev && start >= 0) { list.push([start, y - start]); start = -1; }
+        prev = v;
+      }
+      if (prev && start >= 0) list.push([start, h - start]);
+      this.tops[x] = list;
+      this.surface[x] = list.length ? list[0][0] : h;
+    }
   }
 
   /** Полная перезапись solid[] из маски. Дорого — только при генерации. */
@@ -187,7 +221,19 @@ export class Terrain {
         const gw = grass.width, gh = grass.height;
         for (let x = x0; x < x1; x++) {
           const sx = ((x % gw) + gw) % gw;
-          ctx.drawImage(grass, sx, 0, 1, gh, x, this.surface[x] - over, 1, gh);
+          if (this.tops) {
+            for (const [y, thick] of this.tops[x]) {
+              const hh = Math.min(gh, thick + over);
+              ctx.drawImage(grass, sx, 0, 1, hh, x, y - over, 1, hh);
+            }
+          } else {
+            ctx.drawImage(grass, sx, 0, 1, gh, x, this.surface[x] - over, 1, gh);
+          }
+        }
+      } else if (this.tops) {
+        ctx.fillStyle = b.fallback.rim;
+        for (let x = x0; x < x1; x++) {
+          for (const [y, thick] of this.tops[x]) ctx.fillRect(x, y, 1, Math.min(14, thick));
         }
       } else {
         ctx.fillStyle = b.fallback.rim;
@@ -353,6 +399,26 @@ export class Terrain {
       h = Math.imul(h, 16777619);
     }
     return (h >>> 0).toString(16);
+  }
+
+  /**
+   * Места, где боец может стоять, на всех этажах: [{x, y}], y — ноги.
+   * Обычной карте хватает isSpawnable (одна поверхность на столбец).
+   */
+  standSpots(step = 8, margin = 50) {
+    const out = [];
+    if (!this.tops) return out;
+    for (let x = margin; x < this.width - margin; x += step) {
+      for (const [top] of this.tops[x]) {
+        if (top < 60 || top > CFG.DROWN_Y - 70) continue;
+        // Над головой должно быть свободно, под ногами — ровно: край плиты
+        // и клин у её конца не годятся
+        if (this.solidInRect(x - 14, top - 46, x + 14, top - 5)) continue;
+        if (!this.solidAt(x - 12, top + 6) || !this.solidAt(x + 12, top + 6)) continue;
+        out.push({ x, y: top - 1 });
+      }
+    }
+    return out;
   }
 
   /** Свободна ли колонка сверху — для выбора точек спавна. */

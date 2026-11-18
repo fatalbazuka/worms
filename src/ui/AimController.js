@@ -28,6 +28,15 @@ const BLOB_STEP = 4.6;     // шаг между шариками: соседни
  * 2. Свайп по бойцу: направление задаёт угол, длина — силу, отпустили =
  *    выстрел. Быстрее на мыши, но на тач-экране кисть накрывает поле.
  *
+ * 3. Рогатка — на арене с крюком (scene.sling), вместо первых двух на
+ *    телефоне: палец ставится на бойца и тянется НАЗАД, от цели; длина
+ *    натяжения — сила, отпустил — выстрел. Палец при этом не закрывает то,
+ *    куда летит снаряд. Натяжение меряется в экранных пикселях.
+ *
+ * Крюк (там же): касание мимо бойца без движения — трос в эту сторону.
+ * Пока палец прижат, виден пунктир до точки зацепа; повёл пальцем — это
+ * уже протяжка камеры, крюк отменён.
+ *
  * Показано как в оригинале: перед бойцом прицел-крестик на постоянном
  * расстоянии, а пока копится сила — шкала «шариков» вдоль прицела. Ни
  * траектории, ни точки падения, ни цифр угла и силы: куда упадёт снаряд с
@@ -72,6 +81,31 @@ export class AimController {
     const o = this.origin();
     // pointer.worldX смотрит на камеру неба — мировую точку берём у рига
     const p = this.scene.rig.worldPoint(pointer);
+
+    if (this.scene.sling) {
+      // Рогатка: хват и натяжение — в экранных пикселях, зум не мешает
+      const rig = this.scene.rig;
+      const sx = (o.x - rig.viewLeft) * rig.zoom, sy = (o.y - rig.viewTop) * rig.zoom;
+      const grab = canAim && !w.zip && !this.scene.turn.retreating
+        && Math.hypot(pointer.x - sx, pointer.y - sy) <= CFG.SLING_GRAB;
+      if (grab) {
+        this.mode = 'aim';
+        this._lastStep = 0;
+        this.startX = pointer.x;
+        this.startY = pointer.y;
+        this.dragX = 0; this.dragY = 0;
+        // Пока не ясно, натяжение это или мазок по камере, начавшийся на
+        // бойце: решит скорость пальца в первые полторы десятых секунды
+        this.armed = false;
+        this.downAt = performance.now();
+        this.downPointer = { x: pointer.x, y: pointer.y };
+        this.wasOut = false;
+      } else {
+        this._beginPan(pointer);
+      }
+      return;
+    }
+
     const near = canAim && Math.hypot(p.x - o.x, p.y - o.y) <= CFG.AIM_GRAB_RADIUS;
 
     if (near) {
@@ -80,7 +114,21 @@ export class AimController {
       this.startY = p.y;
       this.dragX = 0; this.dragY = 0;
     } else {
-      this.mode = 'pan';
+      this._beginPan(pointer);
+    }
+  }
+
+  /**
+   * Касание мимо бойца: протяжка камеры. Там, где есть крюк, она начинается
+   * не сразу, а когда палец действительно поехал, — до того это возможный
+   * тап, то есть крюк.
+   */
+  _beginPan(pointer) {
+    this.mode = 'pan';
+    if (this.scene.hookPerTurn > 0) {
+      this.tap = { x: pointer.x, y: pointer.y, moved: false, at: performance.now() };
+    } else {
+      this.tap = null;
       this.scene.rig.panStart(pointer);
     }
   }
@@ -90,11 +138,37 @@ export class AimController {
     if (!this.mode || !pointer.isDown) return;
 
     if (this.mode === 'pan') {
+      if (this.tap && !this.tap.moved) {
+        if (Math.hypot(pointer.x - this.tap.x, pointer.y - this.tap.y) < CFG.TAP_MOVE) return;
+        this.tap.moved = true;
+        this.scene.rig.panStart(pointer);
+      }
       this.scene.rig.panMove(pointer);
       return;
     }
     if (this.scene.rig.pinching) { this.cancel(); return; }
 
+    if (this.scene.sling) {
+      this.dragX = pointer.x - this.startX;
+      this.dragY = pointer.y - this.startY;
+      const len = Math.hypot(this.dragX, this.dragY);
+      if (!this.armed) {
+        const quick = performance.now() - this.downAt < CFG.SLING_FLICK_MS;
+        if (quick && len > CFG.SLING_FLICK_PX) {
+          // Быстрый мазок: это камеру тянули. Переводим в протяжку с той
+          // точки, где палец коснулся, — кадр не дёрнется
+          this.mode = 'pan';
+          this.tap = null;
+          this.dragX = 0; this.dragY = 0;
+          this.scene.rig.panStart(this.downPointer);
+          this.scene.rig.panMove(pointer);
+          return;
+        }
+        if (!quick) this.armed = true;
+      }
+      if (len > CFG.SLING_MIN) this.wasOut = true;
+      return;
+    }
     const p = this.scene.rig.worldPoint(pointer);
     this.dragX = p.x - this.startX;
     this.dragY = p.y - this.startY;
@@ -102,9 +176,26 @@ export class AimController {
 
   onUp() {
     this.scene.rig.panEnd();
+    // Палец не двигался и не задержался — это тап: трос в сторону точки.
+    // Подержал и отпустил — передумал, ничего не делаем
+    if (this.mode === 'pan' && this.tap && !this.tap.moved
+      && performance.now() - this.tap.at < CFG.TAP_TIME) {
+      const p = this.scene.rig.worldPoint(this.tap);
+      this.scene.tryHook(p.x, p.y);
+    }
+    this.tap = null;
     if (this.mode === 'charge') this.scene.mouseFire = false;
     if (this.mode === 'aim') {
       const shot = this.computeShot();
+      // Отпустил до того, как стало ясно, что это натяжение, или всё касание
+      // было коротким мазком — не стреляем
+      if (shot && this.scene.sling
+        && (!this.armed || performance.now() - this.downAt < CFG.SLING_MIN_HOLD)) {
+        this.mode = null;
+        this.dragX = 0; this.dragY = 0;
+        this.gfx.clear();
+        return;
+      }
       if (shot) {
         // Синхронизируем угол кнопочной схемы со свайпом, иначе после
         // выстрела свайпом ▲▼ продолжали бы крутить со старого значения
@@ -116,6 +207,7 @@ export class AimController {
             -CFG.AIM_ANGLE_LIMIT, CFG.AIM_ANGLE_LIMIT,
           );
         }
+        if (this.scene.sling) this.scene.fx.sound('twang');
         this.scene.fireActiveWorm(shot.vx, shot.vy);
       }
     }
@@ -139,8 +231,7 @@ export class AimController {
       this.scene.mouseFire = true;
       return;
     }
-    this.mode = 'pan';
-    this.scene.rig.panStart(pointer);
+    this._beginPan(pointer);
   }
 
   /** Боец смотрит на курсор: разворот и угол — как если бы целился рукой. */
@@ -160,6 +251,7 @@ export class AimController {
 
   cancel() {
     if (this.mode === 'charge') this.scene.mouseFire = false;
+    this.tap = null;
     this.mode = null;
     this.dragX = 0; this.dragY = 0;
     this.gfx.clear();
@@ -168,6 +260,14 @@ export class AimController {
   /** Вектор выстрела из текущего свайпа, либо null, если свайп слишком короткий. */
   computeShot() {
     const len = Math.hypot(this.dragX, this.dragY);
+    if (this.scene.sling) {
+      // Рогатка: летит в сторону, обратную натяжению
+      if (len < CFG.SLING_MIN) return null;
+      const k = Math.min(1, (len - CFG.SLING_MIN) / (CFG.SLING_MAX - CFG.SLING_MIN));
+      const power = Math.max(CFG.CHARGE_MIN, k) * CFG.AIM_MAX_POWER;
+      const dirX = -this.dragX / len, dirY = -this.dragY / len;
+      return { vx: dirX * power, vy: dirY * power, power, angle: Math.atan2(-dirY, dirX) };
+    }
     if (len < CFG.AIM_MIN_DRAG) return null;
 
     const sign = CFG.AIM_INVERT ? -1 : 1;
@@ -195,12 +295,150 @@ export class AimController {
     }
     if (!w || !scene.canPlayerAct()) {
       if (this.crosshair) this.crosshair.setVisible(false);
+      this.hintLabel?.setVisible(false);
       return;
     }
 
     // Свайп имеет приоритет; иначе показываем прицел кнопочной схемы
-    if (this.mode === 'aim') this._drawSwipe();
-    else this._drawButtonAim(scene.charging ? scene.charge : 0);
+    if (this.mode === 'aim') { this.hintLabel?.setVisible(false); this._drawSwipe(); }
+    else if (scene.sling && !this.desktop && !scene.charging) {
+      // У рогатки прицела «в покое» нет: направления ещё никто не задал
+      if (this.crosshair) this.crosshair.setVisible(false);
+      this._drawSlingHint();
+      this._drawHookHints();
+      this._drawHookPreview();
+    } else {
+      this._drawButtonAim(scene.charging ? scene.charge : 0);
+      this._drawHookPreview();
+    }
+  }
+
+  /**
+   * Подсказка рогатки: «палец» берёт бойца и тянет назад от ближайшего
+   * врага, шкала силы растёт в сторону выстрела, палец отпускает — и по
+   * кругу. Показывает жест целиком, без единого слова.
+   */
+  _drawSlingHint() {
+    const scene = this.scene;
+    const w = this.worm;
+    if (!scene.slingHint || !w || this.tap || w.zip || scene.turn.retreating) return;
+    const foes = scene.worms.filter((f) => f.alive && f.team !== w.team);
+    if (!foes.length) return;
+    const foe = foes.reduce((a, b) =>
+      (Math.hypot(b.x - w.x, b.y - w.y) < Math.hypot(a.x - w.x, a.y - w.y) ? b : a));
+    // Целимся чуть выше врага — так и надо стрелять навесом
+    let dx = foe.x - w.x, dy = foe.centerY - w.centerY - 90;
+    const d = Math.hypot(dx, dy) || 1;
+    dx /= d; dy /= d;
+    const t = (scene.time.now % 2000) / 2000;
+    const pull = t < 0.15 ? 0 : t < 0.7 ? (t - 0.15) / 0.55 : t < 0.85 ? 1 : 0;
+    const k = pull * pull * (3 - 2 * pull);
+    const reach = (CFG.SLING_MAX * 0.72 * k) / scene.rig.zoom;
+    const o = this.origin();
+    const fx = o.x - dx * reach, fy = o.y - dy * reach;
+    const g = this.gfx;
+    if (k > 0.02) {
+      g.lineStyle(3, 0xffffff, 0.35).lineBetween(o.x, o.y, fx, fy);
+      this._drawPower(o, { x: dx, y: dy }, k * 0.72);
+    }
+    // «Палец»: кружок с ободком; в момент отпускания вспыхивает
+    const released = t >= 0.85;
+    g.fillStyle(0xffffff, released ? 0.25 : 0.85).fillCircle(fx, fy, released ? 26 : 17);
+    g.lineStyle(3, 0x1a1408, released ? 0.2 : 0.7).strokeCircle(fx, fy, released ? 26 : 17);
+  }
+
+  /**
+   * Подсказка новичку: до трёх светящихся точек, куда трос точно достанет
+   * и где боец удержится. Считается один раз на позицию бойца.
+   */
+  _hintSpots(w) {
+    const key = `${Math.round(w.x)}:${Math.round(w.y)}:${w.hang ?? ''}`;
+    if (this._hintKey === key) return this._hints;
+    this._hintKey = key;
+    const scene = this.scene;
+    const out = [];
+    for (let k = 0; k < 16 && out.length < 3; k++) {
+      // Сначала вверх, потом веером в обе стороны
+      const off = Math.ceil(k / 2) * (Math.PI / 10) * (k % 2 ? 1 : -1);
+      const a = -Math.PI / 2 + off;
+      const anchor = scene.hookAnchor(w, w.x + Math.cos(a) * 200, w.centerY + Math.sin(a) * 200);
+      if (!anchor) continue;
+      const end = w.zipEnd(anchor.x, anchor.y);
+      if (!end.grounded && !end.hang) continue;
+      if (Math.hypot(end.x - w.x, end.y - w.y) < 90) continue;
+      if (out.some((o) => Math.hypot(o.x - anchor.x, o.y - anchor.y) < 130)) continue;
+      out.push(anchor);
+    }
+    this._hints = out;
+    return out;
+  }
+
+  _drawHookHints() {
+    const scene = this.scene;
+    const w = this.worm;
+    const on = scene.hookHint && w && !this.tap && scene.canHook() && !scene.turn.retreating;
+    if (!on) { this.hintLabel?.setVisible(false); return; }
+    const spots = this._hintSpots(w);
+    const g = this.gfx;
+    const pulse = Math.sin(scene.time.now / 260);
+    for (const p of spots) {
+      g.lineStyle(3, 0xffe27a, 0.55 + pulse * 0.3).strokeCircle(p.x, p.y, 15 + pulse * 4);
+      g.fillStyle(0xffe27a, 0.95).fillCircle(p.x, p.y, 5);
+    }
+    if (!spots.length) { this.hintLabel?.setVisible(false); return; }
+    if (!this.hintLabel) {
+      this.hintLabel = scene.rig.world(scene.add.text(0, 0, 'коснись', {
+        fontFamily: 'Nunito, system-ui, sans-serif', fontSize: '15px', fontStyle: '800',
+        color: '#1a1408', backgroundColor: '#ffe27a', padding: { x: 7, y: 3 },
+      }).setOrigin(0.5, 1).setDepth(DEPTH.AIM));
+    }
+    this.hintLabel.setVisible(true).setPosition(spots[0].x, spots[0].y - 24 - pulse * 3);
+  }
+
+  /**
+   * Начало дуги для того, что бросают рукой (граната, банан): первые
+   * полсекунды полёта тем же счётом, что и у настоящего снаряда. Куда она
+   * в итоге ляжет, не видно — только как пойдёт из руки.
+   */
+  _drawThrowArc(o, vx, vy, weapon) {
+    const p = weapon.projectile;
+    const terrain = this.scene.terrain;
+    const d = Math.hypot(vx, vy) || 1;
+    let x = o.x + (vx / d) * CFG.MUZZLE_OFFSET, y = o.y + (vy / d) * CFG.MUZZLE_OFFSET;
+    const dt = 1 / 60;
+    const steps = 36;
+    for (let i = 1; i <= steps; i++) {
+      vx += this.scene.wind * (p.windScale ?? 1) * dt;
+      vy += CFG.GRAVITY * (p.gravityScale ?? 1) * dt;
+      x += vx * dt; y += vy * dt;
+      if (terrain.solidAt(x, y)) break;
+      if (i % 3) continue;
+      this.gfx.fillStyle(0xffffff, 0.9 * (1 - i / (steps + 6)));
+      this.gfx.fillCircle(x, y, 3.2);
+    }
+  }
+
+  /** Пока палец прижат и не поехал — пунктир троса до точки зацепа. */
+  _drawHookPreview() {
+    const scene = this.scene;
+    const w = this.worm;
+    if (!this.tap || this.tap.moved || !w || !scene.canHook()) return;
+    const p = scene.rig.worldPoint(this.tap);
+    const a = scene.hookAnchor(w, p.x, p.y);
+    const g = this.gfx;
+    const ox = w.x, oy = w.centerY;
+    const tx = a ? a.x : p.x, ty = a ? a.y : p.y;
+    const d = Math.hypot(tx - ox, ty - oy) || 1;
+    const n = Math.min(Math.floor(d / 14), Math.floor(CFG.HOOK_RANGE / 14));
+    g.fillStyle(a ? 0xe8d9a8 : 0xff8a8a, a ? 0.95 : 0.6);
+    for (let i = 1; i <= n; i++) {
+      const k = (i * 14) / d;
+      g.fillCircle(ox + (tx - ox) * k, oy + (ty - oy) * k, 2.4);
+    }
+    if (a) {
+      g.lineStyle(3, 0xe8d9a8, 1).strokeCircle(a.x, a.y, 9);
+      g.fillStyle(0xe8d9a8, 1).fillCircle(a.x, a.y, 3.5);
+    }
   }
 
   /** Прицел и — во время набора силы — шкала силы для кнопочной схемы. */
@@ -292,6 +530,19 @@ export class AimController {
   _drawSwipe() {
     if (this.worm?.marker?.visible) this.worm.setActiveMarker(false);
     const shot = this.computeShot();
+    // Рогатка: пока палец в круге отмены, круг виден — отпусти здесь, и
+    // выстрела не будет. Особенно ясно, когда натянул и вернул обратно
+    if (this.scene.sling) {
+      const o = this.origin();
+      const r = CFG.SLING_MIN / this.scene.rig.zoom;
+      const inside = !shot;
+      this.gfx.lineStyle(3, inside ? 0xff8a8a : 0xffffff, inside ? 0.85 : 0.22).strokeCircle(o.x, o.y, r);
+      if (inside && this.wasOut) {
+        this.gfx.lineStyle(4, 0xff8a8a, 0.9);
+        this.gfx.lineBetween(o.x - 9, o.y - 9, o.x + 9, o.y + 9);
+        this.gfx.lineBetween(o.x + 9, o.y - 9, o.x - 9, o.y + 9);
+      }
+    }
     if (!shot) return;
 
     // Свайп — тот же прицел и та же шкала силы, только направление и сила
@@ -303,6 +554,23 @@ export class AimController {
     this.crosshair.setVisible(true);
     this.crosshair.setPosition(o.x + d.x * CFG.AIM_RAY_LEN, o.y + d.y * CFG.AIM_RAY_LEN);
     this._drawPower(o, d, shot.power / CFG.AIM_MAX_POWER);
+    if (this.scene.sling) {
+      // Резинка «щёлкает» на каждом шаге шкалы — сила слышна и чувствуется
+      // в руке, глаз можно держать на цели
+      const stepN = Math.ceil((shot.power / CFG.AIM_MAX_POWER) * POWER_BLOBS.length);
+      if (stepN !== this._lastStep) {
+        this._lastStep = stepN;
+        this.scene.fx.sound('stretch', { power: shot.power / CFG.AIM_MAX_POWER });
+        if (stepN % 4 === 0) this.scene.haptic?.('select');
+      }
+      // Резинка рогатки: от бойца назад, к пальцу
+      const pull = Math.min(Math.hypot(this.dragX, this.dragY), CFG.SLING_MAX) / this.scene.rig.zoom;
+      this.gfx.lineStyle(3, 0xffffff, 0.35)
+        .lineBetween(o.x, o.y, o.x - d.x * pull, o.y - d.y * pull);
+      this.gfx.fillStyle(0xffffff, 0.5).fillCircle(o.x - d.x * pull, o.y - d.y * pull, 7);
+      const pr = this.scene.turn.weapon.projectile;
+      if (pr?.fuse > 0 && pr.bounciness > 0) this._drawThrowArc(o, shot.vx, shot.vy, this.scene.turn.weapon);
+    }
     const weapon = this.scene.turn.weapon;
     if (weapon.targeted) this._drawTarget(shot.vx, shot.vy, weapon);
   }
@@ -314,6 +582,7 @@ export class AimController {
     i.off('pointerup', this.onUp, this);
     i.off('pointerupoutside', this.onUp, this);
     this.gfx.destroy();
+    this.hintLabel?.destroy();
     if (this.crosshair) this.crosshair.destroy();
   }
 }

@@ -1,14 +1,16 @@
-import { UI, font, ensureButton } from '../ui/theme.js';
+import { UI, font, ensureButton, ensureIcon } from '../ui/theme.js';
 import { CFG } from '../config.js';
 import { MISSIONS, loadProgress, isUnlocked } from '../campaign/missions.js';
 import { objectiveText } from '../campaign/objectives.js';
-import { quickMatch, campaignMatch, onlineMatch, QUICK_OPTIONS } from '../core/match.js';
+import {
+  quickMatch, campaignMatch, onlineMatch, towerMatch, fallbackMatch, QUICK_OPTIONS,
+} from '../core/match.js';
 import { SHAPES } from '../core/shapes.js';
 import { randomRoom, copyText } from '../net/transport.js';
-import { isCasualRoom } from '../net/rooms.js';
+import { isCasualRoom, isTowerRoom } from '../net/rooms.js';
 import { Lobby } from '../net/lobby.js';
 import { pendingSession, forgetSession } from '../net/session.js';
-import { syncMe, fetchTop, myRank, loggedIn, onAccountChange } from '../net/server.js';
+import { syncMe, fetchTop, myRank, loggedIn, onAccountChange, track } from '../net/server.js';
 import { openAccountDialog } from '../ui/AccountDialog.js';
 import { openTournaments } from '../ui/Tournaments.js';
 import { askText, closeOverlay } from '../ui/Overlay.js';
@@ -22,6 +24,15 @@ import { leagueOf, nextLeague, leagueProgress, toNextLeague, leagueLabel } from 
 import { BOT_LEVELS } from '../ai/Bot.js';
 import { isDesktop, setUiMode } from '../platform/device.js';
 import { sfx } from '../audio/Sfx.js';
+import { SKINS, SKIN_BY_ID, rewardMissions } from '../core/skins.js';
+import { skinState, equippedSkin, equipSkin, openSkinBox, syncCampaignBoxes } from '../platform/skins.js';
+import {
+  TASK_BY_ID, BOX_PRICE, STREAK_COINS, STREAK_BOX_DAY, streakReady, dayKey, prevDay as prevDayOf,
+} from '../core/daily.js';
+import {
+  dailyState, rewardWaiting, claimDailyTask, claimDailyStreak, buyBox,
+} from '../platform/daily.js';
+import { fitScale } from '../core/assets.js';
 
 /**
  * Меню.
@@ -37,6 +48,17 @@ import { sfx } from '../audio/Sfx.js';
  * Кнопки складываются в this.buttons — по ним ходит тест, чтобы не считать
  * раскладку у себя заново.
  */
+/** Русское склонение: 1 день, 2 дня, 5 дней. */
+function plural(n, one, few, many) {
+  const m10 = n % 10, m100 = n % 100;
+  if (m10 === 1 && m100 !== 11) return one;
+  if (m10 >= 2 && m10 <= 4 && (m100 < 12 || m100 > 14)) return few;
+  return many;
+}
+
+/** Через сколько секунд поиска без соперника предлагается бой с ботом. */
+const FALLBACK_AFTER = 20;
+
 export default class MenuScene extends Phaser.Scene {
   constructor() { super('Menu'); }
 
@@ -66,6 +88,8 @@ export default class MenuScene extends Phaser.Scene {
     this.events.on('addedtoscene', assignCamera);
     this.events.once('shutdown', () => this.events.off('addedtoscene', assignCamera));
     this._backdrop();
+    // Коробки за миссии, пройденные раньше, чем появились скины
+    syncCampaignBoxes();
     this.showRoot();
 
     // Вернулись из турнирного матча — сразу к сетке. Пришли по кнопке бота
@@ -124,7 +148,10 @@ export default class MenuScene extends Phaser.Scene {
     this.W = CFG.VIEW_W;
     this.H = CFG.VIEW_H;
     this.portrait = this.H > this.W;
-    this.oy = Math.max(0, Math.round((this.H - CFG.VIEW_BASE) / 2));
+    // В вертикальном телефоне раздел начинается у верха экрана, как любой
+    // экран в приложении; раньше блок висел посередине, а сверху и снизу
+    // зияла пустота. В высоком ландшафте (планшет) — по центру, как было.
+    this.oy = this.portrait ? 56 : Math.max(0, Math.round((this.H - CFG.VIEW_BASE) / 2));
     this.uiCam.scrollY = -this.oy;
   }
 
@@ -184,7 +211,7 @@ export default class MenuScene extends Phaser.Scene {
     const t = this.add.text(this.W / 2, 54, text, font(44, 800, UI.accent)).setOrigin(0.5, 0);
     this.items.push(t);
     if (sub) {
-      this.items.push(this.add.text(this.W / 2, 106, sub, font(15, 700, UI.textDim))
+      this.items.push(this.add.text(this.W / 2, 106, sub, font(this.fs(15), 700, UI.textDim))
         .setOrigin(0.5, 0));
     }
     return t;
@@ -194,20 +221,28 @@ export default class MenuScene extends Phaser.Scene {
    * Кнопка меню. Ширина фиксированная, чтобы столбец читался как список,
    * а не как набор разных плашек.
    */
-  _button(key, x, y, label, hint, onTap, { w = 420, h = 66, variant = 'normal', enabled = true, into = null } = {}) {
+  _button(key, x, y, label, hint, onTap, {
+    w = 420, h = 66, variant = 'normal', enabled = true, into = null, big = false,
+    titleSize = null, hintSize = null,
+  } = {}) {
     const texKey = `menu-btn-${w}x${h}-${variant}`;
     ensureButton(this, texKey, w, h, variant);
     const img = this.add.image(x, y, texKey).setOrigin(0.5);
     const alpha = enabled ? 1 : 0.45;
     img.setAlpha(alpha);
 
-    const title = this.add.text(x, hint ? y - 10 : y, label,
-      font(hint ? 20 : h < 50 ? 17 : 22, 800, enabled ? UI.text : UI.textDim)).setOrigin(0.5).setAlpha(alpha);
+    // big — главная кнопка экрана: надпись вдвое крупнее обычной
+    const title = this.add.text(x, big ? y - h * 0.13 : hint ? y - 10 : y, label,
+      font(titleSize ?? (big ? 42 : isDesktop() ? (hint ? 20 : h < 50 ? 17 : 22) : (hint ? 23 : h < 50 ? 20 : 25)),
+        800, enabled ? UI.text : UI.textDim))
+      .setOrigin(0.5).setAlpha(alpha);
+    if (!big && hint && h >= 80) title.setY(y - h * 0.16);
     this.items.push(img, title);
     into?.push(img, title);
     let sub = null;
     if (hint) {
-      sub = this.add.text(x, y + 15, hint, font(12, 700, UI.textDim))
+      sub = this.add.text(x, big ? y + h * 0.27 : h >= 80 ? y + h * 0.2 : y + 15, hint,
+        font(hintSize ?? (big ? 20 : this.fs(12)), 700, big ? '#ffe9c2' : UI.textDim))
         .setOrigin(0.5).setAlpha(alpha);
       this.items.push(sub);
       into?.push(sub);
@@ -234,8 +269,8 @@ export default class MenuScene extends Phaser.Scene {
    * Голое число рейтинга не говорит ни много это, ни мало. Полоса отвечает
    * на оба вопроса сразу — видно и положение внутри лиги, и цель.
    */
-  _leagueBar(cx, y, rating) {
-    const w = 420, h = 10;
+  _leagueBar(cx, y, rating, w = 420, size = 12) {
+    const h = size > 12 ? 14 : 10;
     const cur = leagueOf(rating);
     const next = nextLeague(rating);
     const left = cx - w / 2;
@@ -244,84 +279,579 @@ export default class MenuScene extends Phaser.Scene {
     const fill = Math.max(3, Math.round(w * leagueProgress(rating)));
     this.items.push(this.add.rectangle(left, y, fill, h, cur.color).setOrigin(0, 0.5));
 
-    this.items.push(this.add.text(left, y + 12, cur.name, font(12, 800, cur.text))
+    this.items.push(this.add.text(left, y + 12, cur.name, font(size, 800, cur.text))
       .setOrigin(0, 0));
     this.items.push(this.add.text(left + w, y + 12,
       next ? `до «${next.name}» ещё ${toNextLeague(rating)}` : 'выше некуда',
-      font(12, 700, UI.textDim)).setOrigin(1, 0));
+      font(size, 700, UI.textDim)).setOrigin(1, 0));
   }
 
   _back(onTap = () => this.showRoot()) {
-    this._button('back', 92, this.bottomY(46), '← назад', '', onTap, { w: 148, h: 50 });
+    this._button('back', 108, this.bottomY(52), '← назад', '', onTap, { w: 180, h: 60, titleSize: 22 });
   }
 
+  /**
+   * Кегль для мелкого текста. На телефоне логический пиксель — около
+   * половины экранного, и 12-й кегль выходит в шесть точек: не читается.
+   * Под пальцы мелкие подписи на четверть крупнее, на ПК — как были.
+   */
+  fs(n) { return isDesktop() ? n : Math.round(n * 1.3); }
+
+  /** Вертикальный телефон: кнопки во всю ширину и крупные, в столбик. */
+  get roomy() { return this.portrait && !isDesktop(); }
+
+  /** Размеры крупной кнопки-строки для вертикального экрана. */
+  get rowStyle() {
+    return { w: Math.min(this.W - 64, 620), h: 92, titleSize: 28, hintSize: 18 };
+  }
+
+  /** y от верха экрана в координатах раздела (сам раздел сдвинут на oy). */
+  topY(d) { return d - this.oy; }
+
+  /** Маленькая квадратная кнопка со значком. */
+  _iconButton(key, x, y, icon, onTap, size = 52) {
+    const texKey = `menu-icon-btn-${size}`;
+    ensureButton(this, texKey, size, size, 'normal');
+    const img = this.add.image(x, y, texKey).setOrigin(0.5);
+    const glyph = this.add.image(x, y, ensureIcon(this, icon, Math.round(size * 0.62)));
+    this.items.push(img, glyph);
+    img.setInteractive({ useHandCursor: true });
+    img.on('pointerdown', () => { img.setScale(0.94); haptic('tap'); });
+    img.on('pointerout', () => img.setScale(1));
+    img.on('pointerup', () => { img.setScale(1); onTap(); });
+    this.buttons[key] = { x, y: y + this.oy, w: size, h: size, enabled: true };
+    return img;
+  }
+
+  /**
+   * Вкладки внизу экрана — как в любой игре на телефоне: большой палец
+   * достаёт до них без перехвата. «Турниры» и «Профиль» открываются поверх
+   * (это окна), «Бой» и «Топ» — разделы меню.
+   * @returns {number} высота полосы
+   */
+  _tabs(active) {
+    const W = this.W;
+    // Логический пиксель на телефоне — около половины экранного, поэтому
+    // подписи здесь 19–20: меньше уже не читается
+    const h = this.portrait ? 116 : 96;
+    const y0 = this.bottomY(h);
+    this.items.push(this.add.rectangle(0, y0, W, h + 600, 0x0b1018, 0.94).setOrigin(0, 0));
+    this.items.push(this.add.rectangle(0, y0, W, 2, 0xffffff, 0.09).setOrigin(0, 0));
+    const tabs = [
+      ['battle', 'Бой', 'battle', () => this.showRoot()],
+      ['tasks', 'Задания', 'tasks', () => this.showTasks()],
+      ['tournaments', 'Турниры', 'trophy', () => this.openTournaments()],
+      ['top', 'Топ', 'podium', () => { this.topFrom = 'tab'; this.showTop(); }],
+      ['account', 'Профиль', 'profile', () => this.openAccount()],
+    ];
+    const span = Math.min(W, 960);
+    const cell = span / tabs.length;
+    const x0 = (W - span) / 2;
+    tabs.forEach(([key, label, icon, onTap], i) => {
+      const x = x0 + cell * (i + 0.5);
+      const on = key === active;
+      const size = this.portrait ? 48 : 40;
+      const glyph = this.add.image(x, y0 + h * 0.36, ensureIcon(this, icon, size))
+        .setAlpha(on ? 1 : 0.6);
+      if (on) glyph.setTint(0xffc247);
+      const text = this.add.text(x, y0 + h * 0.76, label,
+        font(this.portrait ? 18 : 18, 800, on ? UI.accent : UI.textDim)).setOrigin(0.5);
+      // Есть что забрать — красная точка на «Заданиях»
+      if (key === 'tasks' && !on && rewardWaiting()) {
+        this.items.push(this.add.circle(x + size * 0.55, y0 + h * 0.36 - size * 0.45, 9, 0xff4d4d)
+          .setStrokeStyle(3, 0x0b1018));
+      }
+      const zone = this.add.zone(x, y0 + h / 2, cell, h).setInteractive({ useHandCursor: true });
+      zone.on('pointerdown', () => { glyph.setScale(0.9); haptic('tap'); });
+      zone.on('pointerout', () => glyph.setScale(1));
+      zone.on('pointerup', () => { glyph.setScale(1); onTap(); });
+      this.items.push(glyph, text, zone);
+      if (on) this.items.push(this.add.rectangle(x, y0 + 3, 54, 4, 0xffc247).setOrigin(0.5, 0));
+      this.buttons[key] = { x, y: y0 + h / 2 + this.oy, w: cell, h, enabled: true };
+    });
+    return h;
+  }
+
+  /** Чем запускает большая кнопка: последний выбранный вариант «Башни». */
+  get playChoice() {
+    let saved = null;
+    try { saved = JSON.parse(localStorage.getItem('worms.play.v1') ?? 'null'); } catch { saved = null; }
+    const level = saved && 'level' in saved ? saved.level : 'fighter';
+    return { level: level === null || BOT_LEVELS[level] ? level : 'fighter' };
+  }
+
+  set playChoice(v) {
+    try { localStorage.setItem('worms.play.v1', JSON.stringify(v)); } catch { /* инкогнито */ }
+  }
+
+  /**
+   * Главный экран. Одна большая кнопка — «Играть», остальное вокруг неё:
+   * сверху кто ты и где в лиге, по центру твой боец, внизу вкладки. Всё
+   * привязано к краям экрана, а не к блоку высотой 720: в вертикальном
+   * телефоне раньше весь экран был пуст, а меню жалось в середину.
+   */
   showRoot() {
     this.section = this.showRoot;
     this._clear();
-    this._title('WORMS', 'пошаговая артиллерия');
-    const cx = this.W / 2;
-    const y0 = 196, step = 78;
-
-    this._button('quick', cx, y0, 'Быстрая игра', 'случайная карта',
-      () => this.showQuick(), { variant: 'primary' });
-    this._button('campaign', cx, y0 + step, 'Кампания', 'миссии с условиями',
-      () => this.showCampaign());
-    this._button('online', cx, y0 + step * 2, 'Онлайн', 'игра вдвоём по ссылке',
-      () => this.showOnline());
-
-    this._button('tournaments', cx, y0 + step * 3, 'Турниры', 'сетка на выбывание, титул чемпиона',
-      () => this.openTournaments());
-    // Кабинет: аккаунт — это Telegram, входить отдельно не нужно
+    const W = this.W, cx = W / 2;
+    const portrait = this.portrait;
     const me = player();
-    this._button('account', cx, y0 + step * 4, 'Кабинет',
-      `${me.name} · рейтинг ${me.rating}${me.rank ? ` · место ${me.rank}` : ''}`, () => this.openAccount());
+    const tabH = this._tabs('battle');
+    const top = this.topY(0), bottom = this.bottomY(0);
+    const pad = 28;
 
-    // Партия оборвалась (Telegram перезапустился, погас экран), а мы
-    // открылись без ссылки: предлагаем вернуться, пока соперник ждёт
-    const pending = pendingSession();
-    if (pending && Date.now() - pending.at < 15 * 60 * 1000) {
-      this._button('resume', cx, y0 + step * 5, 'Вернуться в бой',
-        `комната ${pending.room} · соперник ждёт`, () => this.startOnline(pending.room),
-        { variant: 'primary' });
-      this._button('resume-no', cx + 300, y0 + step * 5, '✕', '',
-        () => { forgetSession(pending.room); this.showRoot(); }, { w: 56, h: 56 });
-    }
-
-    // Иконка на экран Домой: открывает игру внутри Telegram сразу в полный
-    // экран. Кнопка есть, только пока Telegram говорит, что иконки нет
-    if (canOfferHomeScreen()) {
-      this._button('home', 132, this.bottomY(46), '⌂ На экран Домой', '',
-        () => addToHomeScreen(), { w: 228, h: 50 });
-    }
-
-    // Настройки в правом нижнем углу: схема управления и звук. Схема
-    // выбирается сама по устройству, но ноутбук с сенсорным экраном или
-    // планшет с мышью игрок переключит сам — выбор запоминается.
-    // В Telegram управление всегда под пальцы — переключателя там нет
-    const desktop = isDesktop();
-    if (!inTelegram()) {
-      this._button('ui-mode', this.W - 130, this.bottomY(62),
-        desktop ? 'Управление: ПК' : 'Управление: сенсор', '',
-        () => { setUiMode(desktop ? 'touch' : 'desktop'); this.showRoot(); }, { w: 228, h: 44 });
-    }
-    this._button('sound', inTelegram() ? this.W - 94 : this.W - 330, this.bottomY(62),
-      sfx.muted ? 'Звук: выкл' : 'Звук: вкл', '',
-      () => { sfx.setMuted(!sfx.muted); this.showRoot(); }, { w: 156, h: 44 });
-
-    // Пять тапов по подписи — диагностика экрана (index.html): что видит
+    // --- кто ты: имя, рейтинг, лига ---
+    const name = this.add.text(pad, top + 18, me.name, font(28, 800)).setOrigin(0, 0);
+    // Пять тапов по имени — диагностика экрана (index.html): что видит
     // страница на самом деле, когда с телефона приходит «не весь экран»
-    const foot = this.add.text(this.W - 16, this.bottomY(14),
-      desktop ? 'мышь и клавиатура · в бою F1 — подсказка' : 'бой — в ландшафте',
-      font(11, 700, UI.textDim)).setOrigin(1, 1);
-    foot.setInteractive();
-    foot.on('pointerdown', () => {
+    name.setInteractive();
+    name.on('pointerdown', () => {
       this.diagTaps = (this.diagTaps ?? 0) + 1;
       if (this.diagTaps % 5 === 0) {
         this.diagOn = !this.diagOn;
         globalThis.__diag?.(this.diagOn);
       }
     });
-    this.items.push(foot);
+    this.items.push(name);
+    this._iconButton('sound', W - pad - 30, top + 36, sfx.muted ? 'mute' : 'sound',
+      () => { sfx.setMuted(!sfx.muted); this.showRoot(); }, 60);
+    this.items.push(this.add.text(W - pad - 76, top + 18,
+      `${me.rating}${me.rank ? ` · место ${me.rank}` : ''}`, font(28, 800, UI.accent)).setOrigin(1, 0));
+    this._leagueBar(cx, top + 84, me.rating, Math.min(W - pad * 2, 760), 18);
+    this._coinBadge(W - pad - 76, top + 156, true);
+
+    // Редкое — мелкими плашками под лигой: иконка на экран Домой (пока
+    // Telegram говорит, что её нет) и схема управления (вне Telegram)
+    let pillX = pad;
+    const pill = (key, label, w, onTap) => {
+      this._button(key, pillX + w / 2, top + 156, label, '', onTap, { w, h: 48, titleSize: 19 });
+      pillX += w + 10;
+    };
+    if (canOfferHomeScreen()) pill('home', '⌂ На экран Домой', 250, () => addToHomeScreen());
+    const desktop = isDesktop();
+    if (!inTelegram()) {
+      pill('ui-mode', desktop ? 'Управление: ПК' : 'Управление: сенсор', 260,
+        () => { setUiMode(desktop ? 'touch' : 'desktop'); this.showRoot(); });
+    }
+
+    // --- «Играть» ---
+    const playH = portrait ? 128 : 104;
+    const playY = bottom - tabH - (portrait ? 168 : 124);
+    const choice = this.playChoice;
+    this._button('play', cx, playY, 'ИГРАТЬ',
+      choice.level ? `Башня · бот «${BOT_LEVELS[choice.level].name}»` : 'Башня · вдвоём на одном телефоне',
+      () => this.start(towerMatch(choice.level)),
+      { w: Math.min(W - 72, 560), h: playH, variant: 'primary', big: true });
+    this._button('modes', cx, playY + playH / 2 + (portrait ? 48 : 36), 'другие режимы', '',
+      () => this.showModes(), { w: 300, h: portrait ? 56 : 48, titleSize: 22 });
+
+    // Партия оборвалась (Telegram перезапустился, погас экран), а мы
+    // открылись без ссылки: предлагаем вернуться, пока соперник ждёт
+    let areaBottom = playY - playH / 2 - 22;
+    const pending = pendingSession();
+    if (pending && Date.now() - pending.at < 15 * 60 * 1000) {
+      const y = areaBottom - 30;
+      this._button('resume', cx - 32, y, 'Вернуться в бой',
+        `комната ${pending.room} · соперник ждёт`, () => this.startOnline(pending.room),
+        { w: 360, h: 60, variant: 'active' });
+      this._button('resume-no', cx + 184, y, '✕', '',
+        () => { forgetSession(pending.room); this.showRoot(); }, { w: 56, h: 56 });
+      areaBottom = y - 44;
+    }
+
+    // --- твой боец ---
+    const areaTop = top + 196;
+    const areaH = areaBottom - areaTop;
+    // Первый вход за день — бонус серии, одним окном поверх экрана
+    if (streakReady(dailyState(), dayKey()) && !this.streakShown) {
+      this.streakShown = true;
+      this.time.delayedCall(350, () => { if (this.section === this.showRoot) this._streakPopup(); });
+    }
+
+    const sheet = this.textures.exists(equippedSkin().sheet) ? equippedSkin().sheet : 'smiley';
+    if (areaH > 110 && this.textures.exists(sheet)) {
+      const k = Phaser.Math.Clamp(areaH / 175, 1, 2.8);
+      const fy = areaTop + areaH * 0.6;
+      this.items.push(this.add.ellipse(cx, fy + 6 * k, 130 * k, 20 * k, 0x000000, 0.28));
+      const hero = this.add.sprite(cx, fy, sheet, 0).setOrigin(0.5, 0.92).setScale(k).setFlipX(true);
+      hero.play(`${sheet}_idle`);
+      // Тап по бойцу — к его скинам
+      hero.setInteractive({ useHandCursor: true });
+      hero.on('pointerdown', () => { haptic('tap'); this.showSkins(); });
+      this.items.push(hero);
+      this.buttons.hero = { x: cx, y: fy - 40 * k + this.oy, w: 100 * k, h: 90 * k, enabled: true };
+
+      // Подпись под бойцом и коробка, если есть неоткрытая: она
+      // подпрыгивает, чтобы её заметили
+      const st = skinState();
+      this.items.push(this.add.text(cx, fy + 22 * k, `скин: ${equippedSkin().name} · ${st.owned.length} из ${SKINS.length}`,
+        font(18, 700, UI.textDim)).setOrigin(0.5, 0));
+      if (st.boxes > 0 && this.textures.exists('shot_crate_weapon')) {
+        const bx = cx + 78 * k, by = fy - 8 * k;
+        const box = this.add.image(bx, by, 'shot_crate_weapon').setOrigin(0.5, 1)
+          .setScale(fitScale(this, 'shot_crate_weapon', 46 * k));
+        box.setInteractive({ useHandCursor: true });
+        box.on('pointerdown', () => { haptic('tap'); this.showSkins(); });
+        this.tweens.add({ targets: box, y: by - 10 * k, duration: 420, yoyo: true, repeat: -1, ease: 'Sine.easeInOut' });
+        const badge = this.add.text(bx + 22 * k, by - 46 * k, `×${st.boxes}`, font(22, 800, '#1a1408'))
+          .setOrigin(0.5).setPadding(8, 2, 8, 2).setBackgroundColor('#ffe27a');
+        this.items.push(box, badge);
+        this.buttons.box = { x: bx, y: by - 20 * k + this.oy, w: 50 * k, h: 46 * k, enabled: true };
+      }
+    }
+  }
+
+  // ------------------------------------------------------------- монеты
+
+  /** Значок монеты, нарисованный один раз. */
+  _coinTexture() {
+    const key = 'menu-coin';
+    if (!this.textures.exists(key)) {
+      const tex = this.textures.createCanvas(key, 44, 44);
+      const c = tex.getContext();
+      c.fillStyle = '#b8860b'; c.beginPath(); c.arc(22, 23, 19, 0, Math.PI * 2); c.fill();
+      c.fillStyle = '#ffd23f'; c.beginPath(); c.arc(22, 21, 18, 0, Math.PI * 2); c.fill();
+      c.strokeStyle = '#e0a800'; c.lineWidth = 3; c.beginPath(); c.arc(22, 21, 12, 0, Math.PI * 2); c.stroke();
+      c.fillStyle = 'rgba(255,255,255,0.65)'; c.beginPath(); c.arc(15, 14, 4, 0, Math.PI * 2); c.fill();
+      tex.refresh();
+    }
+    return key;
+  }
+
+  /** Монеты игрока: значок и число. right — прижать к правому краю по x. */
+  _coinBadge(x, y, right = false) {
+    const n = dailyState().coins;
+    const t = this.add.text(x, y, `${n}`, font(28, 800, '#ffe27a')).setOrigin(right ? 1 : 0, 0.5);
+    const icon = this.add.image(right ? x - t.width - 24 : x - 26, y, this._coinTexture()).setScale(0.9);
+    this.items.push(icon, t);
+    return { icon, text: t };
+  }
+
+  /**
+   * Бонус серии дней: окно поверх главного экрана. Дни серии кружками,
+   * сегодняшний подсвечен; на седьмом — коробка.
+   */
+  _streakPopup() {
+    const W = this.W, H = this.H, cx = W / 2;
+    const st = dailyState();
+    const yesterday = st.streakDay && st.streakDay === prevDayOf(dayKey());
+    const day = yesterday ? st.streak + 1 : 1;
+    const coins = STREAK_COINS[Math.min(day, STREAK_COINS.length) - 1];
+    const box = day % STREAK_BOX_DAY === 0;
+    const cy = this.topY(H * 0.42);
+    const layer = [];
+    const add = (o) => { o.setDepth(50); layer.push(o); this.items.push(o); return o; };
+    const shade = add(this.add.rectangle(0, this.topY(0), W, H, 0x05070c, 0.78).setOrigin(0, 0));
+    shade.setInteractive();
+    const pw = Math.min(W - 48, 640), ph = 420;
+    ensureButton(this, `menu-streak-${pw}x${ph}`, pw, ph, 'normal');
+    add(this.add.image(cx, cy, `menu-streak-${pw}x${ph}`));
+    add(this.add.text(cx, cy - 160, `День ${day} подряд`, font(36, 800, UI.accent)).setOrigin(0.5));
+    add(this.add.text(cx, cy - 116, 'заходи каждый день — награда растёт', font(18, 700, UI.textDim)).setOrigin(0.5));
+    // Семь кружков недели
+    const n = STREAK_BOX_DAY, step = Math.min(78, (pw - 60) / n);
+    const inWeek = ((day - 1) % n) + 1;
+    for (let i = 1; i <= n; i++) {
+      const x = cx + (i - (n + 1) / 2) * step, y = cy - 40;
+      const past = i < inWeek, now = i === inWeek;
+      add(this.add.circle(x, y, now ? 30 : 24, now ? 0xffc247 : past ? 0x4f7a3a : 0x22293a)
+        .setStrokeStyle(3, now ? 0xffffff : 0x0b1018));
+      if (i === n && this.textures.exists('shot_crate_weapon')) {
+        add(this.add.image(x, y, 'shot_crate_weapon').setScale(fitScale(this, 'shot_crate_weapon', now ? 40 : 32)));
+      } else {
+        add(this.add.text(x, y, past ? '✓' : `${STREAK_COINS[i - 1]}`, font(now ? 20 : 16, 800, now ? '#2a1c06' : UI.text)).setOrigin(0.5));
+      }
+    }
+    add(this.add.image(cx - 70, cy + 52, this._coinTexture()).setScale(1.3));
+    add(this.add.text(cx - 40, cy + 52, `+${coins}${box ? '  и коробка!' : ''}`, font(34, 800, '#ffe27a')).setOrigin(0, 0.5));
+    const before = this.items.length;
+    this._button('streak-claim', cx, cy + 140, 'Забрать', '', () => {
+      const res = claimDailyStreak();
+      // Серия выросла — серверу, чтобы вечернее напоминание знало число
+      if (res) track('streak', { streak: res.streak });
+      haptic('win');
+      sfx.play('pickup');
+      for (const o of layer) o.destroy();
+      if (res) this._coinBurst(cx, cy);
+      this.showRoot();
+    }, { w: 300, h: 80, variant: 'primary', titleSize: 30 });
+    for (const o of this.items.slice(before)) o.setDepth(51);
+  }
+
+  /** Россыпь монет — награда должна быть видна, а не только посчитана. */
+  _coinBurst(x, y) {
+    const em = this.add.particles(x, y, this._coinTexture(), {
+      speed: { min: 180, max: 460 }, angle: { min: 200, max: 340 }, gravityY: 900,
+      lifespan: { min: 700, max: 1100 }, scale: { start: 0.8, end: 0.5 }, rotate: { min: -180, max: 180 },
+      emitting: false,
+    }).setDepth(60);
+    em.explode(18);
+    this.time.delayedCall(1300, () => em.destroy());
+  }
+
+  // ------------------------------------------------------------ задания
+
+  /**
+   * Задания дня: три карточки с прогрессом, монеты за каждое. Выполненное
+   * забирается кнопкой — с россыпью монет. Ниже — серия дней и коробка за
+   * монеты.
+   */
+  showTasks() {
+    this.section = this.showTasks;
+    this._clear();
+    const st = dailyState();
+    this._title('Задания', 'обновляются каждый день в полночь');
+    const W = this.W, cx = W / 2;
+    this._coinBadge(W - 40, 72, true);
+
+    const cw = Math.min(W - 48, 660), ch = 132;
+    let y = 196;
+    st.tasks.forEach((t) => {
+      const def = TASK_BY_ID[t.id];
+      const done = t.progress >= def.goal;
+      const variant = t.claimed ? 'normal' : done ? 'active' : 'normal';
+      const key = `menu-task-${cw}x${ch}-${variant}`;
+      ensureButton(this, key, cw, ch, variant);
+      this.items.push(this.add.image(cx, y + ch / 2, key).setAlpha(t.claimed ? 0.5 : 1));
+      const left = cx - cw / 2 + 24;
+      const ink = done && !t.claimed ? '#2a1c06' : UI.text;
+      this.items.push(this.add.text(left, y + 20, def.text, font(25, 800, ink)).setOrigin(0, 0));
+      // Полоса прогресса и число
+      const bw = cw - 230, by = y + 84;
+      this.items.push(this.add.rectangle(left, by, bw, 16, 0x0b1220, 0.85).setOrigin(0, 0.5));
+      const k = Math.min(1, t.progress / def.goal);
+      if (k > 0) this.items.push(this.add.rectangle(left, by, Math.max(6, bw * k), 16, done ? 0x6ee36e : 0xffc247).setOrigin(0, 0.5));
+      this.items.push(this.add.text(left + bw + 12, by, `${t.progress}/${def.goal}`, font(19, 800, ink)).setOrigin(0, 0.5));
+      // Справа — награда или кнопка «Забрать»
+      const rx = cx + cw / 2 - 80;
+      if (done && !t.claimed) {
+        const before = this.items.length;
+        this._button(`task-${t.id}`, rx, y + ch / 2, `+${def.coins}`, 'забрать', () => {
+          const got = claimDailyTask(t.id);
+          if (got) { haptic('win'); sfx.play('pickup'); this._coinBurst(rx, y + ch / 2); }
+          this.showTasks();
+        }, { w: 140, h: 84, variant: 'primary', titleSize: 26, hintSize: 16 });
+        for (const o of this.items.slice(before)) o.setDepth(2);
+      } else {
+        this.items.push(this.add.image(rx - 34, y + ch / 2, this._coinTexture()).setScale(0.8).setAlpha(t.claimed ? 0.5 : 1));
+        this.items.push(this.add.text(rx - 12, y + ch / 2, t.claimed ? '✓' : `${def.coins}`,
+          font(26, 800, t.claimed ? '#8ef0a0' : '#ffe27a')).setOrigin(0, 0.5));
+      }
+      y += ch + 16;
+    });
+
+    // Серия дней
+    y += 10;
+    this.items.push(this.add.text(cx, y, st.streak > 0
+      ? `Серия: ${st.streak} ${plural(st.streak, 'день', 'дня', 'дней')} подряд · на ${STREAK_BOX_DAY}-й день — коробка`
+      : `Заходи каждый день: на ${STREAK_BOX_DAY}-й день подряд — коробка`,
+      font(19, 700, UI.textDim)).setOrigin(0.5, 0).setAlign('center').setWordWrapWidth(cw));
+
+    // Коробка за монеты
+    y += 76;
+    const can = st.coins >= BOX_PRICE;
+    this._button('buy-box', cx, y, `Коробка со скином · ${BOX_PRICE}`, can ? 'купить за монеты' : `не хватает ${BOX_PRICE - st.coins}`,
+      () => this._buyBox(), { w: Math.min(cw, 460), h: 90, titleSize: 25, hintSize: 17, enabled: can });
+    if (this.textures.exists('shot_crate_weapon')) {
+      this.items.push(this.add.image(cx - Math.min(cw, 460) / 2 + 40, y, 'shot_crate_weapon')
+        .setScale(fitScale(this, 'shot_crate_weapon', 52)).setAlpha(can ? 1 : 0.5));
+    }
+    this._tabs('tasks');
+  }
+
+  /** Купить коробку и сразу перейти к скинам, где её можно открыть. */
+  _buyBox() {
+    const res = buyBox();
+    if (res === 'ok') {
+      haptic('win');
+      sfx.play('pickup');
+      this.showSkins();
+      return;
+    }
+    haptic('warn');
+    this.showTasks();
+    const msg = res === 'full' ? 'все скины уже собраны' : 'не хватает монет';
+    const t = this.add.text(this.W / 2, 150, msg, font(22, 800, '#ff9a9a')).setOrigin(0.5);
+    this.items.push(t);
+    this.tweens.add({ targets: t, alpha: 0, delay: 1400, duration: 400 });
+  }
+
+  // --------------------------------------------------------------- скины
+
+  /**
+   * Скины бойца: что надето, что собрано, что ещё закрыто, и коробки.
+   * Закрытые показаны тёмным силуэтом — видно, что там кто-то есть, но не
+   * кто именно: открытие коробки остаётся сюрпризом.
+   */
+  showSkins() {
+    this.section = this.showSkins;
+    this._clear();
+    const st = skinState();
+    this._title('Скины', `собрано ${st.owned.length} из ${SKINS.length}`);
+    const W = this.W, cx = W / 2;
+
+    // --- коробки ---
+    const full = st.owned.length >= SKINS.length;
+    const boxY = 186;
+    if (this.textures.exists('shot_crate_weapon')) {
+      this.items.push(this.add.image(cx - 190, boxY, 'shot_crate_weapon')
+        .setScale(fitScale(this, 'shot_crate_weapon', 72)).setAlpha(st.boxes > 0 ? 1 : 0.4));
+    }
+    this.items.push(this.add.text(cx - 140, boxY - 24, `Коробок: ${st.boxes}`, font(24, 800)).setOrigin(0, 0));
+    this.items.push(this.add.text(cx - 140, boxY + 8,
+      full ? 'все скины собраны' : st.boxes > 0 ? 'внутри — случайный скин' : 'за кампанию, серию дней и монеты',
+      font(17, 700, UI.textDim)).setOrigin(0, 0));
+    if (st.boxes > 0 || full) {
+      this._button('open-box', cx + 190, boxY, 'Открыть', '', () => this._openBox(),
+        { w: 170, h: 64, variant: 'primary', enabled: st.boxes > 0 && !full, titleSize: 24 });
+    } else {
+      // Коробок нет — можно купить за монеты
+      this._button('buy-box', cx + 190, boxY, `Купить · ${BOX_PRICE}`, '', () => this._buyBox(),
+        { w: 190, h: 64, enabled: dailyState().coins >= BOX_PRICE, titleSize: 22 });
+    }
+
+    // --- сетка скинов ---
+    const cols = this.portrait ? 4 : 8;
+    const cw = Math.min(170, Math.floor((W - 40) / cols));
+    const ch = cw + 34;
+    const x0 = cx - (cols * cw) / 2 + cw / 2;
+    const y0 = 270 + ch / 2;
+    SKINS.forEach((skin, i) => {
+      const x = x0 + (i % cols) * cw, y = y0 + Math.floor(i / cols) * (ch + 10);
+      const owned = st.owned.includes(skin.id);
+      const on = st.equipped === skin.id;
+      const key = `menu-skin-${cw - 10}x${ch}-${on ? 'active' : 'normal'}`;
+      ensureButton(this, key, cw - 10, ch, on ? 'active' : 'normal');
+      const plate = this.add.image(x, y, key).setAlpha(owned ? 1 : 0.5);
+      this.items.push(plate);
+      const sheet = this.textures.exists(skin.sheet) ? skin.sheet : 'smiley';
+      const face = this.add.sprite(x, y + cw * 0.22, sheet, 0).setOrigin(0.5, 0.92)
+        .setScale((cw - 30) / 100).setFlipX(true);
+      if (owned) face.play(`${sheet}_idle`);
+      else face.setTintFill(0x10141f).setAlpha(0.85);
+      this.items.push(face);
+      this.items.push(this.add.text(x, y + ch / 2 - 16, owned ? (on ? 'надет' : skin.name) : '???',
+        font(17, 800, on ? '#2a1c06' : owned ? UI.text : UI.textDim)).setOrigin(0.5));
+      if (owned) {
+        plate.setInteractive({ useHandCursor: true });
+        plate.on('pointerup', () => { haptic('select'); equipSkin(skin.id); this.showSkins(); });
+      }
+      this.buttons[`skin-${skin.id}`] = { x, y: y + this.oy, w: cw - 10, h: ch, enabled: owned };
+    });
+    this._back();
+  }
+
+  /**
+   * Открытие коробки: она трясётся, лопается, из неё выскакивает скин.
+   * Что выпадет, решается сразу; анимация только показывает.
+   */
+  _openBox() {
+    const res = openSkinBox();
+    if (!res.skin) { this.showSkins(); return; }
+    const skin = SKIN_BY_ID[res.skin];
+    const W = this.W, H = this.H, cx = W / 2;
+    const cy = this.topY(H * 0.42);
+    const layer = [];
+    const add = (o) => { o.setDepth(50); layer.push(o); this.items.push(o); return o; };
+
+    // Затемнение ловит касания: под ним ничего нажать нельзя
+    const shade = add(this.add.rectangle(0, this.topY(0), W, H, 0x05070c, 0.82).setOrigin(0, 0));
+    shade.setInteractive();
+    const box = add(this.add.image(cx, cy, 'shot_crate_weapon')
+      .setScale(fitScale(this, 'shot_crate_weapon', 190)));
+    haptic('tap');
+    sfx.play('crateDrop');
+    this.tweens.add({ targets: box, angle: { from: -9, to: 9 }, duration: 90, yoyo: true, repeat: 7 });
+    this.tweens.add({ targets: box, scale: box.scale * 1.18, duration: 1300, ease: 'Quad.easeIn' });
+
+    this.time.delayedCall(1350, () => {
+      if (!box.active) return;
+      box.destroy();
+      haptic('win');
+      sfx.play('pickup');
+      sfx.play('explosion', { radius: 30 });
+      // Вспышка, лучи и конфетти
+      const flash = add(this.add.circle(cx, cy, 40, 0xffffff, 0.95));
+      this.tweens.add({ targets: flash, radius: 420, alpha: 0, duration: 500, ease: 'Cubic.easeOut' });
+      if (!this.textures.exists('fx-dot')) {
+        const tex = this.textures.createCanvas('fx-dot', 12, 12);
+        const c = tex.getContext();
+        c.fillStyle = '#ffffff';
+        c.beginPath(); c.arc(6, 6, 5.5, 0, Math.PI * 2); c.fill();
+        tex.refresh();
+      }
+      const em = add(this.add.particles(cx, cy, 'fx-dot', {
+        speed: { min: 160, max: 520 }, angle: { min: 0, max: 360 }, gravityY: 520,
+        lifespan: { min: 900, max: 1700 }, scale: { start: 1.3, end: 0.4 },
+        tint: [0xff5a5a, 0x5aa9ff, 0x6ee36e, 0xffd45a, 0xff8ad4, 0xffffff], emitting: false,
+      }));
+      em.explode(70);
+
+      const sheet = this.textures.exists(skin.sheet) ? skin.sheet : 'smiley';
+      const hero = add(this.add.sprite(cx, cy + 70, sheet, 0).setOrigin(0.5, 0.92).setScale(0.2).setFlipX(true));
+      hero.play(`${sheet}_win`);
+      this.tweens.add({ targets: hero, scale: 3, duration: 520, ease: 'Back.easeOut' });
+      add(this.add.text(cx, cy - 200, 'Новый скин!', font(26, 800, UI.textDim)).setOrigin(0.5));
+      const name = add(this.add.text(cx, cy + 120, skin.name, font(48, 800, UI.accent)).setOrigin(0.5).setScale(0.3));
+      this.tweens.add({ targets: name, scale: 1, duration: 420, delay: 180, ease: 'Back.easeOut' });
+
+      const btn = (key, dx, label, variant, onTap) => {
+        const before = this.items.length;
+        this._button(key, cx + dx, cy + 230, label, '', onTap, { w: 250, h: 78, variant, titleSize: 26 });
+        for (const o of this.items.slice(before)) o.setDepth(51);
+      };
+      this.time.delayedCall(600, () => {
+        if (this.section !== this.showSkins) return;
+        btn('skin-wear', -140, 'Надеть', 'primary', () => { equipSkin(skin.id); this.showSkins(); });
+        btn('skin-later', 140, 'Потом', 'normal', () => this.showSkins());
+      });
+    });
+  }
+
+  // -------------------------------------------------------------- режимы
+
+  /** Всё, кроме «Играть»: выбор соперника на башне и прежние режимы. */
+  showModes() {
+    this.section = this.showModes;
+    this._clear();
+    this._title('Режимы');
+    const cx = this.W / 2;
+    const y0 = 186, step = 106;
+    const big = { w: Math.min(this.W - 64, 620), h: 92, titleSize: 28, hintSize: 18 };
+    this._button('tower', cx, y0, 'Башня', 'высокая арена и трос · выбрать соперника',
+      () => this.showTower(), { ...big, variant: 'primary' });
+    this._button('online', cx, y0 + step, 'Онлайн', 'бой с человеком на башне · рейтинг',
+      () => this.showOnline(), big);
+    this._button('campaign', cx, y0 + step * 2, 'Кампания', 'миссии с условиями · телефон горизонтально',
+      () => this.showCampaign(), big);
+    this._button('quick', cx, y0 + step * 3, 'Свои правила', 'обычная карта, бот или вдвоём · горизонтально',
+      () => this.showQuick(), big);
+    this._back();
+  }
+
+  // --------------------------------------------------------------- башня
+
+  showTower() {
+    this.section = this.showTower;
+    this._clear();
+    this._title('Башня', 'по два бойца · ход 25 с · три троса за ход');
+    const cx = this.W / 2;
+    const y0 = 196, step = 106;
+    const big = { w: Math.min(this.W - 64, 620), h: 92, titleSize: 28, hintSize: 18 };
+    // Выбор запоминается: большая кнопка «Играть» запускает его же
+    const go = (level) => { this.playChoice = { level }; this.start(towerMatch(level)); };
+    this._button('tower-fighter', cx, y0, 'Против бота: Боец', 'считает выстрел и пользуется тросом',
+      () => go('fighter'), { ...big, variant: 'primary' });
+    this._button('tower-rookie', cx, y0 + step, 'Против бота: Новичок', 'стоит на месте, целится грубо',
+      () => go('rookie'), big);
+    this._button('tower-sniper', cx, y0 + step * 2, 'Против бота: Снайпер', 'промахивается редко',
+      () => go('sniper'), big);
+    this._button('tower-hotseat', cx, y0 + step * 3, 'Вдвоём на одном телефоне', 'ходы по очереди',
+      () => go(null), big);
+    // С другом по сети: комната башни, ссылка-приглашение, без рейтинга
+    this._button('tower-friend', cx, y0 + step * 4, 'С другом по ссылке', 'каждый со своего телефона · без рейтинга',
+      () => this.showRoom(randomRoom(true, true)), big);
+    this._back(() => this.showModes());
   }
 
   // ------------------------------------------------------- быстрая игра
@@ -335,12 +865,13 @@ export default class MenuScene extends Phaser.Scene {
 
     // Настройки партии: каждая кнопка перебирает свои варианты по кругу.
     // Выбор запоминается и действует и на игру вдвоём, и против бота.
-    const shapes = ['random', ...SHAPES.map((sh) => sh.id)];
+    const shapes = ['random', ...SHAPES.filter((sh) => !sh.hidden).map((sh) => sh.id)];
     const shapeName = (id) => (id === 'random' ? 'любая' : SHAPES.find((sh) => sh.id === id)?.name ?? id);
     const cycle = (list, cur) => list[(list.indexOf(cur) + 1) % list.length];
-    const opt = (key, x, w, label, next) => this._button(key, x, 168, label, '',
+    const roomy = this.roomy;
+    const opt = (key, x, w, label, next) => this._button(key, x, roomy ? 180 : 168, label, '',
       () => { this.quickOptions = { ...this.quickOptions, ...next() }; this.showQuick(); },
-      { w, h: 44 });
+      roomy ? { w, h: 58, titleSize: 20 } : { w, h: 44 });
     opt('opt-shape', cx - 140, 270, `Карта: ${shapeName(o.shape)}`,
       () => ({ shape: cycle(shapes, o.shape) }));
     opt('opt-worms', cx + 70, 140, `Бойцов: ${o.worms}`,
@@ -348,9 +879,10 @@ export default class MenuScene extends Phaser.Scene {
     opt('opt-time', cx + 215, 140, `Ход: ${o.turnTime} с`,
       () => ({ turnTime: cycle(QUICK_OPTIONS.turnTime, o.turnTime) }));
 
-    const y0 = 240, step = 74;
+    const y0 = roomy ? 286 : 240, step = roomy ? 106 : 74;
+    const row = roomy ? this.rowStyle : {};
     this._button('hotseat', cx, y0, 'Вдвоём на одном устройстве', 'ходы по очереди',
-      () => this.start(quickMatch(null, o)), { variant: 'primary' });
+      () => this.start(quickMatch(null, o)), { ...row, variant: 'primary' });
 
     const levels = ['rookie', 'fighter', 'sniper'];
     const hints = {
@@ -360,9 +892,9 @@ export default class MenuScene extends Phaser.Scene {
     };
     levels.forEach((id, i) => {
       this._button(id, cx, y0 + step * (i + 1), `Против бота: ${BOT_LEVELS[id].name}`,
-        hints[id], () => this.start(quickMatch(id, o)));
+        hints[id], () => this.start(quickMatch(id, o)), row);
     });
-    this._back();
+    this._back(() => this.showModes());
   }
 
   /** Настройки быстрой игры: запоминаются в браузере. */
@@ -370,7 +902,7 @@ export default class MenuScene extends Phaser.Scene {
     let saved = null;
     try { saved = JSON.parse(localStorage.getItem('worms.quick.v1') ?? 'null'); } catch { saved = null; }
     const pick = (list, v, d) => (list.includes(v) ? v : d);
-    const shapes = ['random', ...SHAPES.map((sh) => sh.id)];
+    const shapes = ['random', ...SHAPES.filter((sh) => !sh.hidden).map((sh) => sh.id)];
     return {
       shape: pick(shapes, saved?.shape, 'random'),
       worms: pick(QUICK_OPTIONS.worms, saved?.worms, 2),
@@ -392,12 +924,17 @@ export default class MenuScene extends Phaser.Scene {
 
     // Восемь миссий в столбик не влезают по высоте — раскладываем в две
     // колонки. Ширина плашки при этом меньше обычной кнопки меню.
-    const w = Math.min(400, (this.W - 120) / 2);
-    const rows = Math.ceil(MISSIONS.length / 2);
-    const step = 70;
-    const y0 = 168;
-    const colX = [this.W / 2 - w / 2 - 14, this.W / 2 + w / 2 + 14];
+    // В вертикальном телефоне места по высоте хватает на один столбец
+    // крупных строк — так и читать, и попадать пальцем проще
+    const roomy = this.roomy;
+    const w = roomy ? Math.min(this.W - 64, 620) : Math.min(400, (this.W - 60) / 2);
+    const rows = roomy ? MISSIONS.length : Math.ceil(MISSIONS.length / 2);
+    const step = roomy ? 94 : 70;
+    const y0 = roomy ? 178 : 168;
+    const colX = roomy ? [this.W / 2] : [this.W / 2 - w / 2 - 14, this.W / 2 + w / 2 + 14];
 
+    const rewards = new Set(rewardMissions(MISSIONS.map((mm) => mm.id)));
+    const claimed = new Set(skinState().claimed);
     MISSIONS.forEach((m, i) => {
       const open = isUnlocked(i, done);
       const mark = done.has(m.id) ? ' ✓' : '';
@@ -408,9 +945,18 @@ export default class MenuScene extends Phaser.Scene {
         `${i + 1}. ${m.title}${mark}`,
         open ? m.subtitle : 'откроется после предыдущей',
         () => this.showBrief(m),
-        { enabled: open, variant: next ? 'primary' : 'normal', w, h: 60 });
+        roomy
+          ? { enabled: open, variant: next ? 'primary' : 'normal', w, h: 82, titleSize: 25, hintSize: 17 }
+          : { enabled: open, variant: next ? 'primary' : 'normal', w, h: 60 });
+      // Миссии с наградой помечены коробкой, пока она не получена
+      if (rewards.has(m.id) && !claimed.has(m.id) && this.textures.exists('shot_crate_weapon')) {
+        const size = roomy ? 44 : 32;
+        this.items.push(this.add.image(colX[Math.floor(i / rows)] + w / 2 - size * 0.8,
+          y0 + step * (i % rows), 'shot_crate_weapon')
+          .setScale(fitScale(this, 'shot_crate_weapon', size)).setAlpha(open ? 1 : 0.5));
+      }
     });
-    this._back();
+    this._back(() => this.showModes());
   }
 
   /** Вводная перед миссией: без неё условия видно только по факту. */
@@ -420,21 +966,30 @@ export default class MenuScene extends Phaser.Scene {
     this._title(mission.title, mission.subtitle);
     const cx = this.W / 2;
 
-    const w = Math.min(620, this.W - 80);
-    const h = mission.brief.length * 30 + 44;
+    // Строки переносятся по ширине плашки, высота считается по тексту:
+    // на телефоне кегль крупнее, и длинная фраза в одну строку не влезает
+    const w = Math.min(640, this.W - 56);
     const y = 168;
-    ensureButton(this, `menu-panel-${w}x${h}`, w, h, 'normal');
-    this.items.push(this.add.image(cx, y + h / 2, `menu-panel-${w}x${h}`).setOrigin(0.5));
-    mission.brief.forEach((line, i) => {
-      this.items.push(this.add.text(cx, y + 26 + i * 30, line, font(15, 700))
-        .setOrigin(0.5, 0));
+    let ty = y + 24;
+    const lines = mission.brief.map((line) => {
+      const t = this.add.text(cx, ty, line, font(this.fs(15), 700))
+        .setOrigin(0.5, 0).setAlign('center').setWordWrapWidth(w - 48);
+      ty += t.height + 10;
+      this.items.push(t);
+      return t;
     });
-    this.items.push(this.add.text(cx, y + h + 12,
-      `Задача: ${objectiveText(mission.objective)}`, font(14, 800, UI.accent))
-      .setOrigin(0.5, 0));
+    const h = ty - y + 14;
+    ensureButton(this, `menu-panel-${w}x${Math.round(h)}`, w, Math.round(h), 'normal');
+    const panel = this.add.image(cx, y + h / 2, `menu-panel-${w}x${Math.round(h)}`).setOrigin(0.5).setDepth(-1);
+    this.items.push(panel);
+    for (const t of lines) t.setDepth(1);
+    this.items.push(this.add.text(cx, y + h + 14,
+      `Задача: ${objectiveText(mission.objective)}`, font(this.fs(14), 800, UI.accent))
+      .setOrigin(0.5, 0).setAlign('center').setWordWrapWidth(w));
 
-    this._button('start', cx, y + h + 74, 'В бой', '',
-      () => this.start(campaignMatch(mission.id)), { variant: 'primary', w: 300, h: 62 });
+    this._button('start', cx, y + h + (this.roomy ? 110 : 74), 'В бой', '',
+      () => this.start(campaignMatch(mission.id)),
+      this.roomy ? { variant: 'primary', w: 360, h: 88, titleSize: 30 } : { variant: 'primary', w: 300, h: 62 });
     this._back(() => this.showCampaign());
   }
 
@@ -455,7 +1010,7 @@ export default class MenuScene extends Phaser.Scene {
     // Профиль — Telegram-аккаунт; кабинет со статистикой по кнопке
     this._button('profile', cx, 186, `${me.name} · кабинет`, '', () => this.openAccount(), { w: 300, h: 44 });
     this.items.push(this.add.text(cx, 214,
-      `побед ${me.wins} · поражений ${me.losses}`, font(12, 700, UI.textDim))
+      `побед ${me.wins} · поражений ${me.losses}`, font(this.fs(12), 700, UI.textDim))
       .setOrigin(0.5, 0));
 
     // Режим: на рейтинг или без. У каждого свои столы и своя очередь
@@ -477,7 +1032,7 @@ export default class MenuScene extends Phaser.Scene {
     this._button('join', this.W - 108, this.bottomY(46), 'по коду', '',
       () => this.askCode(), { w: 180, h: 50 });
     this._button('top', this.W - 300, this.bottomY(46), '🏆 Топ', '',
-      () => this.showTop(), { w: 170, h: 50 });
+      () => { this.topFrom = 'online'; this.showTop(); }, { w: 170, h: 50 });
 
     this._back();
     this._ensureLobby();
@@ -498,9 +1053,11 @@ export default class MenuScene extends Phaser.Scene {
       () => this.showTop(k), { w: 208, h: 40, variant: kind === k ? 'active' : 'normal' });
     tab('top-rating', 'Рейтинг', 'rating');
     tab('top-tourney', 'Турниры', 'tourney');
-    const note = this.add.text(cx, 204, 'загружаю…', font(14, 700, UI.textDim)).setOrigin(0.5, 0);
+    const note = this.add.text(cx, 204, 'загружаю…', font(this.fs(14), 700, UI.textDim)).setOrigin(0.5, 0);
     this.items.push(note);
-    this._back(() => this.showOnline());
+    // Пришли со вкладки — внизу вкладки; из лобби — кнопка «назад» в лобби
+    if (this.topFrom === 'tab') this._tabs('top');
+    else this._back(() => this.showOnline());
 
     fetchTop(20, kind).then((rows) => {
       if (this.section !== this.showTop || this.topKind !== kind) return;
@@ -521,29 +1078,32 @@ export default class MenuScene extends Phaser.Scene {
     if (!rows.length) {
       this.items.push(this.add.text(cx, top, kind === 'tourney'
         ? 'пока ни одного чемпиона — турниры впереди' : 'пока пусто — сыграй первый бой по сети на рейтинг',
-      font(14, 700, UI.textDim)).setOrigin(0.5, 0));
+      font(this.fs(14), 700, UI.textDim)).setOrigin(0.5, 0));
       return;
     }
     rows.slice(0, maxRows).forEach((r, i) => {
       const y = top + i * step;
       const mine = r.id === me.id;
       const color = mine ? UI.accent : UI.text;
-      this.items.push(this.add.text(x0, y, `${i + 1}.`, font(15, 800, UI.textDim)).setOrigin(0, 0));
-      this.items.push(this.add.text(x0 + 40, y, r.name, font(15, 800, color)).setOrigin(0, 0));
+      this.items.push(this.add.text(x0, y, `${i + 1}.`, font(this.fs(15), 800, UI.textDim)).setOrigin(0, 0));
+      this.items.push(this.add.text(x0 + 40, y, r.name, font(this.fs(15), 800, color)).setOrigin(0, 0));
       this.items.push(this.add.text(x0 + 330, y, leagueLabel(r.rating),
-        font(13, 700, leagueOf(r.rating).text)).setOrigin(0, 0));
+        font(this.fs(13), 700, leagueOf(r.rating).text)).setOrigin(0, 0));
       this.items.push(this.add.text(x0 + 600, y, kind === 'tourney' ? `🏆 ${r.tourney_wins}` : `${r.wins}–${r.losses}`,
-        font(13, 700, kind === 'tourney' ? UI.accent : UI.textDim)).setOrigin(1, 0));
+        font(this.fs(13), 700, kind === 'tourney' ? UI.accent : UI.textDim)).setOrigin(1, 0));
     });
     const rank = myRank(rows);
     const foot = rank ? `ты на ${rank} месте` : !loggedIn() ? 'открой игру в Telegram, чтобы попасть в таблицу'
       : kind === 'tourney' ? 'выиграй турнир — и ты здесь' : 'тебя пока нет в таблице — доиграй бой по сети';
-    this.items.push(this.add.text(cx, this.bottomY(74), foot, font(12, 700, UI.textDim)).setOrigin(0.5, 1));
+    this.items.push(this.add.text(cx, this.bottomY(74), foot, font(this.fs(12), 700, UI.textDim)).setOrigin(0.5, 1));
   }
 
   /** Личный кабинет. */
   openAccount() {
-    openAccountDialog({ onTop: () => this.showTop(), onTours: () => this.openTournaments() });
+    openAccountDialog({
+      onTop: () => { this.topFrom = 'tab'; this.showTop(); },
+      onTours: () => this.openTournaments(),
+    });
   }
 
   /**
@@ -638,21 +1198,21 @@ export default class MenuScene extends Phaser.Scene {
     if (hint?.active) hint.setText(this._searchHint());
     const head = this.add.text(x, top,
       `Открытые игры${casual ? ' без рейтинга' : ' на рейтинг'} · в сети ${online}`,
-      font(13, 800, UI.accent)).setOrigin(0, 0);
+      font(this.fs(13), 800, UI.accent)).setOrigin(0, 0);
     rows.push(head);
 
     if (!tables.length) {
       rows.push(this.add.text(x, top + 28, this.lobbyNote || 'пока никто не создал игру — создай свою',
-        font(12, 700, UI.textDim)).setOrigin(0, 0));
+        font(this.fs(12), 700, UI.textDim)).setOrigin(0, 0));
     }
 
     const step = 40;
     const maxRows = Math.max(1, Math.floor((this.bottomY(70) - (top + 28)) / step));
     tables.slice(0, maxRows).forEach((t, i) => {
       const y = top + 28 + i * step;
-      rows.push(this.add.text(x, y, t.name, font(14, 800, UI.text)).setOrigin(0, 0));
+      rows.push(this.add.text(x, y, t.name, font(this.fs(14), 800, UI.text)).setOrigin(0, 0));
       rows.push(this.add.text(x, y + 17, leagueLabel(t.rating),
-        font(11, 700, leagueOf(t.rating).text)).setOrigin(0, 0));
+        font(this.fs(11), 700, leagueOf(t.rating).text)).setOrigin(0, 0));
       this._button(`join-${t.id}`, cx + 160, y + 15, 'Войти', '',
         () => this.joinTable(t.id), { w: 100, h: 34, into: rows });
     });
@@ -683,18 +1243,25 @@ export default class MenuScene extends Phaser.Scene {
     this.searchCount = this.add.text(cx, 168, 'подключаемся к лобби…', font(24, 800, UI.text)).setOrigin(0.5, 0);
     this.items.push(this.searchCount);
     this.searchStatus = this.add.text(cx, 214, 'Ищем соперника…',
-      font(16, 800, UI.accent)).setOrigin(0.5, 0);
+      font(this.fs(16), 800, UI.accent)).setOrigin(0.5, 0);
     this.items.push(this.searchStatus);
     this.items.push(this.add.text(cx, 244, casual
       ? 'Подойдёт любой, кто тоже ищет бой без рейтинга.'
       : 'Круг поиска расширяется каждые пять секунд ожидания.',
-      font(13, 700, UI.textDim)).setOrigin(0.5, 0));
+      font(this.fs(13), 700, UI.textDim)).setOrigin(0.5, 0));
+    // Пока людей мало, ждать можно долго. Через FALLBACK_AFTER секунд — бой
+    // с ботом, честно подписанный и без рейтинга; можно и не ждать
+    this.searchStarted = performance.now();
+    this.fallbackText = this.add.text(cx, 284, '', font(this.fs(14), 700, UI.textDim)).setOrigin(0.5, 0);
+    this.items.push(this.fallbackText);
 
-    this._button('cancel', cx, 316, 'Отменить поиск', '', () => {
+    this._button('cancel', cx, 360, 'Отменить поиск', '', () => {
       this.lobby?.search(false);
       this._stopSearchTicker();
       this.showOnline();
     }, { w: 300, h: 56 });
+    this._button('bot-now', cx, 432, 'Сразу с ботом', 'без рейтинга', () => this._fallbackToBot(),
+      { w: 300, h: 60 });
 
     this._ensureLobby();
     this.searchQueue = queue;
@@ -716,12 +1283,23 @@ export default class MenuScene extends Phaser.Scene {
       }
       const text = this.lobby?.statusText();
       if (text) this.searchStatus.setText(text);
+      const left = Math.ceil(FALLBACK_AFTER - (performance.now() - this.searchStarted) / 1000);
+      if (left <= 0 && !this.lobby?.matched) { this._fallbackToBot(); return; }
+      this.fallbackText?.setText(`никого не найдём за ${left} с — сыграешь с ботом`);
       const n = this.lobby?.searchingCount(this.searchQueue);
       if (n != null) this.searchCount?.setText(`Сейчас ищут: ${n}${n === 1 ? ' — только ты' : ''}`);
     };
     this.searchTicker = this.time.addEvent({ delay: 400, loop: true, callback: tick });
     tick();
     this.events.once('shutdown', () => this._stopSearchTicker());
+  }
+
+  /** Соперник не нашёлся (или ждать не хочется): бой с ботом на башне. */
+  _fallbackToBot() {
+    if (this.lobby?.matched) return;
+    this.lobby?.search(false);
+    this._stopSearchTicker();
+    this.start(fallbackMatch());
   }
 
   _stopSearchTicker() {
@@ -746,9 +1324,11 @@ export default class MenuScene extends Phaser.Scene {
   showRoom(room) {
     this.section = () => this.showRoom(room);
     this._clear();
-    this._title('Игра создана', isCasualRoom(room)
-      ? 'без рейтинга · стол виден всем в лобби'
-      : 'на рейтинг · стол виден всем в лобби');
+    this._title('Игра создана', isTowerRoom(room)
+      ? 'башня · без рейтинга'
+      : isCasualRoom(room)
+        ? 'без рейтинга · стол виден всем в лобби'
+        : 'на рейтинг · стол виден всем в лобби');
     const cx = this.W / 2;
 
     this.hosting = room;
@@ -757,7 +1337,7 @@ export default class MenuScene extends Phaser.Scene {
 
     const code = this.add.text(cx, 176, room, font(72, 800, UI.accent)).setOrigin(0.5, 0);
     this.items.push(code);
-    this.items.push(this.add.text(cx, 268, 'код для друга', font(12, 700, UI.textDim)).setOrigin(0.5, 0));
+    this.items.push(this.add.text(cx, 268, 'код для друга', font(this.fs(12), 700, UI.textDim)).setOrigin(0.5, 0));
 
     const link = this.inviteLink(room);
     // В Telegram зовём родным выбором чата, снаружи — буфером обмена
@@ -767,11 +1347,11 @@ export default class MenuScene extends Phaser.Scene {
         copyText(link);
         // Подтверждение одно на все нажатия: иначе оно множится стопкой
         if (this.copiedLabel) return;
-        this.copiedLabel = this.add.text(cx, 372, 'ссылка скопирована', font(13, 700, '#8ef0a0'))
+        this.copiedLabel = this.add.text(cx, 372, 'ссылка скопирована', font(this.fs(13), 700, '#8ef0a0'))
           .setOrigin(0.5, 0);
         this.items.push(this.copiedLabel);
       }, { w: 340, h: 58, variant: 'primary' });
-    this.items.push(this.add.text(cx, 404, 'ждём соперника…', font(15, 800, UI.accent)).setOrigin(0.5, 0));
+    this.items.push(this.add.text(cx, 404, 'ждём соперника…', font(this.fs(15), 800, UI.accent)).setOrigin(0.5, 0));
     // Запасной путь, если лобби не поднялось: ждать внутри комнаты
     this._button('enter', cx, 462, 'Войти в комнату самому', 'ждать соперника внутри',
       () => this.startOnline(room), { w: 340, h: 56 });
@@ -797,7 +1377,7 @@ export default class MenuScene extends Phaser.Scene {
     const url = new URL(location.href);
     url.searchParams.set('room', room);
     history.replaceState(null, '', url);
-    this.start(onlineMatch());
+    this.start(onlineMatch(room));
   }
 
   start(match) {

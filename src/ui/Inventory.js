@@ -1,22 +1,38 @@
 import { CFG, DEPTH } from '../config.js';
 import { WEAPONS } from '../weapons/index.js';
-import { has as hasAsset } from '../core/assets.js';
+import { weaponIcon, fitScale } from '../core/assets.js';
 import { UI, font, ensureButton, ensureRoundButton } from './theme.js';
+import { isDesktop } from '../platform/device.js';
 
 // Слой инвентаря: выше всего HUD, включая подсказку управления (HUD + 21).
 const D = DEPTH.HUD + 30;
 
 // Размеры плашки. Шире и выше, чем в нижнем ряду HUD: здесь под иконкой
 // помещается полное название, а не обрезок, и панель читается как список.
-const BW = 96;
-const BH = 64;
-const GAP = 10;
+// Размеры — под мышь. Под палец всё в полтора раза крупнее (applyScale):
+// на телефоне логический пиксель — около половины экранного, и клетка
+// 96x64 выходила с ноготь, а подпись в ней не читалась.
+let K = 1;
+let BW = 96;
+let BH = 64;
+let GAP = 10;
+const PAD = 20;         // поля панели
+let HEAD_H = 44;        // строка заголовка «АРСЕНАЛ» + кнопка закрытия
+let CAT_H = 24;         // строка названия категории
+let CAT_GAP = 14;       // воздух между категориями
+let FOOT_H = 24;        // подсказка «Esc — закрыть»
 
-const PAD = 20;          // поля панели
-const HEAD_H = 44;       // строка заголовка «АРСЕНАЛ» + кнопка закрытия
-const CAT_H = 24;        // строка названия категории
-const CAT_GAP = 14;      // воздух между категориями
-const FOOT_H = 24;       // подсказка «Esc — закрыть»
+function applyScale(k) {
+  K = k;
+  BW = Math.round(96 * k);
+  BH = Math.round(64 * k);
+  GAP = Math.round(10 * k);
+  HEAD_H = Math.round(44 * k);
+  CAT_H = Math.round(24 * k);
+  CAT_GAP = Math.round(14 * k);
+  FOOT_H = Math.round(24 * k);
+}
+const fz = (n) => Math.round(n * K);
 
 const SCREEN_MARGIN = 24;      // минимальный отступ панели от краёв экрана
 const MAX_COLS_PREFERRED = 6;  // шире панель делать незачем: глаз теряет ряд
@@ -47,6 +63,7 @@ export class Inventory {
     this._open = false;
 
     this.fix = (o, d = D) => scene.rig.ui(o.setScrollFactor(0).setDepth(d));
+    applyScale(isDesktop() ? 1 : 1.5);
 
     this._build();
     this.close();
@@ -128,17 +145,18 @@ export class Inventory {
     ));
 
     this.items.push(this.fix(
-      s.add.text(px + PAD, py + 14, 'АРСЕНАЛ', font(19, 800, UI.accent)).setOrigin(0, 0), D + 2,
+      s.add.text(px + PAD, py + 14, 'АРСЕНАЛ', font(fz(19), 800, UI.accent)).setOrigin(0, 0), D + 2,
     ));
-    this._buildClose(px + panelW - PAD - 15, py + 14 + 9);
+    this._buildClose(px + panelW - PAD - fz(15), py + 14 + fz(9));
 
-    ensureButton(s, 'ui-inv-cell', BW, BH, 'normal');
-    ensureButton(s, 'ui-inv-cell-on', BW, BH, 'active');
+    this.cellKey = `ui-inv-cell-${BW}`;
+    ensureButton(s, this.cellKey, BW, BH, 'normal');
+    ensureButton(s, `${this.cellKey}-on`, BW, BH, 'active');
 
     let y = py + PAD + HEAD_H;
     for (const g of groups) {
       this.items.push(this.fix(
-        s.add.text(px + PAD, y, g.name.toUpperCase(), font(12, 800, UI.textDim))
+        s.add.text(px + PAD, y, g.name.toUpperCase(), font(fz(12), 800, UI.textDim))
           .setOrigin(0, 0), D + 2,
       ));
       y += CAT_H;
@@ -158,8 +176,8 @@ export class Inventory {
     }
 
     this.items.push(this.fix(
-      s.add.text(px + panelW / 2, py + panelH - PAD - 6, 'Esc или касание мимо — закрыть',
-        font(12, 700, UI.textDim)).setOrigin(0.5, 1), D + 2,
+      s.add.text(px + panelW / 2, py + panelH - PAD - 6, isDesktop() ? 'Esc или клик мимо — закрыть' : 'касание мимо — закрыть',
+        font(fz(12), 700, UI.textDim)).setOrigin(0.5, 1), D + 2,
     ));
   }
 
@@ -178,16 +196,16 @@ export class Inventory {
 
   _buildClose(cx, cy) {
     const s = this.scene;
-    const r = 15;
-    ensureRoundButton(s, 'ui-inv-close', r, 'primary');
-    const img = this.fix(s.add.image(cx, cy, 'ui-inv-close'), D + 2);
+    const r = fz(15);
+    ensureRoundButton(s, `ui-inv-close-${r}`, r, 'primary');
+    const img = this.fix(s.add.image(cx, cy, `ui-inv-close-${r}`), D + 2);
     img.setInteractive(new Phaser.Geom.Circle(img.width / 2, img.height / 2, r),
       Phaser.Geom.Circle.Contains);
     img.on('pointerdown', () => { img.setScale(0.94); });
     img.on('pointerup', () => { img.setScale(1); this.close(); });
     img.on('pointerout', () => img.setScale(1));
     this.items.push(img);
-    this.items.push(this.fix(s.add.text(cx, cy - 1, '✕', font(15, 800)).setOrigin(0.5), D + 3));
+    this.items.push(this.fix(s.add.text(cx, cy - 1, '✕', font(fz(15), 800)).setOrigin(0.5), D + 3));
     this.buttons.close = { x: cx, y: cy };
     this.rects.push({ x: cx - r, y: cy - r, w: r * 2, h: r * 2 });
   }
@@ -196,7 +214,7 @@ export class Inventory {
     const s = this.scene;
     const cx = x + BW / 2;
 
-    const plate = this.fix(s.add.image(cx, y + BH / 2, 'ui-inv-cell'), D + 1);
+    const plate = this.fix(s.add.image(cx, y + BH / 2, this.cellKey), D + 1);
     plate.setInteractive({ useHandCursor: true });
     plate.on('pointerdown', () => plate.setScale(0.94).setTint(0xc9c9c9));
     const release = () => plate.setScale(1).clearTint();
@@ -205,21 +223,26 @@ export class Inventory {
 
     // Иконки может не быть (assets собираются отдельным скриптом и файла
     // может не оказаться) — тогда рисуем юникодный значок из реестра.
-    const icon = hasAsset(s, weapon.iconKey)
-      ? this.fix(s.add.image(cx, y + 24, weapon.iconKey).setOrigin(0.5), D + 2)
-      : this.fix(s.add.text(cx, y + 24, weapon.icon, font(20, 800)).setOrigin(0.5), D + 2);
+    const iconKey = weaponIcon(s, weapon);
+    const icon = iconKey
+      ? this.fix(s.add.image(cx, y + fz(24), iconKey).setOrigin(0.5)
+        .setScale(fitScale(s, iconKey, fz(38))), D + 2)
+      : this.fix(s.add.text(cx, y + fz(24), weapon.icon, font(fz(20), 800)).setOrigin(0.5), D + 2);
 
-    const name = this.fix(s.add.text(cx, y + 44, weapon.name, font(11, 700, UI.textDim))
+    const name = this.fix(s.add.text(cx, y + fz(43), weapon.name, font(fz(12), 700, UI.textDim))
       .setOrigin(0.5, 0), D + 2);
     // Длинное название иначе наползёт на соседнюю плашку
     if (name.width > BW - 8) name.setScale((BW - 8) / name.width);
 
     // Номер клавиши: с клавиатуры оружие по-прежнему выбирается цифрами
     if (index < 9) {
-      this.items.push(this.fix(s.add.text(x + 7, y + 3, `${index + 1}`,
-        font(10, 700, UI.textDim)).setOrigin(0, 0), D + 2));
+      // Цифра — горячая клавиша; под пальцами клавиш нет
+      if (isDesktop()) {
+        this.items.push(this.fix(s.add.text(x + 7, y + 3, `${index + 1}`,
+          font(10, 700, UI.textDim)).setOrigin(0, 0), D + 2));
+      }
     }
-    const ammo = this.fix(s.add.text(x + BW - 7, y + 3, '', font(11, 800, UI.accent))
+    const ammo = this.fix(s.add.text(x + BW - fz(7), y + fz(3), '', font(fz(12), 800, UI.accent))
       .setOrigin(1, 0), D + 2);
 
     this.items.push(plate, icon, name, ammo);
@@ -258,7 +281,7 @@ export class Inventory {
       const on = c.index === current && !empty;
 
       c.enabled = !empty;
-      c.plate.setTexture(on ? 'ui-inv-cell-on' : 'ui-inv-cell');
+      c.plate.setTexture(on ? `${this.cellKey}-on` : this.cellKey);
       c.plate.setAlpha(empty ? 0.45 : 1);
       c.plate.input.enabled = !empty;
       c.ammo.setText(Number.isFinite(n) ? `${n}` : '∞');

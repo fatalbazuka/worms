@@ -5,7 +5,9 @@ import GameScene from './scenes/GameScene.js';
 import { initTelegram, startRoom, screenInsets, inTelegram, botLink } from './platform/telegram.js';
 import { apiBase } from './net/server.js';
 import { applyUiClass } from './platform/device.js';
-import { loggedIn, telegramLogin, syncMe } from './net/server.js';
+import { loggedIn, telegramLogin, syncMe, track } from './net/server.js';
+import { dailyState } from './platform/daily.js';
+import { dayKey, prevDay } from './core/daily.js';
 import { loadCloudProfile, player, dropAccount } from './platform/player.js';
 
 initTelegram();
@@ -52,8 +54,14 @@ await Promise.all([loadUiFont(), loadCloudProfile()]);
 // рейтинг с сервера, а в Telegram входим сами по подписи клиента. Ничего
 // из этого запуск не ждёт: сервер может и не ответить.
 if (player().account && !loggedIn()) dropAccount();
-if (loggedIn()) syncMe();
-else telegramLogin();
+// Открыл игру — событие для статистики, с текущей серией дней (по ней бот
+// вечером напомнит, что серия сгорает). Без аккаунта ничего не уходит
+const openEvent = () => {
+  const st = dailyState();
+  const live = st.streakDay === dayKey() || st.streakDay === prevDay(dayKey());
+  track('open', { streak: live ? st.streak : 0 });
+};
+if (loggedIn()) { syncMe(); openEvent(); } else telegramLogin().then(openEvent);
 
 
 async function loadUiFont() {

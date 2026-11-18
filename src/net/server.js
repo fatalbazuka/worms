@@ -127,6 +127,15 @@ export async function telegramLogin() {
   }
 }
 
+/**
+ * Событие для статистики (open | battle). Только для вошедших в аккаунт и
+ * без ожидания: игра от него не зависит, ошибки глотаются.
+ */
+export function track(name, props = {}) {
+  if (!token) return;
+  call('POST', '/event', { name, props }).catch(() => {});
+}
+
 let lastSync = 0;
 
 /**

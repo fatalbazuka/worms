@@ -1,5 +1,5 @@
 import { CFG, DEPTH } from '../config.js';
-import { has } from '../core/assets.js';
+import { has, fitScale } from '../core/assets.js';
 
 /**
  * Ящик, сброшенный на карту.
@@ -26,10 +26,13 @@ export class Crate {
     this.w = CFG.CRATE_W;
     this.h = CFG.CRATE_H;
 
-    const key = kind === 'health' ? 'crate_health' : 'crate_weapon';
+    const old = kind === 'health' ? 'crate_health' : 'crate_weapon';
     const s = scene;
+    // Свой ящик, если загрузился; рисуется чуть шире своей коробки
+    const key = has(s, `shot_${old}`) ? `shot_${old}` : old;
     if (has(s, key)) {
       this.view = s.add.image(x, this.y, key);
+      if (key !== old) this.view.setScale(fitScale(s, key, this.w + 8));
     } else {
       this.view = s.add.rectangle(x, this.y, this.w, this.h,
         kind === 'health' ? 0xff6b6b : 0xc79a52);
@@ -38,9 +41,11 @@ export class Crate {
     this.view.setOrigin(0.5, 1);
     s.rig.world(this.view.setDepth(DEPTH.WORM - 1));
 
-    if (has(s, 'crate_chute')) {
-      this.chute = s.rig.world(s.add.image(x, this.y - this.h, 'crate_chute')
+    const chute = has(s, 'shot_chute') ? 'shot_chute' : 'crate_chute';
+    if (has(s, chute)) {
+      this.chute = s.rig.world(s.add.image(x, this.y - this.h + 6, chute)
         .setOrigin(0.5, 1).setDepth(DEPTH.WORM - 2));
+      if (chute === 'shot_chute') this.chute.setScale(fitScale(s, chute, 46));
     }
   }
 

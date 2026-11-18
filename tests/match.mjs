@@ -107,6 +107,103 @@ check('один в лобби никого не находит', findMatch(p('a'
   check('с открытым коридором сводит любых', findMatch(a, [b])?.peer.id === 'b' && findMatch(b, [a])?.peer.id === 'a');
 }
 
+// --- скины и коробки: правила без браузера ---
+{
+  const { SKINS, emptyState, normalize, rewardMissions, claimBoxes, openBox, equip } = await import('../src/core/skins.js');
+  const missions = Array.from({ length: 12 }, (_, i) => `m${i}`);
+  const rewards = rewardMissions(missions);
+  check('коробок за кампанию ровно столько, сколько скинов можно получить',
+    rewards.length === SKINS.length - 1 && rewards[0] === 'm0' && rewards.at(-1) === 'm11',
+    rewards.join(','));
+
+  let st = emptyState();
+  let r = claimBoxes(st, ['m0', 'm1'], missions);
+  check('за первую миссию — коробка, за вторую — нет', r.gained === 1 && r.state.boxes === 1);
+  const again = claimBoxes(r.state, ['m0', 'm1'], missions);
+  check('дважды за одну миссию коробку не дают', again.gained === 0 && again.state.boxes === 1);
+
+  // Вся кампания пройдена: открываем всё подряд — повторов нет, собраны все
+  st = claimBoxes(emptyState(), missions, missions).state;
+  const got = [];
+  for (let i = 0; i < 20; i++) {
+    const o = openBox(st, () => 0.999);
+    st = o.state;
+    if (o.skin) got.push(o.skin);
+  }
+  check('коробки не дают повторов и собирают все скины',
+    new Set(got).size === got.length && st.owned.length === SKINS.length && st.boxes === 0,
+    `${got.join(',')} · коробок осталось ${st.boxes}`);
+  check('пустую коробку открыть нельзя', openBox(emptyState()).skin === null);
+  const fullSt = { ...st, boxes: 2 };
+  const none = openBox(fullSt);
+  check('когда собрано всё, коробка не тратится', none.full && none.state.boxes === 2);
+  check('надеть можно только свой скин',
+    equip(emptyState(), 'devil').equipped === 'classic' && equip(st, 'devil').equipped === 'devil');
+  const bad = normalize({ owned: ['devil', 'нет такого'], equipped: 'clown', boxes: -5, claimed: 'x' });
+  check('мусор из хранилища приводится к правильному состоянию',
+    bad.owned.join() === 'classic,devil' && bad.equipped === 'classic' && bad.boxes === 0 && bad.claimed.length === 0);
+}
+
+// --- задания, монеты и серия дней ---
+{
+  const D = await import('../src/core/daily.js');
+  const days = ['2026-11-18', '2026-11-19', '2026-11-20', '2026-01-01', '2027-02-28'];
+  const sets = days.map((d) => D.tasksFor(d));
+  check('в день три задания, все с разными счётчиками',
+    sets.every((ids) => ids.length === 3 && new Set(ids.map((id) => D.TASK_BY_ID[id].stat)).size === 3),
+    sets.map((x) => x.join('+')).join(' | '));
+  check('задания дня одни и те же при повторном расчёте', D.tasksFor('2026-11-18').join() === sets[0].join());
+  check('в разные дни задания разные', new Set(sets.map((x) => x.join())).size > 1);
+  check('вчера считается через границу месяца и года',
+    D.prevDay('2026-12-01') === '2026-11-30' && D.prevDay('2027-01-01') === '2026-12-31');
+
+  // Бой двигает задания и приносит монеты; выполненное забирается один раз
+  const day = '2026-11-18';
+  let st = D.rollDay(D.emptyState(), day);
+  const big = Object.fromEntries(D.STATS.map((k) => [k, 999]));
+  let r = D.addBattle(st, day, big, true);
+  check('бой с большими счётчиками выполняет все три задания',
+    r.done.length === 3 && r.coins === D.BATTLE_COINS.win, `${r.done.join(',')} · +${r.coins}`);
+  st = r.state;
+  const id = st.tasks[0].id;
+  const c1 = D.claimTask(st, day, id);
+  const c2 = D.claimTask(c1.state, day, id);
+  check('награду за задание дают один раз', c1.coins === D.TASK_BY_ID[id].coins && c2.coins === 0);
+  r = D.addBattle(c1.state, day, big, true);
+  check('уже выполненное задание второй раз не «выполняется»', r.done.length === 0);
+
+  // Монеты за бои — только за первые BATTLE_COIN_LIMIT в сутки
+  let s2 = D.rollDay(D.emptyState(), day);
+  let got = 0;
+  for (let i = 0; i < D.BATTLE_COIN_LIMIT + 5; i++) {
+    const x = D.addBattle(s2, day, {}, false); s2 = x.state; got += x.coins;
+  }
+  check('монеты за бои ограничены в сутки', got === D.BATTLE_COIN_LIMIT * D.BATTLE_COINS.loss, String(got));
+  const next = D.addBattle(s2, '2026-11-19', {}, false);
+  check('новый день — новые задания и снова монеты за бои',
+    next.coins === D.BATTLE_COINS.loss && next.state.day === '2026-11-19'
+      && next.state.tasks.every((t) => t.progress === 0 && !t.claimed));
+
+  // Серия: подряд растёт, пропуск — с начала, на 7-й день коробка
+  let ss = D.emptyState();
+  const streakDays = ['2026-11-01', '2026-11-02', '2026-11-03', '2026-11-04', '2026-11-05', '2026-11-06', '2026-11-07'];
+  let boxes = 0, total = 0;
+  for (const d of streakDays) { const x = D.claimStreak(ss, d); ss = x.state; total += x.coins; if (x.box) boxes++; }
+  check('семь дней подряд — серия 7 и одна коробка',
+    ss.streak === 7 && boxes === 1 && total === D.STREAK_COINS.reduce((a, b) => a + b, 0), `${ss.streak}, коробок ${boxes}`);
+  check('дважды за день бонус не дают', D.claimStreak(ss, '2026-11-07').coins === 0);
+  const gap = D.claimStreak(ss, '2026-11-09');
+  check('пропустил день — серия с начала', gap.streak === 1 && gap.coins === D.STREAK_COINS[0]);
+
+  // Коробка за монеты
+  check('без монет коробку не купить', !D.payForBox({ ...D.emptyState(), coins: D.BOX_PRICE - 1 }).ok);
+  const paid = D.payForBox({ ...D.emptyState(), coins: D.BOX_PRICE + 5 });
+  check('коробка стоит BOX_PRICE монет', paid.ok && paid.state.coins === 5);
+  const junk = D.normalize({ coins: -50, tasks: [{ id: 'нет' }, { id: 'win1', progress: 'x' }], streak: 'a' });
+  check('мусор из хранилища приводится к правильному состоянию',
+    junk.coins === 0 && junk.tasks.length === 1 && junk.tasks[0].progress === 0 && junk.streak === 0);
+}
+
 console.log(failures.length
   ? `\nне прошло: ${failures.length}`
   : '\nпроверки подбора пройдены');

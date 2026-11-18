@@ -1,6 +1,6 @@
 import { CFG, DEPTH, TEAM_COLORS, TEAM_NAMES } from '../config.js';
 import { WEAPONS } from '../weapons/index.js';
-import { has as hasAsset } from '../core/assets.js';
+import { has as hasAsset, weaponIcon, fitScale } from '../core/assets.js';
 import { UI, font, ensureButton, ensureRoundButton, ensureIcon } from './theme.js';
 import { Inventory } from './Inventory.js';
 import { isDesktop } from '../platform/device.js';
@@ -37,11 +37,20 @@ export class Hud {
     };
 
     this.desktop = isDesktop();
+    // Арена с крюком на телефоне: рогатка и тап вместо «Огня» и стрелок
+    // угла, кнопок втрое меньше, раскладка годится и вертикальному экрану
+    this.compact = !this.desktop && !!scene.sling;
 
     // Инвентарь создаётся до плашки оружия: она его открывает
     this.inventory = new Inventory(scene);
-    this._buildTopBar(W);
-    if (this.desktop) {
+    if (this.compact) this._buildTopBarCompact(W);
+    else this._buildTopBar(W);
+    if (this.compact) {
+      this._buildCompactControls(W, H);
+      this._buildHelp(W, H);
+      this._buildWeapons(W, H);
+      this._buildPowerBar();
+    } else if (this.desktop) {
       // На ПК крупные кнопки под пальцы не нужны: ходьба, прицел и выстрел
       // — мышью и клавиатурой, внизу только плашка оружия и служебная полоса
       this._buildDesktopBar(W, H);
@@ -62,7 +71,8 @@ export class Hud {
 
   // ------------------------------------------------------- верхняя панель
 
-  _buildTopBar(W) {
+  /** Подложка верхней панели: создаётся один раз на игру. */
+  _topBarTexture() {
     const s = this.scene;
     const key = 'ui-topbar';
     if (!s.textures.exists(key)) {
@@ -77,6 +87,12 @@ export class Hud {
       ctx.fillRect(0, TOP_H - 2, 8, 2);
       tex.refresh();
     }
+    return key;
+  }
+
+  _buildTopBar(W) {
+    const s = this.scene;
+    const key = this._topBarTexture();
     this.fix(s.add.image(0, 0, key).setOrigin(0, 0).setDisplaySize(W, TOP_H));
 
     // В полноэкранном Telegram по углам панели лежат кнопки клиента:
@@ -118,6 +134,53 @@ export class Hud {
     this.windCy = 38;
   }
 
+  /**
+   * Верхняя панель для узкого экрана: слева ветер, по центру здоровье
+   * команд и таймер, справа — сколько крюков осталось. Имени бойца и
+   * строки с картой тут нет: чей ход, говорит баннер и стрелка над бойцом.
+   */
+  _buildTopBarCompact(W) {
+    const s = this.scene;
+    this.fix(s.add.image(0, 0, this._topBarTexture()).setOrigin(0, 0).setDisplaySize(W, TOP_H));
+    const pad = CFG.CORNER || 0;
+
+    this.timerGfx = this.fix(s.add.graphics());
+    this.timerCx = Math.round(W / 2);
+    this.timerCy = Math.round(TOP_H / 2) - 1;
+    this.timerText = this.fix(s.add.text(this.timerCx, this.timerCy, '30',
+      font(24, 800)).setOrigin(0.5));
+
+    this.teamBars = [];
+    const gap = 46;
+    const barW = Math.round(Math.max(90, Math.min(190, W / 2 - gap - 126 - pad)));
+    for (let t = 0; t < CFG.TEAMS; t++) {
+      const right = t % 2 === 1;
+      const x = right ? this.timerCx + gap : this.timerCx - gap - barW;
+      this.fix(s.add.text(right ? x : x + barW, 4, TEAM_NAMES[t],
+        font(17, 800, hex(TEAM_COLORS[t]))).setOrigin(right ? 0 : 1, 0));
+      const cnt = this.fix(s.add.text(right ? x + barW : x, 5, '',
+        font(15, 700, UI.textDim)).setOrigin(right ? 1 : 0, 0));
+      this.fix(this._barImage(x, 40, barW, 14));
+      const bar = this.fix(s.add.rectangle(right ? x + 2 : x + barW - 2, 40,
+        barW - 4, 10, TEAM_COLORS[t]).setOrigin(right ? 0 : 1, 0.5), DEPTH.HUD + 1);
+      this.teamBars.push({ bar, cnt, width: barW - 4 });
+    }
+
+    // Ветер — слева: подпись, число и шкала под ними
+    this.windHalf = 46;
+    this.fix(s.add.text(16 + pad, 6, 'ВЕТЕР', font(14, 700, UI.textDim)));
+    this.windText = this.fix(s.add.text(16 + pad + this.windHalf * 2, 2, '0', font(19, 800)).setOrigin(1, 0));
+    this.windGfx = this.fix(s.add.graphics());
+    this.windCx = 16 + pad + this.windHalf;
+    this.windCy = 40;
+
+    // Подсказка новичку под панелью: гаснет сама после трёх тросов
+    this.hintText = this.fix(s.add.text(Math.round(W / 2), TOP_H + 14,
+      'коснись светящейся точки — трос подтянет туда', font(15, 800, '#1a1408'))
+      .setOrigin(0.5, 0).setPadding(12, 6, 12, 6).setBackgroundColor('#ffe27a'), DEPTH.HUD + 1)
+      .setVisible(false);
+  }
+
   _barImage(x, y, w, h) {
     const s = this.scene;
     const key = `ui-bar-${w}x${h}`;
@@ -157,8 +220,8 @@ export class Hud {
       plate,
       icon: this.fix(s.add.image(bx + 42, by + bh / 2, 'icon_bazooka')
         .setOrigin(0.5).setScale(1.3), DEPTH.HUD + 1),
-      name: this.fix(s.add.text(bx + 78, by + 15, '', font(20, 800, '#2a1c06')), DEPTH.HUD + 1),
-      ammo: this.fix(s.add.text(bx + 78, by + 43, '', font(15, 700, '#5a4413')), DEPTH.HUD + 1),
+      name: this.fix(s.add.text(bx + 78, by + (this.compact ? 11 : 15), '', font(this.compact ? 23 : 20, 800, '#2a1c06')), DEPTH.HUD + 1),
+      ammo: this.fix(s.add.text(bx + 78, by + (this.compact ? 42 : 43), '', font(this.compact ? 18 : 15, 700, '#5a4413')), DEPTH.HUD + 1),
       hint: this.fix(s.add.text(bx + bw - 12, by + 10, 'арсенал',
         font(12, 700, '#5a4413')).setOrigin(1, 0), DEPTH.HUD + 1),
       x: bx, y: by, w: bw, h: bh,
@@ -214,6 +277,88 @@ export class Hud {
       left: { x: lx + B / 2, y: rowLow + B / 2 },
       right: { x: lx2 + B / 2, y: rowLow + B / 2 },
     };
+  }
+
+  /**
+   * Кнопки арены с крюком: шаг влево-вправо под левой рукой, прыжок — под
+   * правой. Стрельба и крюк — пальцем по полю, кнопок для них нет.
+   */
+  _buildCompactControls(W, H) {
+    const B = 96, gap = 14, JR = 62;
+    const lx = 20, lx2 = lx + B + gap;
+    const rowLow = H - B - 18;
+    this._hold(lx, rowLow, B, 'left', 'left');
+    this._hold(lx2, rowLow, B, 'right', 'right');
+    const jumpCx = W - 24 - JR, jumpCy = H - 24 - JR;
+    this._holdRound(jumpCx, jumpCy, JR, 'jump', 'jumpQueued');
+    this.serviceEnd = lx2 + B;
+
+    // Тросы — как патроны: плашка над стрелками, по кружку на каждый
+    // оставшийся в этом ходу. Стоит у большого пальца, а не в углу панели:
+    // там её не замечали
+    const s = this.scene;
+    const pw = B * 2 + gap, ph = 52, py = rowLow - ph - 12;
+    ensureButton(s, `ui-hooks-${pw}x${ph}`, pw, ph, 'normal');
+    this.hookPlate = this.fix(s.add.image(lx + pw / 2, py + ph / 2, `ui-hooks-${pw}x${ph}`));
+    this.fix(s.add.text(lx + 16, py + ph / 2, 'ТРОС', font(20, 800)).setOrigin(0, 0.5), DEPTH.HUD + 1);
+    this.hookGfx = this.fix(s.add.graphics(), DEPTH.HUD + 1);
+    this.hookX = lx + pw - 14;
+    this.hookY = py + ph / 2;
+    this.uiRects.push({ x: lx, y: py, w: pw, h: ph });
+    this.buttons = {
+      left: { x: lx + B / 2, y: rowLow + B / 2 },
+      right: { x: lx2 + B / 2, y: rowLow + B / 2 },
+      jump: { x: jumpCx, y: jumpCy },
+    };
+  }
+
+  /**
+   * Редкие кнопки под одной: «⋯» в правом верхнем углу раскрывает столбик
+   * (подсказка, звук, обзор, меню, полный экран). В бою они не нужны, а
+   * место под большим пальцем — самое дорогое.
+   */
+  _buildCompactService(W) {
+    const s = this.scene;
+    const SB = 60, step = 68;
+    const x = W - 14 - SB;
+    let y = TOP_H + 12;
+    const more = this._tap(x, y, SB, 'more', () => this.setMore(!this.moreOpen));
+    this.buttons.more = { x: x + SB / 2, y: y + SB / 2 };
+    this.moreItems = [];
+    const service = (icon, onTap) => {
+      y += step;
+      const from = this.uiRects.length;
+      const img = this._tap(x, y, SB, icon, () => { onTap(); if (icon !== 'sound' && icon !== 'mute') this.setMore(false); });
+      // Спрятанная кнопка не должна ловить касания поля: её прямоугольник
+      // включается вместе с ней
+      this.moreItems.push({ img, rect: this.uiRects[from], y });
+      return img;
+    };
+    service('help', () => this.toggleHelp());
+    this.soundBtn = service(sfx.muted ? 'mute' : 'sound', () => this.toggleSound());
+    service('overview', () => s.rig.toggleOverview());
+    service('home', () => s.toMenu());
+    if (s.scale.fullscreen.available) {
+      service('fullscreen', () => {
+        if (s.scale.isFullscreen) s.scale.stopFullscreen();
+        else s.scale.startFullscreen();
+      });
+    }
+    if (s.match?.mode === 'online') service('link', () => s.shareInvite());
+    this.moreBtn = more;
+    this.setMore(false);
+
+    this.netText = this.fix(s.add.text(16, TOP_H + 10, '', font(13, 800, UI.accent)), DEPTH.HUD + 1);
+  }
+
+  setMore(on) {
+    this.moreOpen = on;
+    for (const it of this.moreItems ?? []) {
+      it.img.setVisible(on);
+      it.img.iconImage?.setVisible(on);
+      if (on) it.img.setInteractive(); else it.img.disableInteractive();
+      it.rect.h = on ? it.img.plateSize : 0;
+    }
   }
 
   /**
@@ -397,9 +542,22 @@ export class Hud {
 
   _buildHelp(W, H) {
     const s = this.scene;
-    if (!this.desktop) this._buildTouchService(W, H);
+    if (this.compact) this._buildCompactService(W);
+    else if (!this.desktop) this._buildTouchService(W, H);
 
-    const lines = this.desktop ? [
+    const lines = this.compact ? [
+      'тяни от бойца НАЗАД и отпусти — выстрел, как из рогатки',
+      'чем дальше тянешь, тем сильнее; вернул палец — отмена',
+      'коснись стены или потолка — крюк подтянет бойца туда',
+      'стрелки — шаг, круглая кнопка — прыжок или отцепиться',
+      'тяни фон — камера, два пальца — масштаб',
+    ] : this.desktop && s.sling ? [
+      'мышь — прицел · ЛКМ держать — сила, отпустить — выстрел',
+      'ПКМ по стене или потолку — крюк подтянет бойца туда',
+      'A/D — шаг · Enter — прыжок или отцепиться',
+      'ПКМ тянуть — карта · колесо — зум',
+      '1–9 или Q/E — оружие · Tab — арсенал · F1 — подсказка',
+    ] : this.desktop ? [
       'мышь — прицел: боец смотрит туда, где курсор',
       'ЛКМ или Пробел — держать: копится сила; отпустил — выстрел',
       'W/S или ↑/↓ — точная подстройка угла, прямо на заряде',
@@ -418,7 +576,8 @@ export class Hud {
       'маленькие кнопки внизу — подсказка, звук, меню, полный экран',
       ...(s.match?.mode === 'online' ? ['звенья цепи — позвать второго по ссылке'] : []),
     ];
-    const w = this.desktop ? 620 : 560, h = lines.length * 27 + 96;
+    const lh = this.compact ? 34 : 27;
+    const w = Math.min(W - 24, this.desktop ? 620 : this.compact ? 680 : 560), h = lines.length * lh + 96;
     const x = Math.round((W - w) / 2), y = Math.round((H - h) / 2);
 
     ensureButton(s, 'ui-help', w, h, 'normal');
@@ -433,10 +592,12 @@ export class Hud {
     ];
     lines.forEach((line, i) => {
       this.helpPanel.push(this.fix(
-        s.add.text(x + 30, y + 56 + i * 27, `·  ${line}`, font(14, 700)), DEPTH.HUD + 21,
+        s.add.text(x + 26, y + 56 + i * lh, `·  ${line}`, font(this.compact ? 17 : 14, 700)), DEPTH.HUD + 21,
       ));
     });
-    this.setHelp(true);
+    // Там, где жесты показывает сама игра (рогатка, трос), памятка с текстом
+    // при входе не нужна — она остаётся под кнопкой «?»
+    this.setHelp(!this.compact);
 
     // Подсказка закрывается любым касанием — искать кнопку не нужно.
     // Обработчик именованный: при пересборке HUD его надо снять, иначе
@@ -539,8 +700,10 @@ export class Hud {
     const w = WEAPONS[i];
     if (!w || !this.slot) return;
     this.slot.name.setText(w.name);
-    if (hasAsset(this.scene, w.iconKey)) {
-      this.slot.icon.setTexture(w.iconKey).setVisible(true);
+    const key = weaponIcon(this.scene, w);
+    if (key) {
+      this.slot.icon.setTexture(key).setVisible(true)
+        .setScale(fitScale(this.scene, key, this.compact ? 60 : 46));
     } else {
       this.slot.icon.setVisible(false);
     }
@@ -553,11 +716,15 @@ export class Hud {
     const team = turn.currentTeam;
     const worm = turn.activeWorm;
 
-    this.teamChip.fillColor = TEAM_COLORS[team];
-    this.turnText.setText(worm ? `Боец ${worm.name}` : TEAM_NAMES[team]);
-    this.turnText.setColor(hex(TEAM_COLORS[team]));
-    const shape = scene.shape && scene.shape.id !== 'island' ? ` · ${scene.shape.name}` : '';
-    this.subText.setText(`${TEAM_NAMES[team]} · ${scene.terrain.biome.name}${shape} · ${turn.weapon.name}`);
+    if (this.turnText) {
+      this.teamChip.fillColor = TEAM_COLORS[team];
+      this.turnText.setText(worm ? `Боец ${worm.name}` : TEAM_NAMES[team]);
+      this.turnText.setColor(hex(TEAM_COLORS[team]));
+      const shape = scene.shape && scene.shape.id !== 'island' ? ` · ${scene.shape.name}` : '';
+      const hooks = scene.hookPerTurn > 0 ? ` · крюков ${scene.hooksLeft}` : '';
+      this.subText.setText(`${TEAM_NAMES[team]} · ${scene.terrain.biome.name}${shape} · ${turn.weapon.name}${hooks}`);
+    }
+    if (this.hookGfx) this._updateHooks(scene);
 
     this._updateTimer(turn);
     this._updateWind(scene.wind);
@@ -592,7 +759,7 @@ export class Hud {
 
   _updateWind(wind) {
     const g = this.windGfx;
-    const half = 52, cy = this.windCy, cx = this.windCx;
+    const half = this.windHalf ?? 52, cy = this.windCy, cx = this.windCx;
     this.windText.setText(`${Math.abs(Math.round(wind))}`);
     g.clear();
     g.fillStyle(0x11151d, 0.9).fillRect(cx - half, cy - 6, half * 2, 12);
@@ -601,6 +768,36 @@ export class Hud {
     if (k >= 0) g.fillRect(cx, cy - 5, half * k, 10);
     else g.fillRect(cx + half * k, cy - 5, -half * k, 10);
     g.fillStyle(0xffffff, 0.85).fillRect(cx - 1, cy - 9, 2, 18);
+  }
+
+  /** Кружки крюков: полные — остались, пустые — истрачены в этот ход. */
+  _updateHooks(scene) {
+    const g = this.hookGfx;
+    g.clear();
+    const n = scene.hookPerTurn;
+    for (let i = 0; i < n; i++) {
+      const x = this.hookX - 11 - (n - 1 - i) * 30;
+      if (i < scene.hooksLeft) g.fillStyle(0xffe27a, 1).fillCircle(x, this.hookY, 10);
+      else g.lineStyle(2.5, 0xffe27a, 0.35).strokeCircle(x, this.hookY, 9);
+    }
+    // Потратил трос — плашка вздрагивает: глаз ловит, что счёт изменился
+    if (this._hooksShown != null && scene.hooksLeft < this._hooksShown) {
+      scene.tweens.add({ targets: this.hookPlate, scaleX: 1.08, scaleY: 1.18, duration: 110, yoyo: true });
+    }
+    this._hooksShown = scene.hooksLeft;
+    this.hookPlate.setAlpha(scene.hooksLeft > 0 ? 1 : 0.55);
+    // Строка подсказки: сначала про рогатку, потом про трос
+    if (this.hintText) {
+      const sling = !!scene.slingHint;
+      const show = !this.helpVisible && scene.canPlayerAct()
+        && (sling || (scene.hookHint && scene.hooksLeft > 0));
+      if (show) {
+        this.hintText.setText(sling
+          ? 'поставь палец на бойца, потяни назад и отпусти'
+          : 'коснись светящейся точки — трос подтянет туда');
+      }
+      this.hintText.setVisible(!!show);
+    }
   }
 
   _updateTeams(scene) {
@@ -612,7 +809,10 @@ export class Hud {
       const total = living.reduce((a, w) => a + w.health, 0);
       const size = Math.max(1, all.length);
       const b = this.teamBars[t];
-      b.bar.width = b.width * Phaser.Math.Clamp(total / (CFG.MAX_HEALTH * size), 0, 1);
+      // Полоса не прыгает к новому значению, а стекает к нему
+      const want = b.width * Phaser.Math.Clamp(total / (CFG.MAX_HEALTH * size), 0, 1);
+      b.shown = b.shown == null ? want : b.shown + (want - b.shown) * 0.12;
+      b.bar.width = Math.abs(want - b.shown) < 0.5 ? want : b.shown;
       b.cnt.setText(`${living.length}/${size}`);
     }
   }

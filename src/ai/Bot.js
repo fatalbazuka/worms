@@ -26,6 +26,11 @@ import { simulateShot, muzzle } from './ballistics.js';
  * по обе стороны — ровно тех, куда можно дойти ногами, не падая с обрыва
  * и не заходя в воду, — и, если оттуда выстрел заметно лучше, сначала
  * идут туда, а потом заново целятся уже с нового места. Новичок стоит.
+ *
+ * Крюк. Там, где он есть, к точкам «дойти ногами» добавляются точки «куда
+ * подтянет трос»: бот пускает лучи по кругу, для каждого зацепа считает,
+ * где окажется после рывка (тем же шагом, каким летит боец), и оценивает
+ * выстрел оттуда. Трос тратится, только если с новой точки заметно лучше.
  */
 
 export const BOT_LEVELS = {
@@ -57,6 +62,8 @@ export class Bot {
     this.plan = null;
     this.phase = 'idle';
     this.timer = 0;
+    this.noHook = false;
+    this.noWalk = false;
   }
 
   /**
@@ -80,6 +87,15 @@ export class Bot {
         if (this.timer < CFG.BOT_THINK) break;
         this.plan = this.decide(worm, { allowMove: this.level.moves });
         if (!this.plan) { this.phase = 'give-up'; this.timer = 0; break; }
+        if (this.plan.hookTo) {
+          // Пускаем трос тем же вызовом, что и игрок тапом; не зацепился —
+          // стреляем с места, как умеем
+          const ok = scene.tryHook(this.plan.hookTo.x, this.plan.hookTo.y);
+          this.phase = ok ? 'zip' : 'think';
+          this.timer = ok ? 0 : CFG.BOT_THINK;
+          if (!ok) this.noHook = true;
+          break;
+        }
         if (this.plan.moveTo != null) {
           this.phase = 'walk';
           this.timer = 0;
@@ -113,6 +129,25 @@ export class Bot {
         worm.walk(dx > 0 ? 1 : -1, dt);
         break;
       }
+
+      case 'zip':
+        // Летим по тросу; долетели — короткая пауза и целимся с нового места
+        if (worm.zip || this.timer < 0.35) break;
+        // Крюки ещё есть — можно подтянуться и второй раз, ногами уже не идём
+        this.noWalk = true;
+        this.plan = this.decide(worm, { allowMove: scene.hooksLeft > 0 });
+        if (!this.plan) { this.phase = 'give-up'; this.timer = 0; break; }
+        if (this.plan.hookTo) {
+          const ok = scene.tryHook(this.plan.hookTo.x, this.plan.hookTo.y);
+          if (ok) { this.timer = 0; break; }
+          this.plan = this.decide(worm, { allowMove: false });
+          if (!this.plan) { this.phase = 'give-up'; this.timer = 0; break; }
+        }
+        worm.facing = this.plan.facing;
+        scene.turn.setWeaponIndex(this.plan.weapon);
+        this.phase = 'aim';
+        this.timer = 0;
+        break;
 
       case 'aim': {
         // Доводим ствол с той же скоростью, с какой это делает игрок
@@ -152,24 +187,83 @@ export class Bot {
    *            moveTo?:number}|null}
    */
   decide(worm, { allowMove = false } = {}) {
+    // Вода подходит к ногам — сперва наверх, стрелять потом
+    const flood = this.scene.rules?.flood;
+    if (flood && !this.noHook && this.scene.hooksLeft > 0 && this.scene.canHook?.()
+      && worm.y > CFG.WATER_Y - flood.step * 2 - 40) {
+      // Из-под плиты прямо вверх не уйти — лучи пускаем по всему кругу
+      let up = null;
+      for (const h of this.hookSpots(worm, true)) {
+        if (h.end.y < worm.y - 30 && (!up || h.end.y < up.end.y)) up = h;
+      }
+      if (up) return { hookTo: up.anchor };
+    }
     const here = this.bestShot(worm);
     if (!allowMove || (here && here.score < 30)) return this.withError(here);
 
     // С места плохо: прикидываем пару точек рядом, куда можно дойти ногами
     let move = null;
     const x0 = worm.x, y0 = worm.y;
-    for (const x of this.walkableSpots(worm)) {
+    for (const x of this.noWalk ? [] : this.walkableSpots(worm)) {
       worm.x = x.x; worm.y = x.y;
       const shot = this.bestShot(worm, 1);
       if (shot && (!move || shot.score < move.shot.score)) move = { x: x.x, shot };
     }
+    // И точки, куда подтянет трос
+    let hook = null;
+    let closer = null;      // точка, откуда до цели просто ближе
+    if (!this.noHook && this.scene.hooksLeft > 0 && this.scene.canHook?.()) {
+      const target = this.scene.worms
+        .filter((w) => w.alive && w.team !== worm.team)
+        .sort((a, b) => this.targetScore(worm, a) - this.targetScore(worm, b))[0];
+      const far = (x, y) => (target ? Math.hypot(target.x - x, target.y - y) : 0);
+      for (const h of this.hookSpots(worm)) {
+        worm.x = h.end.x; worm.y = h.end.y;
+        const shot = this.bestShot(worm, 1);
+        if (shot && (!hook || shot.score < hook.shot.score)) hook = { at: h.anchor, shot };
+        const d = far(h.end.x, h.end.y);
+        if (!closer || d < closer.d) closer = { at: h.anchor, d };
+      }
+      if (closer && closer.d > far(x0, y0) - 90) closer = null;
+    }
     worm.x = x0; worm.y = y0;
     // Идти стоит, только если оттуда заметно лучше: суета ради пары
-    // пикселей выглядит глупо и тратит время хода
-    if (move && (!here || move.shot.score < here.score * 0.6 - 10)) {
-      return { ...this.withError(move.shot), moveTo: move.x };
+    // пикселей выглядит глупо и тратит время хода. Трос — тем более
+    const better = (c) => c && (!here || c.shot.score < here.score * 0.6 - 10);
+    if (better(hook) && (!better(move) || hook.shot.score < move.shot.score - 15)) {
+      return { ...this.withError(hook.shot), hookTo: hook.at };
     }
+    if (better(move)) return { ...this.withError(move.shot), moveTo: move.x };
+    // Достать не выходит ниоткуда (цель тремя этажами выше): тогда просто
+    // подбираемся ближе, а стрелять будем уже оттуда. Иначе бот до конца
+    // партии палил бы в потолок
+    if (closer && (!here || here.score > 150)) return { hookTo: closer.at };
     return this.withError(here);
+  }
+
+  /**
+   * Куда можно подтянуться: лучи по кругу, сначала вверх. Близкие друг к
+   * другу конечные точки сливаются — считать выстрел дважды с одного места
+   * незачем. Не больше восьми: каждая точка — это полный перебор выстрелов.
+   */
+  hookSpots(worm, wide = false) {
+    const scene = this.scene;
+    const out = [];
+    for (let k = 0; k < (wide ? 32 : 20) && out.length < (wide ? 12 : 8); k++) {
+      // -90° (вверх), затем веером в обе стороны до горизонта и чуть ниже
+      const off = Math.ceil(k / 2) * (Math.PI / 16) * (k % 2 ? 1 : -1);
+      const a = -Math.PI / 2 + off;
+      const anchor = scene.hookAnchor(worm,
+        worm.x + Math.cos(a) * 200, worm.centerY + Math.sin(a) * 200);
+      if (!anchor) continue;
+      const end = worm.zipEnd(anchor.x, anchor.y);
+      if (!end.grounded && !end.hang) continue;                 // сорвётся
+      if (end.y > CFG.DROWN_Y - 30) continue;
+      if (Math.hypot(end.x - worm.x, end.y - worm.y) < 60) continue;
+      if (out.some((o) => Math.hypot(o.end.x - end.x, o.end.y - end.y) < 50)) continue;
+      out.push({ anchor, end });
+    }
+    return out;
   }
 
   /**

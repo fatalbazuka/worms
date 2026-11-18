@@ -1,5 +1,5 @@
 import { CFG, DEPTH } from '../config.js';
-import { has, rotFrame } from '../core/assets.js';
+import { has, rotFrame, meta, fitScale } from '../core/assets.js';
 
 /**
  * Снаряд с самописной физикой.
@@ -39,8 +39,19 @@ export class Projectile {
     const p = this.weapon.projectile;
     const key = this.weapon.spriteKey;
     this.sprited = Boolean(key) && has(s, key);
-
-    if (this.sprited) {
+    // Своя картинка снаряда: одна на все повороты. Ракеты и мины смотрят
+    // носом по курсу, остальное кувыркается в полёте
+    const own = `shot_${this.weapon.id}`;
+    if (has(s, own)) {
+      this.own = true;
+      this.sprited = false;
+      this.pointed = ['bazooka', 'mole', 'mortar', 'airmissile'].includes(this.weapon.id);
+      // Авиаракета нарисована носом вниз-вправо, остальные — вправо
+      this.tilt = this.weapon.id === 'airmissile' ? -Math.PI / 4 : 0;
+      const size = Math.max(14, (meta(key)?.frameWidth ?? p.radius * 4) * 1.35);
+      this.view = s.add.image(this.x, this.y, own).setScale(fitScale(s, own, size));
+      if (this.pointed) this.view.setRotation(Math.atan2(this.vy, this.vx) + this.tilt);
+    } else if (this.sprited) {
       this.view = s.add.sprite(this.x, this.y, key);
       // rotational — кадры это 32 предрассчитанных поворота, а не анимация
       if (this.weapon.rotational) this.view.setFrame(rotFrame(this.vx, this.vy));
@@ -164,14 +175,19 @@ export class Projectile {
   _bounce(ray, p) {
     const n = this.terrain.normalAt(ray.x, ray.y, 5);
     const vn = this.vx * n.x + this.vy * n.y;
+    // Правила партии могут приглушить отскок: на тесных этажах башни
+    // прыгучая граната скатывалась с плиты раньше, чем взрывалась
+    const rules = this.scene.rules ?? {};
+    const bounce = p.bounciness * (rules.bounce ?? 1);
+    const friction = p.friction * (rules.roll ?? 1);
 
     // Отражение с потерей энергии + касательное трение
-    let rx = this.vx - (1 + p.bounciness) * vn * n.x;
-    let ry = this.vy - (1 + p.bounciness) * vn * n.y;
+    let rx = this.vx - (1 + bounce) * vn * n.x;
+    let ry = this.vy - (1 + bounce) * vn * n.y;
     const tvn = rx * n.x + ry * n.y;
     const tx = rx - tvn * n.x, ty = ry - tvn * n.y;
-    rx = tvn * n.x + tx * p.friction;
-    ry = tvn * n.y + ty * p.friction;
+    rx = tvn * n.x + tx * friction;
+    ry = tvn * n.y + ty * friction;
 
     this.vx = rx; this.vy = ry;
     // Отодвигаем от поверхности, чтобы не залипнуть внутри пикселя
@@ -241,6 +257,10 @@ export class Projectile {
 
   _syncView() {
     this.view.setPosition(this.x, this.y);
+    if (this.own && !this.resting && (this.vx || this.vy)) {
+      if (this.pointed) this.view.setRotation(Math.atan2(this.vy, this.vx) + this.tilt);
+      else this.view.rotation += (this.vx >= 0 ? 1 : -1) * 0.14;
+    }
     if (this.sprited && this.weapon.rotational && !this.resting) {
       this.view.setFrame(rotFrame(this.vx, this.vy));
     }

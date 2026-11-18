@@ -47,7 +47,10 @@ export default class BootScene extends Phaser.Scene {
         if (end < start) continue;
         this.anims.create({
           key: animKey,
-          frames: this.anims.generateFrameNumbers(key, { start, end }),
+          // Либо отрезок кадров подряд, либо явный список номеров
+          frames: a.frames
+            ? a.frames.map((frame) => ({ key, frame }))
+            : this.anims.generateFrameNumbers(key, { start, end }),
           frameRate: a.frameRate,
           repeat: a.repeat,
         });
@@ -63,8 +66,9 @@ export default class BootScene extends Phaser.Scene {
     }
 
     // Ссылка-приглашение ведёт прямо в партию, минуя меню: открыл — играешь
-    const online = Boolean(startRoom());
-    if (online) this.registry.set('match', onlineMatch());
+    const room = startRoom();
+    const online = Boolean(room);
+    if (online) this.registry.set('match', onlineMatch(room));
     this.scene.start(online ? 'Game' : 'Menu');
   }
 }

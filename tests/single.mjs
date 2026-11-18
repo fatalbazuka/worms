@@ -56,7 +56,9 @@ async function tapToMenu(tries = 12) {
   for (let i = 0; i < tries; i++) {
     if (await page.evaluate(() => window.__WORMS__?.scene.isActive('Menu'))) return true;
     const g = await view();
-    await page.mouse.click(Math.round(g.left + g.cw / 2), Math.round(g.top + g.ch / 2));
+    // На экране итога — кнопка «В меню»; пока её нет, ждём
+    const b = await page.evaluate(() => window.__WORMS__.scene.getScene('Game')?.overButtons?.menu ?? null);
+    if (b) await page.mouse.click(Math.round(g.left + (b.x * g.cw) / g.w), Math.round(g.top + (b.y * g.ch) / g.h));
     await page.waitForTimeout(500);
   }
   return page.evaluate(() => window.__WORMS__?.scene.isActive('Menu'));
@@ -113,8 +115,14 @@ const info = () => page.evaluate(() => {
 await menuReady();
 const rootButtons = await page.evaluate(
   () => Object.keys(window.__WORMS__.scene.getScene('Menu').buttons));
-check('в меню три пункта', ['quick', 'campaign', 'online'].every((k) => rootButtons.includes(k)),
+check('на главном экране «Играть», режимы и вкладки',
+  ['play', 'modes', 'tournaments', 'top', 'account'].every((k) => rootButtons.includes(k)),
   rootButtons.join(', '));
+await menuTap('modes');
+const modeButtons = await page.evaluate(
+  () => Object.keys(window.__WORMS__.scene.getScene('Menu').buttons));
+check('в режимах башня и три прежних', ['tower', 'quick', 'campaign', 'online'].every((k) => modeButtons.includes(k)),
+  modeButtons.join(', '));
 
 // --- кампания: миссия «Пристрелка» ---
 await menuTap('campaign');
@@ -226,6 +234,7 @@ await menuReady();
 check('после миссии возвращаемся в меню', true);
 
 // --- все миссии собираются в играбельные карты ---
+await menuTap('modes');
 await menuTap('campaign');
 const unlocked = await page.evaluate(
   () => window.__WORMS__.scene.getScene('Menu').buttons.storm?.enabled);
@@ -274,11 +283,12 @@ for (const { id, sizes: expected } of CAMPAIGN) {
   }
   await page.evaluate(() => window.__WORMS__.scene.getScene('Game').toMenu());
   await menuReady();
+  await menuTap('modes');
   await menuTap('campaign');
 }
 
 // --- быстрая игра против бота ---
-await menuTap('back');
+await menuTap('back');     // из кампании — на экран режимов
 await menuTap('quick');
 await menuTap('sniper');
 await gameReady();
@@ -287,6 +297,58 @@ st = await info();
 check('быстрая игра против бота собирается',
   st.mode === 'quick' && st.bots[1] === 'sniper' && st.sizes.join() === '2,2',
   `${st.mode}, боты ${JSON.stringify(st.bots)}`);
+
+// --- быстрый бой онлайн: соперника нет — бой с ботом на башне ---
+await page.evaluate(() => window.__WORMS__.scene.getScene('Game').toMenu());
+await menuReady();
+await menuTap('modes');
+await menuTap('online');
+await menuTap('quickmatch');
+const searching = await page.evaluate(() => {
+  const m = window.__WORMS__.scene.getScene('Menu');
+  return { bot: Boolean(m.buttons['bot-now']), text: m.fallbackText?.text ?? '' };
+});
+check('в поиске видно, когда начнётся бой с ботом', searching.bot && /ботом/.test(searching.text), searching.text);
+await menuTap('bot-now');
+await gameReady();
+await page.waitForTimeout(800);
+const fb = await page.evaluate(() => {
+  const s = window.__WORMS__.scene.getScene('Game');
+  return { fallback: Boolean(s.match.fallback), shape: s.shape.id, bot: s.match.teams[1].control, net: Boolean(s.net) };
+});
+check('«Сразу с ботом» — башня против бота, без сети и рейтинга',
+  fb.fallback && fb.shape === 'tower' && fb.bot === 'bot' && !fb.net, JSON.stringify(fb));
+
+// --- рогатка не стреляет, когда хотели двинуть камеру ---
+// События подаются прямо в обработчик: через CDP касание идёт сотни
+// миллисекунд, настоящий быстрый мазок так не изобразить
+await page.evaluate(() => window.__WORMS__.scene.getScene('Game').hud.setHelp(false));
+const gesture = (steps) => page.evaluate((steps) => {
+  const s = window.__WORMS__.scene.getScene('Game');
+  const a = s.aim, w = s.turn.activeWorm;
+  const sx = (w.x - s.rig.viewLeft) * s.rig.zoom, sy = (w.centerY - s.rig.viewTop) * s.rig.zoom;
+  const p = (dx, dy, down) => ({ x: sx + dx, y: sy + dy, isDown: down, id: 1, downTime: 1 });
+  for (const [kind, dx, dy] of steps) {
+    if (kind === 'down') a.onDown(p(dx, dy, true));
+    if (kind === 'move') a.onMove(p(dx, dy, true));
+    if (kind === 'up') a.onUp(p(dx, dy, false));
+  }
+}, steps);
+const turnState = () => page.evaluate(() => window.__WORMS__.scene.getScene('Game').turn.state);
+await page.waitForFunction(() => window.__WORMS__.scene.getScene('Game').canPlayerAct(), null, { timeout: 20000 });
+await gesture([['down', 0, 0], ['move', 10, 60], ['move', 20, 140], ['up', 20, 140]]);
+await page.waitForTimeout(200);
+check('быстрый мазок с бойца — протяжка камеры, а не выстрел', await turnState() === 'aim');
+await gesture([['down', 0, 0]]);
+await page.waitForTimeout(350);
+await gesture([['move', -60, 20], ['move', -120, 40], ['move', -10, 2], ['up', -10, 2]]);
+await page.waitForTimeout(200);
+check('натянул и вернул к бойцу — выстрела нет', await turnState() === 'aim');
+await gesture([['down', 0, 0]]);
+await page.waitForTimeout(350);
+await gesture([['move', -60, 20], ['move', -140, 50], ['up', -140, 50]]);
+await page.waitForTimeout(200);
+check('спокойное натяжение — выстрел', await turnState() !== 'aim');
 
 check('нет ошибок в консоли', errors.length === 0, errors.slice(0, 5).join(' | '));
 
