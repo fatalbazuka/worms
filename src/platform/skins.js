@@ -49,8 +49,10 @@ export async function syncSkinsCloud() {
 export function applyServerOwned(owned) {
   const before = load();
   const res = applyOwned(before, owned);
-  if (res.boxes || res.skins.length || res.state.paidSeen !== before.paidSeen) save(res.state);
-  return { boxes: res.boxes, skins: res.skins };
+  if (res.boxes || res.coins || res.skins.length || res.state.paidSeen !== before.paidSeen) save(res.state);
+  // Монеты в подарок — в кошелёк (он в daily.js)
+  if (res.coins) grantCoins(res.coins);
+  return { boxes: res.boxes, coins: res.coins, skins: res.skins };
 }
 
 export function skinState() { return load(); }

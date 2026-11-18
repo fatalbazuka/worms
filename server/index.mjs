@@ -61,6 +61,7 @@ import { createAnalytics } from './analytics.mjs';
 import { createShop, SHOP, SKIN_STARS, SKIN_IDS, shopItem } from './shop.mjs';
 import { createDailyTower } from './dailytower.mjs';
 import { createSaves } from './saves.mjs';
+import { createAdmin } from './admin.mjs';
 
 export function createApp({
   db, botToken = '', trustProxy = false, staticDir = null, now = () => Date.now(),
@@ -83,7 +84,8 @@ export function createApp({
   const shop = createShop({ db, now });
   const saves = createSaves({ db, now });
   const daily = createDailyTower({ db, players, dayOf: () => analytics.dayOf(), now });
-  bot = createBot({ db, api, players, tournaments, analytics, adminIds: admins, publicUrl, tz, now, log });
+  const admin = createAdmin({ db, players, analytics, tournaments, shop, saves, api, now, log });
+  bot = createBot({ db, api, players, tournaments, analytics, admin, adminIds: admins, publicUrl, tz, now, log });
   const hookSecret = botToken ? webhookSecret(botToken, secret) : '';
 
   const q = {
@@ -114,6 +116,7 @@ export function createApp({
     if (!s) throw new HttpError(401, 'вход устарел — открой игру заново');
     const p = players.byId(s.player_id);
     if (!p) throw new HttpError(401, 'аккаунт не найден');
+    if (p.banned_at) throw new HttpError(403, 'аккаунт заблокирован');
     const t = now();
     if (t - s.seen_at > 3600_000) { q.sessionSeen.run(t, h); q.seen.run(t, p.id); }
     return p;
@@ -133,6 +136,7 @@ export function createApp({
     const was = players.byId(`tg${Number(v.user.id)}`);
     const fresh = !was || !was.app_at;
     const p = players.upsertTg(v.user, photo);
+    if (players.byId(p.id)?.banned_at) throw new HttpError(403, 'аккаунт заблокирован');
     if (fresh) players.markApp(p.id);
     // Новичок по ссылке друга — обоим по коробке; другу — сообщение в бот
     if (fresh) {
@@ -270,6 +274,8 @@ export function createApp({
       }
     }
 
+    if (path.startsWith('/api/admin/')) return adminApi(method, path, url, req, ip);
+
     switch (`${method} ${path}`) {
       case 'GET /api/health': return { ok: true };
       case 'GET /api/config': return { bot: bot.username || null, stars: api.enabled };
@@ -280,6 +286,7 @@ export function createApp({
         const { login, password } = await readJson(req);
         const p = players.byLogin(login);
         if (!p || !verifyPassword(password, p.pass_hash)) throw new HttpError(401, 'неверный логин или пароль');
+        if (p.banned_at) throw new HttpError(403, 'аккаунт заблокирован');
         return { token: issueToken(p.id), player: players.view(p, { self: true }) };
       }
       case 'GET /api/save': return { items: saves.all(auth(req).id) };
@@ -339,11 +346,79 @@ export function createApp({
     }
   }
 
+  // ------------------------------------------------------------- админка
+
+  async function adminApi(method, path, url, req, ip) {
+    if (method === 'POST' && path === '/api/admin/enter') {
+      if (!limits.login.hit(ip)) throw new HttpError(429, 'слишком много попыток, подожди минуту');
+      const { key } = await readJson(req);
+      const id = admin.useKey(key);
+      const p = id ? players.byId(id) : null;
+      if (!p || !players.isAdmin(p)) throw new HttpError(401, 'ссылка устарела — попроси у бота новую: /admin');
+      return { token: issueToken(p.id), player: players.view(p, { self: true }) };
+    }
+    const me = auth(req);
+    if (!players.isAdmin(me)) throw new HttpError(403, 'только для админа');
+    const body = method === 'POST' ? await readJson(req) : null;
+    const fail = (r, status = 400) => { if (!r.ok) throw new HttpError(status, r.error); return r; };
+    switch (`${method} ${path}`) {
+      case 'GET /api/admin/me': return { player: players.view(me, { self: true }) };
+      case 'GET /api/admin/overview': return admin.overview();
+      case 'GET /api/admin/players': return { players: admin.search(url.searchParams.get('q') ?? '') };
+      case 'GET /api/admin/player': {
+        const c = admin.card(url.searchParams.get('id'));
+        if (!c) throw new HttpError(404, 'нет такого игрока');
+        return c;
+      }
+      case 'POST /api/admin/ban': return fail(admin.setBan(body.id, Boolean(body.ban)), 409);
+      case 'POST /api/admin/gift': return fail(await admin.gift(body.id, body));
+      case 'GET /api/admin/tours': return { items: admin.tours() };
+      case 'POST /api/admin/tours': {
+        try {
+          const t = tournaments.create({
+            name: body.name, size: Number(body.size), fee: Number(body.fee) || 0,
+            startsAt: body.startsAt ? Number(body.startsAt) : null,
+          });
+          return { tournament: t };
+        } catch (e) { throw new HttpError(400, e.message); }
+      }
+      case 'POST /api/admin/tours/start': return fail(tournaments.start(Number(body.id)), 409);
+      case 'POST /api/admin/tours/cancel': return fail(await tournaments.cancel(Number(body.id)), 409);
+      case 'GET /api/admin/broadcast': return { audience: admin.audience().length, items: admin.broadcasts() };
+      case 'POST /api/admin/broadcast':
+        // Без confirm — только сколько человек получат: отправка — вторым нажатием
+        if (!body.confirm) return { preview: true, audience: admin.audience().length };
+        return fail(admin.broadcast(body.text));
+      default: throw new HttpError(404, 'нет такого адреса');
+    }
+  }
+
+  /** Копия базы файлом — не JSON, поэтому отдельно от остального API. */
+  function adminBackup(req, res) {
+    try {
+      const me = auth(req);
+      if (!players.isAdmin(me)) throw new HttpError(403, 'только для админа');
+    } catch (e) {
+      send(res, e.status ?? 500, { error: e.message });
+      return;
+    }
+    const snap = admin.snapshot();
+    const name = snap.path.split('/').pop();
+    res.writeHead(200, {
+      'content-type': 'application/octet-stream',
+      'content-length': snap.size,
+      'content-disposition': `attachment; filename="${name}"`,
+      'cache-control': 'no-store',
+    });
+    snap.stream().on('close', snap.cleanup).pipe(res);
+  }
+
   const root = staticDir ? resolve(staticDir) : null;
 
   async function handle(req, res) {
     let url;
     try { url = new URL(req.url, 'http://x'); } catch { res.writeHead(400).end(); return; }
+    if (url.pathname === '/api/admin/backup' && req.method === 'GET') { adminBackup(req, res); return; }
     if (url.pathname.startsWith('/api/')) {
       try {
         send(res, 200, await api_(req, url));

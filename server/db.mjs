@@ -174,6 +174,21 @@ const MIGRATIONS = [
     primary key (player_id, key)
   );
   `,
+  // 8: админка — подарки монетами и скином (в bonus), бан, журнал рассылок
+  `
+  alter table bonus add column coins integer not null default 0;
+  alter table bonus add column skin text;
+  alter table player add column banned_at integer;
+  create table broadcast (
+    id         integer primary key,
+    text       text not null,
+    total      integer not null default 0,
+    sent       integer not null default 0,
+    failed     integer not null default 0,
+    created_at integer not null,
+    done_at    integer
+  );
+  `,
 ];
 
 export function openDb(path) {

@@ -65,7 +65,8 @@ export const SKIN_BY_ID = Object.fromEntries(SKINS.map((s) => [s.id, s]));
 
 export function emptyState() {
   // paidSeen — сколько коробок с сервера (куплено + подарено) уже положено
-  return { owned: [DEFAULT_SKIN], equipped: DEFAULT_SKIN, boxes: 0, claimed: [], paidSeen: 0 };
+  // coinsSeen — сколько монет-подарков от админа уже положено в кошелёк
+  return { owned: [DEFAULT_SKIN], equipped: DEFAULT_SKIN, boxes: 0, claimed: [], paidSeen: 0, coinsSeen: 0 };
 }
 
 /** Привести что угодно из хранилища к правильному состоянию. */
@@ -78,6 +79,7 @@ export function normalize(raw) {
   st.boxes = Math.max(0, Math.min(99, Math.floor(Number(raw.boxes) || 0)));
   st.claimed = Array.isArray(raw.claimed) ? [...new Set(raw.claimed.map(String))] : [];
   st.paidSeen = Math.max(0, Math.floor(Number(raw.paidSeen) || 0));
+  st.coinsSeen = Math.max(0, Math.floor(Number(raw.coinsSeen) || 0));
   return st;
 }
 
@@ -95,6 +97,7 @@ export function mergeSkins(a, b) {
     boxes: Math.max(x.boxes, y.boxes),
     claimed: [...new Set([...x.claimed, ...y.claimed])],
     paidSeen: Math.max(x.paidSeen, y.paidSeen),
+    coinsSeen: Math.max(x.coinsSeen, y.coinsSeen),
   });
 }
 
@@ -107,16 +110,20 @@ export function mergeSkins(a, b) {
 export function applyOwned(state, owned) {
   const total = Math.max(0, Math.floor(Number(owned?.boxes) || 0));
   const add = Math.max(0, total - state.paidSeen);
+  const coinsTotal = Math.max(0, Math.floor(Number(owned?.coins) || 0));
+  const coins = Math.max(0, coinsTotal - (state.coinsSeen ?? 0));
   const newSkins = (owned?.skins ?? []).filter((id) => SKIN_BY_ID[id] && !state.owned.includes(id));
-  if (!add && !newSkins.length && total <= state.paidSeen) return { state, boxes: 0, skins: [] };
+  if (!add && !coins && !newSkins.length && total <= state.paidSeen) return { state, boxes: 0, coins: 0, skins: [] };
   return {
     state: {
       ...state,
       boxes: Math.min(99, state.boxes + add),
       paidSeen: Math.max(state.paidSeen, total),
+      coinsSeen: Math.max(state.coinsSeen ?? 0, coinsTotal),
       owned: [...state.owned, ...newSkins],
     },
     boxes: add,
+    coins,
     skins: newSkins,
   };
 }

@@ -228,6 +228,11 @@ check('один в лобби никого не находит', findMatch(p('a'
   check('повторная проверка покупок ничего не добавляет', again.boxes === 0 && again.state.boxes === 5);
   const more = K.applyOwned(r.state, { boxes: 6, skins: ['devil'] });
   check('новая покупка добавляет только разницу', more.boxes === 1 && more.state.boxes === 6);
+  const gc = K.applyOwned(K.emptyState(), { boxes: 0, coins: 500, skins: ['king'] });
+  const gc2 = K.applyOwned(gc.state, { boxes: 0, coins: 500, skins: ['king'] });
+  const gc3 = K.applyOwned(gc2.state, { boxes: 0, coins: 800, skins: ['king'] });
+  check('подарок монет от админа: кладётся один раз, новый — разницей',
+    gc.coins === 500 && gc.state.owned.includes('king') && gc2.coins === 0 && gc3.coins === 300, `${gc.coins} ${gc2.coins} ${gc3.coins}`);
   const refunded = K.applyOwned(more.state, { boxes: 1, skins: [] });
   check('после возврата звёзд открытое не отбирается', refunded.state.boxes === 6 && refunded.state.owned.includes('devil'));
 

@@ -49,22 +49,31 @@ export function createShop({ db, now = () => Date.now() }) {
   const q = {
     paid: db.prepare(`select ref from payment
                       where player_id = ? and purpose = 'shop' and refunded_at is null`),
-    bonus: db.prepare('select coalesce(sum(boxes), 0) as n from bonus where player_id = ?'),
+    bonus: db.prepare('select coalesce(sum(boxes), 0) as n, coalesce(sum(coins), 0) as coins from bonus where player_id = ?'),
+    giftSkins: db.prepare('select distinct skin from bonus where player_id = ? and skin is not null'),
+    giftAdd: db.prepare(`insert into bonus (player_id, boxes, coins, skin, reason, ref, created_at)
+                         values (?, ?, ?, ?, 'admin', ?, ?)`),
     bonusAdd: db.prepare('insert into bonus (player_id, boxes, reason, ref, created_at) values (?, ?, ?, ?, ?)'),
     refCount: db.prepare("select count(*) as n from bonus where reason = 'ref-host' and player_id = ?"),
     referred: db.prepare('update player set referred_by = ? where id = ? and referred_by is null'),
   };
 
-  /** Что положено игроку: всего коробок (куплено + подарено) и купленные скины. */
+  /**
+   * Что положено игроку: всего коробок (куплено + подарено), монет в
+   * подарок от админа и скины (купленные и подаренные). Всё — итогами:
+   * игра сама помнит, сколько уже положила, и добавляет только разницу.
+   */
   function owned(playerId) {
-    let boxes = q.bonus.get(playerId).n;
-    const skins = new Set();
+    const b = q.bonus.get(playerId);
+    let boxes = b.n;
+    const coins = b.coins;
+    const skins = new Set(q.giftSkins.all(playerId).map((r) => r.skin));
     for (const { ref } of q.paid.all(playerId)) {
       const it = shopItem(ref);
       if (it?.kind === 'boxes') boxes += it.boxes;
       if (it?.kind === 'skin') skins.add(it.skin);
     }
-    return { boxes, skins: [...skins] };
+    return { boxes, coins, skins: [...skins] };
   }
 
   /**
@@ -85,5 +94,18 @@ export function createShop({ db, now = () => Date.now() }) {
     return host.id;
   }
 
-  return { owned, referral };
+  /**
+   * Подарок от админа: монеты, коробки и/или скин. Игра заберёт его при
+   * следующем входе (owned). note — за что, видно в карточке игрока.
+   */
+  function gift(playerId, { coins = 0, boxes = 0, skin = null, note = '' } = {}) {
+    const c = Math.max(0, Math.min(1_000_000, Math.floor(Number(coins) || 0)));
+    const b = Math.max(0, Math.min(99, Math.floor(Number(boxes) || 0)));
+    const s = skin && SKIN_IDS.includes(skin) ? skin : null;
+    if (!c && !b && !s) return { ok: false, error: 'нечего дарить' };
+    q.giftAdd.run(playerId, b, c, s, String(note || '').slice(0, 120) || null, now());
+    return { ok: true, coins: c, boxes: b, skin: s };
+  }
+
+  return { owned, referral, gift };
 }

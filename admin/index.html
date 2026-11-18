@@ -1,0 +1,428 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>Smiles — админка</title>
+<style>
+  :root {
+    --bg: #0d1220; --panel: #161d30; --line: #26304a; --text: #e9eef8; --dim: #93a1bd;
+    --gold: #ffd166; --red: #ff6b6b; --green: #6fe39a; --blue: #6fb7ff;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.45 system-ui, -apple-system, Segoe UI, sans-serif; }
+  header { display: flex; align-items: center; gap: 16px; padding: 14px 20px; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+  header h1 { margin: 0; font-size: 20px; color: var(--gold); }
+  nav { display: flex; gap: 6px; flex-wrap: wrap; }
+  nav button, .btn { background: var(--panel); color: var(--text); border: 1px solid var(--line); border-radius: 9px; padding: 7px 13px; font: inherit; cursor: pointer; }
+  nav button.on { background: var(--gold); color: #2a1c06; border-color: var(--gold); font-weight: 700; }
+  .btn.primary { background: var(--gold); color: #2a1c06; border-color: var(--gold); font-weight: 700; }
+  .btn.danger { border-color: var(--red); color: var(--red); }
+  .btn:disabled { opacity: .5; cursor: default; }
+  #who { margin-left: auto; color: var(--dim); font-size: 13px; }
+  main { padding: 20px; max-width: 1200px; margin: 0 auto; }
+  .grid { display: grid; gap: 14px; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 14px 16px; }
+  .card h3 { margin: 0 0 8px; font-size: 13px; color: var(--dim); font-weight: 600; text-transform: uppercase; letter-spacing: .04em; }
+  .big { font-size: 28px; font-weight: 800; }
+  .sub { color: var(--dim); font-size: 13px; }
+  .row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+  .split { display: grid; gap: 16px; grid-template-columns: minmax(280px, 1fr) minmax(320px, 1.3fr); }
+  @media (max-width: 820px) { .split { grid-template-columns: 1fr; } }
+  table { width: 100%; border-collapse: collapse; font-size: 14px; }
+  th, td { text-align: left; padding: 7px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { color: var(--dim); font-weight: 600; font-size: 12px; }
+  tr.click { cursor: pointer; } tr.click:hover { background: #1c2540; } tr.sel { background: #22305a; }
+  input, select, textarea { background: #0f1526; color: var(--text); border: 1px solid var(--line); border-radius: 8px; padding: 7px 10px; font: inherit; }
+  textarea { width: 100%; min-height: 120px; }
+  label { display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: var(--dim); }
+  .tag { display: inline-block; padding: 1px 8px; border-radius: 99px; font-size: 12px; background: #26304a; }
+  .tag.red { background: #4a1f26; color: var(--red); } .tag.green { background: #1d3a2b; color: var(--green); } .tag.gold { background: #463a17; color: var(--gold); }
+  .msg { margin: 10px 0; min-height: 1.3em; } .msg.err { color: var(--red); } .msg.ok { color: var(--green); }
+  .chart svg { width: 100%; height: 170px; display: block; }
+  .legend { display: flex; gap: 14px; font-size: 12px; color: var(--dim); margin-top: 6px; }
+  .legend i { display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-right: 5px; vertical-align: -1px; }
+  .bar { height: 10px; background: #26304a; border-radius: 6px; overflow: hidden; } .bar b { display: block; height: 100%; background: var(--blue); }
+  #login { max-width: 360px; margin: 60px auto; }
+  .muted { color: var(--dim); }
+  h2 { font-size: 18px; margin: 0 0 12px; }
+  main > * + * { margin-top: 16px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Smiles · админка</h1>
+  <nav id="tabs"></nav>
+  <span id="who"></span>
+</header>
+<main id="app"></main>
+<script>
+'use strict';
+// Адрес API — рядом со страницей: /worms/admin/ → /worms/api/
+const API = new URL('../api/', location.href).href;
+const TOKEN_KEY = 'smiles.admin.token';
+const app = document.getElementById('app');
+let token = localStorage.getItem(TOKEN_KEY) || '';
+
+/** Элемент без innerHTML: всё, что пришло от игроков, — только текстом. */
+function h(tag, attrs = {}, ...kids) {
+  const el = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs ?? {})) {
+    if (v == null || v === false) continue;
+    if (k.startsWith('on')) el.addEventListener(k.slice(2), v);
+    else if (k === 'class') el.className = v;
+    else el.setAttribute(k, v === true ? '' : v);
+  }
+  for (const c of kids.flat()) if (c != null && c !== false) el.append(c instanceof Node ? c : String(c));
+  return el;
+}
+const clear = (el) => { while (el.firstChild) el.firstChild.remove(); return el; };
+const fmtDate = (ms) => (ms ? new Date(ms).toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : '—');
+const pct = (a, b) => (b ? `${Math.round((a / b) * 100)}%` : '—');
+
+async function call(method, path, body) {
+  const res = await fetch(API + path, {
+    method,
+    headers: { 'content-type': 'application/json', ...(token ? { authorization: `Bearer ${token}` } : {}) },
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  const data = await res.json().catch(() => ({}));
+  if (res.status === 401 && path !== 'login' && path !== 'admin/enter') { logout(); throw new Error(data.error || 'нужно войти'); }
+  if (!res.ok) throw new Error(data.error || `ошибка ${res.status}`);
+  return data;
+}
+
+function logout() { token = ''; localStorage.removeItem(TOKEN_KEY); showLogin(); }
+
+// ----------------------------------------------------------------- вход
+
+async function boot() {
+  const key = new URLSearchParams(location.search).get('key');
+  if (key) {
+    history.replaceState(null, '', location.pathname);   // ключ одноразовый — из адреса долой
+    try {
+      const r = await call('POST', 'admin/enter', { key });
+      token = r.token; localStorage.setItem(TOKEN_KEY, token);
+    } catch (e) { showLogin(e.message); return; }
+  }
+  if (!token) { showLogin(); return; }
+  try {
+    const me = await call('GET', 'admin/me');
+    document.getElementById('who').textContent = `${me.player.name} · `;
+    document.getElementById('who').append(h('a', { href: '#', onclick: (e) => { e.preventDefault(); logout(); }, style: 'color:var(--dim)' }, 'выйти'));
+    tabs();
+  } catch (e) { showLogin(e.message); }
+}
+
+function showLogin(err = '') {
+  clear(document.getElementById('tabs'));
+  document.getElementById('who').textContent = '';
+  const msg = h('div', { class: 'msg err' }, err);
+  const login = h('input', { name: 'login', placeholder: 'логин', autocomplete: 'username' });
+  const pass = h('input', { name: 'password', type: 'password', placeholder: 'пароль', autocomplete: 'current-password' });
+  const form = h('form', { class: 'card', id: 'login', onsubmit: async (e) => {
+    e.preventDefault();
+    msg.textContent = '';
+    try {
+      const r = await call('POST', 'login', { login: login.value.trim(), password: pass.value });
+      token = r.token;
+      await call('GET', 'admin/me');      // не админ — здесь же отказ
+      localStorage.setItem(TOKEN_KEY, token);
+      boot();
+    } catch (ex) { token = ''; msg.textContent = ex.message; }
+  } },
+  h('h2', {}, 'Вход в админку'),
+  h('p', { class: 'muted' }, 'Проще всего — напиши боту /admin и открой ссылку. Или войди логином и паролем, которые выдаёт /web.'),
+  h('div', { style: 'display:grid;gap:10px' }, login, pass, h('button', { class: 'btn primary', type: 'submit' }, 'Войти')),
+  msg);
+  clear(app).append(form);
+}
+
+// ------------------------------------------------------------- вкладки
+
+const TABS = [['overview', 'Сводка'], ['players', 'Игроки'], ['tours', 'Турниры'], ['broadcast', 'Рассылка'], ['db', 'База']];
+let current = 'overview';
+function tabs() {
+  const nav = clear(document.getElementById('tabs'));
+  for (const [id, label] of TABS) {
+    nav.append(h('button', { class: id === current ? 'on' : '', onclick: () => { current = id; tabs(); } }, label));
+  }
+  ({ overview, players: playersTab, tours, broadcast, db: dbTab })[current]();
+}
+
+// -------------------------------------------------------------- сводка
+
+const MODE_NAMES = {
+  quick: 'с ботом', campaign: 'классика', ascent: 'подъём', daily: 'башня дня', challenge: 'испытания',
+  online: 'по сети', fallback: 'бот вместо соперника', hotseat: 'вдвоём',
+};
+
+/** Столбики по дням: несколько рядов рядом в каждом дне. */
+function barChart(series, keys) {
+  const W = 1100, H = 170, pad = 22;
+  const max = Math.max(1, ...series.flatMap((d) => keys.map(([k]) => d[k])));
+  const gw = (W - pad) / series.length;
+  const bw = Math.max(3, (gw - 6) / keys.length);
+  const ns = 'http://www.w3.org/2000/svg';
+  const svg = document.createElementNS(ns, 'svg');
+  svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
+  const add = (tag, a) => { const e = document.createElementNS(ns, tag); for (const [k, v] of Object.entries(a)) e.setAttribute(k, v); svg.append(e); return e; };
+  series.forEach((d, i) => {
+    keys.forEach(([k, color], j) => {
+      const v = d[k];
+      const bh = ((H - pad - 14) * v) / max;
+      const r = add('rect', { x: pad + i * gw + 3 + j * bw, y: H - pad - bh, width: bw - 1, height: Math.max(0, bh), rx: 2, fill: color });
+      const t = document.createElementNS(ns, 'title'); t.textContent = `${d.day}: ${v}`; r.append(t);
+    });
+    if (i % 2 === 0 || series.length <= 8) {
+      const t = add('text', { x: pad + i * gw + gw / 2, y: H - 6, 'text-anchor': 'middle', fill: '#93a1bd', 'font-size': 11 });
+      t.textContent = d.day.slice(5);
+    }
+  });
+  add('text', { x: 0, y: 12, fill: '#93a1bd', 'font-size': 11 }).textContent = String(max);
+  return h('div', { class: 'chart' }, svg, h('div', { class: 'legend' }, keys.map(([, c, label]) => h('span', {}, h('i', { style: `background:${c}` }), label))));
+}
+
+async function overview() {
+  clear(app).append(h('p', { class: 'muted' }, 'загружаю…'));
+  let s;
+  try { s = await call('GET', 'admin/overview'); } catch (e) { clear(app).append(h('div', { class: 'msg err' }, e.message)); return; }
+  const t = s.series.at(-1);
+  const stat = (title, big, sub) => h('div', { class: 'card' }, h('h3', {}, title), h('div', { class: 'big' }, big), h('div', { class: 'sub' }, sub));
+  const r = s.retention;
+  const modes = Object.entries(t.modes).map(([m, n]) => `${MODE_NAMES[m] ?? m} ${n}`).join(' · ') || 'пока ни одного';
+  clear(app).append(
+    h('div', { class: 'grid' },
+      stat('Сегодня играли', t.active, `новых ${t.fresh} · боёв ${t.battles}`),
+      stat('За 7 дней', s.week, `новых ${s.totals.fresh7}`),
+      stat('Всего игроков', s.totals.players, `в бане ${s.totals.banned}`),
+      stat('Вернулись на 2-й день', pct(r.d1.back, r.d1.all), `${r.d1.back} из ${r.d1.all} · через 3 дня ${pct(r.d3.back, r.d3.all)} · через 7 ${pct(r.d7.back, r.d7.all)}`),
+      stat('Звёзды', `${s.stars.week} ⭐`, `за 7 дней · всего ${s.stars.all_time}`),
+    ),
+    h('section', { class: 'card', style: 'margin-top:16px' }, h('h3', {}, 'Игроки и новички по дням'),
+      barChart(s.series, [['active', '#6fb7ff', 'играли'], ['fresh', '#ffd166', 'новые']])),
+    h('section', { class: 'card' }, h('h3', {}, 'Бои по дням'), barChart(s.series, [['battles', '#6fe39a', 'бои']]),
+      h('div', { class: 'sub', style: 'margin-top:6px' }, `Сегодня: ${modes}`)),
+    h('section', { class: 'card' }, h('h3', {}, `Воронка новичков за 7 дней (пришло ${s.funnel.fresh})`),
+      h('table', {}, s.funnel.steps.map((st) => h('tr', {},
+        h('td', { style: 'width:200px' }, st.label),
+        h('td', {}, h('div', { class: 'bar' }, h('b', { style: `width:${s.funnel.fresh ? Math.min(100, (st.n / s.funnel.fresh) * 100) : 0}%` }))),
+        h('td', { style: 'width:90px;text-align:right' }, `${st.n} · ${pct(st.n, s.funnel.fresh)}`))))),
+  );
+}
+
+// -------------------------------------------------------------- игроки
+
+let selected = null;
+async function playersTab() {
+  const q = h('input', { placeholder: 'ник, Telegram ID или id', style: 'flex:1;min-width:200px' });
+  const list = h('div', { class: 'card' });
+  const side = h('div', {}, h('div', { class: 'card muted' }, 'Выбери игрока слева'));
+  const find = async () => {
+    clear(list).append(h('p', { class: 'muted' }, 'ищу…'));
+    try {
+      const r = await call('GET', `admin/players?q=${encodeURIComponent(q.value.trim())}`);
+      clear(list).append(r.players.length ? h('table', {},
+        h('tr', {}, h('th', {}, 'Игрок'), h('th', {}, 'Рейтинг'), h('th', {}, 'Бои'), h('th', {}, 'Заходил')),
+        r.players.map((p) => h('tr', { class: `click${p.id === selected ? ' sel' : ''}`, onclick: () => { selected = p.id; find(); showPlayer(side, p.id); } },
+          h('td', {}, p.name, ' ', p.banned_at ? h('span', { class: 'tag red' }, 'бан') : null,
+            h('div', { class: 'sub' }, p.tg_id ? `tg ${p.tg_id}` : p.id)),
+          h('td', {}, p.rating), h('td', {}, `${p.wins}–${p.losses}`), h('td', { class: 'sub' }, fmtDate(p.seen_at)))))
+        : h('p', { class: 'muted' }, 'никого'));
+    } catch (e) { clear(list).append(h('div', { class: 'msg err' }, e.message)); }
+  };
+  q.addEventListener('keydown', (e) => { if (e.key === 'Enter') find(); });
+  clear(app).append(h('div', { class: 'row', style: 'margin-bottom:14px' }, q, h('button', { class: 'btn primary', onclick: find }, 'Найти')),
+    h('div', { class: 'split' }, list, side));
+  find();
+  if (selected) showPlayer(side, selected);
+}
+
+const SKINS = ['cool', 'nerd', 'sleepy', 'ice', 'toxic', 'pumpkin', 'alien', 'rage', 'clown', 'ninja', 'pirate', 'robot', 'devil', 'astro', 'king', 'rainbow'];
+
+async function showPlayer(box, id) {
+  clear(box).append(h('div', { class: 'card muted' }, 'загружаю…'));
+  let c;
+  try { c = await call('GET', `admin/player?id=${encodeURIComponent(id)}`); } catch (e) { clear(box).append(h('div', { class: 'card msg err' }, e.message)); return; }
+  const p = c.player, g = c.progress;
+  const msg = h('div', { class: 'msg' });
+  const say = (text, ok = true) => { msg.className = `msg ${ok ? 'ok' : 'err'}`; msg.textContent = text; };
+
+  // Подарок
+  const coins = h('input', { type: 'number', min: 0, value: 0, style: 'width:110px' });
+  const boxes = h('input', { type: 'number', min: 0, max: 99, value: 0, style: 'width:80px' });
+  const skin = h('select', {}, h('option', { value: '' }, '— без скина —'), SKINS.map((s) => h('option', { value: s }, s)));
+  const note = h('input', { placeholder: 'за что (видно только тут)', style: 'flex:1;min-width:160px' });
+  const notify = h('input', { type: 'checkbox', checked: true });
+  const giftBtn = h('button', { class: 'btn primary', onclick: async () => {
+    giftBtn.disabled = true;
+    try {
+      const r = await call('POST', 'admin/gift', { id: p.id, coins: Number(coins.value), boxes: Number(boxes.value), skin: skin.value || null, note: note.value, notify: notify.checked });
+      say(`Подарено: ${[r.coins && `${r.coins} монет`, r.boxes && `коробок ${r.boxes}`, r.skin && `скин ${r.skin}`].filter(Boolean).join(', ')} — придёт при следующем входе`);
+      showPlayer(box, id);
+    } catch (e) { say(e.message, false); giftBtn.disabled = false; }
+  } }, 'Подарить');
+
+  const banBtn = h('button', { class: `btn ${p.banned_at ? '' : 'danger'}`, onclick: async () => {
+    const on = !p.banned_at;
+    if (on && !confirm(`Забанить ${p.name}? Он не сможет войти в игру.`)) return;
+    try { await call('POST', 'admin/ban', { id: p.id, ban: on }); showPlayer(box, id); playersTab(); } catch (e) { say(e.message, false); }
+  } }, p.banned_at ? 'Разбанить' : 'Забанить');
+
+  const kv = (k, v) => h('tr', {}, h('td', { class: 'sub', style: 'width:150px' }, k), h('td', {}, v ?? '—'));
+  clear(box).append(
+    h('div', { class: 'card' },
+      h('div', { class: 'row' }, h('h2', { style: 'margin:0' }, p.name),
+        p.admin ? h('span', { class: 'tag gold' }, 'админ') : null,
+        p.banned_at ? h('span', { class: 'tag red' }, `бан с ${fmtDate(p.banned_at)}`) : h('span', { class: 'tag green' }, 'активен'),
+        h('span', { style: 'margin-left:auto' }, banBtn)),
+      h('table', { style: 'margin-top:10px' },
+        kv('id', p.id), kv('Telegram ID', p.tg_id), kv('Рейтинг', `${p.rating} · ${p.wins}–${p.losses} · турниров выиграно ${p.tourney_wins}`),
+        kv('Пришёл', fmtDate(p.created_at)), kv('Заходил', fmtDate(p.seen_at)),
+        kv('Вход с сайта', p.name_key ? `логин ${p.name_key}` : 'не выдан'),
+        kv('Пригласил', `${c.referrals} чел.${p.referred_by ? ` · сам пришёл от ${p.referred_by}` : ''}`),
+        kv('Монеты', g.coins), kv('Серия дней', g.streak), kv('Коробок', g.boxes),
+        kv('Скины', g.skins ? `${g.skins.length}: ${g.skins.join(', ')}${g.equipped ? ` · надет ${g.equipped}` : ''}` : null),
+        kv('«Подъём»', g.ascent != null ? `пройдено ${g.ascent} из 20` : null)),
+      h('div', { class: 'sub', style: 'margin-top:6px' }, 'Прогресс — из копии на сервере, может отставать на минуту.')),
+    h('div', { class: 'card' }, h('h3', {}, 'Подарок'),
+      h('div', { class: 'row' }, h('label', {}, 'монеты', coins), h('label', {}, 'коробки', boxes), h('label', {}, 'скин', skin)),
+      h('div', { class: 'row', style: 'margin-top:8px' }, note, h('label', { style: 'flex-direction:row;align-items:center;gap:6px' }, notify, 'написать в бот'), giftBtn),
+      msg,
+      c.gifts.length ? h('table', {}, c.gifts.map((x) => h('tr', {},
+        h('td', { class: 'sub' }, fmtDate(x.created_at)), h('td', {}, x.reason),
+        h('td', {}, [x.coins && `${x.coins} мон.`, x.boxes && `${x.boxes} кор.`, x.skin].filter(Boolean).join(' · ')), h('td', { class: 'sub' }, x.ref ?? '')))) : null),
+    h('div', { class: 'card' }, h('h3', {}, 'Платежи звёздами'),
+      c.payments.length ? h('table', {}, c.payments.map((x) => h('tr', {},
+        h('td', { class: 'sub' }, fmtDate(x.created_at)), h('td', {}, `${x.amount} ⭐`), h('td', {}, x.purpose), h('td', {}, x.ref ?? ''),
+        h('td', {}, x.refunded_at ? h('span', { class: 'tag red' }, 'возврат') : '')))) : h('p', { class: 'muted' }, 'нет')),
+    h('div', { class: 'card' }, h('h3', {}, 'Бои по сети'),
+      c.duels.length ? h('table', {}, c.duels.map((d) => h('tr', {},
+        h('td', { class: 'sub' }, fmtDate(d.at)), h('td', {}, d.opponent?.name ?? ''),
+        h('td', {}, d.won === true ? h('span', { class: 'tag green' }, 'победа') : d.won === false ? h('span', { class: 'tag red' }, 'поражение') : 'спор'),
+        h('td', { class: 'sub' }, d.delta != null ? String(d.delta) : '')))) : h('p', { class: 'muted' }, 'нет')),
+    h('div', { class: 'card' }, h('h3', {}, 'Последние события'),
+      c.events.length ? h('table', {}, c.events.map((x) => h('tr', {},
+        h('td', { class: 'sub', style: 'width:110px' }, fmtDate(x.created_at)), h('td', {}, x.name), h('td', { class: 'sub' }, x.props ?? '')))) : h('p', { class: 'muted' }, 'нет')),
+  );
+}
+
+// ------------------------------------------------------------- турниры
+
+async function tours() {
+  const box = h('div', { class: 'card' }, h('p', { class: 'muted' }, 'загружаю…'));
+  const msg = h('div', { class: 'msg' });
+  const name = h('input', { placeholder: 'название (можно пусто)', style: 'flex:1;min-width:180px' });
+  const size = h('select', {}, [4, 8, 16].map((n) => h('option', { value: n, selected: n === 8 }, `${n} мест`)));
+  const fee = h('input', { type: 'number', min: 0, value: 0, style: 'width:90px' });
+  const at = h('input', { type: 'datetime-local' });
+  const create = async () => {
+    try {
+      await call('POST', 'admin/tours', { name: name.value, size: Number(size.value), fee: Number(fee.value), startsAt: at.value ? new Date(at.value).getTime() : null });
+      msg.className = 'msg ok'; msg.textContent = 'Турнир создан'; load();
+    } catch (e) { msg.className = 'msg err'; msg.textContent = e.message; }
+  };
+  const act = async (path, id, ask) => {
+    if (ask && !confirm(ask)) return;
+    try { await call('POST', path, { id }); load(); } catch (e) { msg.className = 'msg err'; msg.textContent = e.message; }
+  };
+  const STATUS = { open: ['запись', 'green'], running: ['идёт', 'gold'], done: ['завершён', ''], cancelled: ['отменён', 'red'] };
+  const load = async () => {
+    try {
+      const r = await call('GET', 'admin/tours');
+      clear(box).append(r.items.length ? h('table', {},
+        h('tr', {}, h('th', {}, 'Турнир'), h('th', {}, 'Статус'), h('th', {}, 'Игроки'), h('th', {}, 'Старт'), h('th', {})),
+        r.items.map((t) => h('tr', {},
+          h('td', {}, t.name, h('div', { class: 'sub' }, `#${t.id}${t.fee ? ` · взнос ${t.fee} ⭐` : ''}`)),
+          h('td', {}, h('span', { class: `tag ${STATUS[t.status]?.[1] ?? ''}` }, STATUS[t.status]?.[0] ?? t.status)),
+          h('td', {}, `${t.count} / ${t.size}`),
+          h('td', { class: 'sub' }, t.startsAt ? fmtDate(t.startsAt) : 'вручную'),
+          h('td', { class: 'row' },
+            t.status === 'open' ? h('button', { class: 'btn', onclick: () => act('admin/tours/start', t.id) }, 'Начать') : null,
+            ['open', 'running'].includes(t.status) ? h('button', { class: 'btn danger', onclick: () => act('admin/tours/cancel', t.id, `Отменить «${t.name}»? Взносы вернутся.`) }, 'Отменить') : null))))
+        : h('p', { class: 'muted' }, 'турниров нет'));
+    } catch (e) { clear(box).append(h('div', { class: 'msg err' }, e.message)); }
+  };
+  clear(app).append(
+    h('div', { class: 'card' }, h('h3', {}, 'Новый турнир'),
+      h('div', { class: 'row' }, name, h('label', {}, 'мест', size), h('label', {}, 'взнос, ⭐', fee), h('label', {}, 'старт (пусто — вручную)', at),
+        h('button', { class: 'btn primary', onclick: create, style: 'align-self:flex-end' }, 'Создать')), msg),
+    h('section', {}, box));
+  load();
+}
+
+// ------------------------------------------------------------ рассылка
+
+let pollTimer = null;
+async function broadcast() {
+  clearTimeout(pollTimer);
+  const text = h('textarea', { placeholder: 'Текст сообщения от бота. Например: «Вечером турнир на 8 мест — заходи в 20:00!»', maxlength: 3500 });
+  const msg = h('div', { class: 'msg' });
+  const list = h('div', { class: 'card' });
+  const send = h('button', { class: 'btn primary', disabled: true }, 'Отправить');
+  let audience = 0;
+  const preview = h('button', { class: 'btn', onclick: async () => {
+    if (!text.value.trim()) { msg.className = 'msg err'; msg.textContent = 'напиши текст'; return; }
+    const r = await call('POST', 'admin/broadcast', { text: text.value });
+    audience = r.audience;
+    send.disabled = !audience;
+    send.textContent = `Отправить ${audience} игрокам`;
+    msg.className = 'msg'; msg.textContent = audience ? 'Проверь текст и жми «Отправить».' : 'Некому отправлять.';
+  } }, 'Сколько получат?');
+  send.addEventListener('click', async () => {
+    if (!confirm(`Отправить сообщение ${audience} игрокам? Отменить будет нельзя.`)) return;
+    send.disabled = true;
+    try {
+      const r = await call('POST', 'admin/broadcast', { text: text.value, confirm: true });
+      msg.className = 'msg ok'; msg.textContent = `Рассылка #${r.id} пошла: ${r.total} получателей`;
+      text.value = ''; load();
+    } catch (e) { msg.className = 'msg err'; msg.textContent = e.message; send.disabled = false; }
+  });
+  const load = async () => {
+    try {
+      const r = await call('GET', 'admin/broadcast');
+      clear(list).append(h('h3', {}, `Прошлые рассылки · получат сейчас: ${r.audience}`),
+        r.items.length ? h('table', {}, r.items.map((b) => h('tr', {},
+          h('td', { class: 'sub', style: 'width:110px' }, fmtDate(b.created_at)),
+          h('td', {}, b.text.length > 120 ? `${b.text.slice(0, 120)}…` : b.text),
+          h('td', { style: 'width:170px' }, `${b.sent + b.failed} / ${b.total}`, h('div', { class: 'sub' },
+            b.done_at ? `доставлено ${b.sent}, не дошло ${b.failed}` : 'идёт…'))))) : h('p', { class: 'muted' }, 'пока не было'));
+      if (r.items.some((b) => !b.done_at) && current === 'broadcast') pollTimer = setTimeout(load, 3000);
+    } catch (e) { clear(list).append(h('div', { class: 'msg err' }, e.message)); }
+  };
+  clear(app).append(
+    h('div', { class: 'card' }, h('h3', {}, 'Сообщение всем игрокам'),
+      h('p', { class: 'sub' }, 'Получат все, у кого есть Telegram, кто не в бане и не отписался командой /mute.'),
+      text, h('div', { class: 'row', style: 'margin-top:10px' }, preview, send), msg),
+    h('section', {}, list));
+  load();
+}
+
+// ---------------------------------------------------------------- база
+
+function dbTab() {
+  const msg = h('div', { class: 'msg' });
+  const btn = h('button', { class: 'btn primary', onclick: async () => {
+    btn.disabled = true; msg.className = 'msg'; msg.textContent = 'готовлю копию…';
+    try {
+      const res = await fetch(`${API}admin/backup`, { headers: { authorization: `Bearer ${token}` } });
+      if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || `ошибка ${res.status}`);
+      const name = /filename="([^"]+)"/.exec(res.headers.get('content-disposition') ?? '')?.[1] ?? 'smiles.db';
+      const url = URL.createObjectURL(await res.blob());
+      h('a', { href: url, download: name }).click();
+      setTimeout(() => URL.revokeObjectURL(url), 5000);
+      msg.className = 'msg ok'; msg.textContent = `Скачано: ${name}`;
+    } catch (e) { msg.className = 'msg err'; msg.textContent = e.message; }
+    btn.disabled = false;
+  } }, 'Скачать копию базы');
+  clear(app).append(h('div', { class: 'card' }, h('h2', {}, 'База'),
+    h('p', {}, 'SQLite на сервере, в томе worms_data. Каждый день сервер сам делает копию (cron из DEPLOY.md), а здесь можно скачать свежую прямо сейчас — целостный снимок, без остановки игры.'),
+    h('p', { class: 'sub' }, 'Открыть файл можно, например, программой DB Browser for SQLite. Внутри токены входа и платежи — храни копию у себя и никому не пересылай.'),
+    btn, msg));
+}
+
+boot();
+</script>
+</body>
+</html>
