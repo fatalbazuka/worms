@@ -19,7 +19,7 @@
 
 export const REMIND_HOUR = 19;
 const EVENTS_PER_DAY = 300;           // больше от одного игрока за сутки не пишем
-const MODES = new Set(['quick', 'campaign', 'online', 'fallback', 'hotseat']);
+const MODES = new Set(['quick', 'campaign', 'challenge', 'online', 'fallback', 'hotseat']);
 
 export function createAnalytics({ db, now = () => Date.now(), tz = 'Europe/Moscow' }) {
   const q = {
@@ -109,7 +109,10 @@ export function createAnalytics({ db, now = () => Date.now(), tz = 'Europe/Mosco
     const y = day(yesterday);
     const week = q.activeRange.get(shiftDay(today, -6), today).n;
     const back = y.fresh.filter((p) => q.seenOn.get(p.id, today)).length;
-    const names = { quick: 'свои правила', campaign: 'кампания', online: 'по сети', fallback: 'бот вместо соперника', hotseat: 'вдвоём' };
+    const names = {
+      quick: 'с ботом', campaign: 'кампания', challenge: 'испытания', online: 'по сети',
+      fallback: 'бот вместо соперника', hotseat: 'вдвоём',
+    };
     const modes = t.rows.length
       ? t.rows.map((r) => `${names[r.mode] ?? r.mode} ${r.n}`).join(' · ')
       : 'пока ни одного';

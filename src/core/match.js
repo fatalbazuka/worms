@@ -1,4 +1,5 @@
 import { MISSION_BY_ID } from '../campaign/missions.js';
+import { CHALLENGE_BY_ID } from '../campaign/challenges.js';
 import { isTowerRoom } from '../net/rooms.js';
 
 /**
@@ -84,6 +85,21 @@ export function campaignMatch(missionId) {
     shape: m.shape ?? 'island',
     teams: m.teams.map((t) => ({ ...t })),
     rules: { ...m.rules },
+  };
+}
+
+/** Испытание на башне: его зерно, вид башни, стороны и правила. */
+export function challengeMatch(id) {
+  const c = CHALLENGE_BY_ID[id];
+  if (!c) return towerMatch('rookie');
+  return {
+    mode: 'challenge',
+    challengeId: c.id,
+    seed: c.seed,
+    shape: 'tower',
+    variant: c.variant,
+    teams: c.teams.map((t) => ({ ...t })),
+    rules: { flood: { after: 8, step: 85 }, ...c.rules },
   };
 }
 

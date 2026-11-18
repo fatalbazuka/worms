@@ -11,7 +11,7 @@ export const EMOTES = [
   { id: 'cry', text: 'Ну за что…', pose: 'worm_cry' },
   { id: 'oops', text: 'Мимо!', pose: 'worm_dizzy' },
   { id: 'wow', text: 'Ого!', pose: 'worm_hurt' },
-  { id: 'gg', text: 'Хорошая игра', pose: 'worm_win' },
+  { id: 'gg', text: 'Хорошая игра!', pose: 'worm_win' },
 ];
 
 export const EMOTE_BY_ID = Object.fromEntries(EMOTES.map((e) => [e.id, e]));

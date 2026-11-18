@@ -3,8 +3,10 @@ import { CFG } from '../config.js';
 import { MISSIONS, loadProgress, isUnlocked } from '../campaign/missions.js';
 import { objectiveText } from '../campaign/objectives.js';
 import {
-  quickMatch, campaignMatch, onlineMatch, towerMatch, fallbackMatch, QUICK_OPTIONS,
+  quickMatch, campaignMatch, onlineMatch, towerMatch, fallbackMatch, challengeMatch, QUICK_OPTIONS,
 } from '../core/match.js';
+import { CHALLENGES, challengeOpen, totalStars, STAR_COINS } from '../campaign/challenges.js';
+import { challengeStars } from '../platform/challenges.js';
 import { SHAPES } from '../core/shapes.js';
 import { randomRoom, copyText } from '../net/transport.js';
 import { isCasualRoom, isTowerRoom } from '../net/rooms.js';
@@ -98,6 +100,11 @@ export default class MenuScene extends Phaser.Scene {
 
     // Вернулись из турнирного матча — сразу к сетке. Пришли по кнопке бота
     // (?tour=ID или ?tour=list) — к турнирам, один раз за запуск.
+    // Из испытания — обратно к их списку
+    if (this.registry.get('returnTo') === 'challenges') {
+      this.registry.set('returnTo', null);
+      this.time.delayedCall(30, () => this.showChallenges());
+    }
     const back = this.registry.get('returnTour');
     const params = new URLSearchParams(globalThis.location?.search ?? '');
     const fromLink = params.get('tour');
@@ -881,17 +888,72 @@ export default class MenuScene extends Phaser.Scene {
     this._clear();
     this._title('Режимы');
     const cx = this.W / 2;
-    const y0 = 186, step = 106;
-    const big = { w: Math.min(this.W - 64, 620), h: 92, titleSize: 28, hintSize: 18 };
+    const y0 = 186, step = this.portrait ? 106 : 92;
+    const big = { w: Math.min(this.W - 64, 620), h: this.portrait ? 92 : 80, titleSize: 28, hintSize: 18 };
+    const stars = totalStars(challengeStars());
     this._button('tower', cx, y0, 'Башня', 'высокая арена и трос · выбрать соперника',
       () => this.showTower(), { ...big, variant: 'primary' });
-    this._button('online', cx, y0 + step, 'Онлайн', 'бой с человеком на башне · рейтинг',
+    this._button('challenges', cx, y0 + step, 'Испытания', `задачи на три звезды · собрано ★ ${stars} из ${CHALLENGES.length * 3}`,
+      () => this.showChallenges(), big);
+    this._button('online', cx, y0 + step * 2, 'Онлайн', 'бой с человеком на башне · рейтинг',
       () => this.showOnline(), big);
-    this._button('campaign', cx, y0 + step * 2, 'Кампания', 'миссии с условиями · телефон горизонтально',
+    this._button('campaign', cx, y0 + step * 3, 'Кампания', 'миссии с условиями · телефон горизонтально',
       () => this.showCampaign(), big);
-    this._button('quick', cx, y0 + step * 3, 'Свои правила', 'обычная карта, бот или вдвоём · горизонтально',
+    this._button('quick', cx, y0 + step * 4, 'Свои правила', 'обычная карта, бот или вдвоём · горизонтально',
       () => this.showQuick(), big);
     this._back();
+  }
+
+  // ----------------------------------------------------------- испытания
+
+  /** Список испытаний: звёзды у каждого, закрытые — до звезды в предыдущем. */
+  showChallenges() {
+    this.section = this.showChallenges;
+    this._clear();
+    const best = challengeStars();
+    this._title('Испытания', `★ ${totalStars(best)} из ${CHALLENGES.length * 3} · за новую звезду +${STAR_COINS} монет`);
+    const W = this.W;
+    const roomy = this.portrait;
+    const cols = roomy ? 1 : 3;
+    const w = roomy ? Math.min(W - 64, 620) : Math.min(440, (W - 80) / 3);
+    const h = roomy ? 96 : 84, gap = roomy ? 12 : 12;
+    const x0 = W / 2 - ((cols - 1) * (w + 16)) / 2;
+    const y0 = 172 + h / 2;
+    CHALLENGES.forEach((c, i) => {
+      const open = challengeOpen(i, best);
+      const n = best[c.id] ?? 0;
+      const x = x0 + (i % cols) * (w + 16), y = y0 + Math.floor(i / cols) * (h + gap);
+      const next = open && n === 0;
+      this._button(`ch-${c.id}`, x, y, `${i + 1}. ${c.title}`,
+        open ? `${'★'.repeat(n)}${'☆'.repeat(3 - n)}` : 'откроется после звезды в предыдущем',
+        () => this.showChallengeBrief(c), {
+          w, h, enabled: open, variant: next ? 'primary' : 'normal',
+          titleSize: roomy ? 26 : 22, hintSize: open ? (roomy ? 26 : 22) : (roomy ? 16 : 14),
+        });
+    });
+    this._back(() => this.showModes());
+  }
+
+  showChallengeBrief(c) {
+    this.section = () => this.showChallengeBrief(c);
+    this._clear();
+    const n = challengeStars()[c.id] ?? 0;
+    this._title(c.title, `лучший результат: ${n ? '★'.repeat(n) + '☆'.repeat(3 - n) : 'ещё не пройдено'}`);
+    const W = this.W, cx = W / 2;
+    const w = Math.min(640, W - 56);
+    const lines = [
+      c.brief,
+      '',
+      '★ — победить',
+      `★★ — победить не дольше чем за ${c.stars.turns} своих ${c.stars.turns < 5 ? 'хода' : 'ходов'}`,
+      '★★★ — и не потерять ни одного очка здоровья',
+    ];
+    const t = this.add.text(cx, 176, lines.join('\n'), font(this.fs(16), 700))
+      .setOrigin(0.5, 0).setAlign('center').setWordWrapWidth(w - 40).setLineSpacing(6);
+    this.items.push(t);
+    this._button('start', cx, 176 + t.height + 90, 'В бой', '', () => this.start(challengeMatch(c.id)),
+      this.portrait ? { variant: 'primary', w: 360, h: 88, titleSize: 30 } : { variant: 'primary', w: 300, h: 66 });
+    this._back(() => this.showChallenges());
   }
 
   // --------------------------------------------------------------- башня

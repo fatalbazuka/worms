@@ -350,6 +350,61 @@ await gesture([['move', -60, 20], ['move', -140, 50], ['up', -140, 50]]);
 await page.waitForTimeout(200);
 check('спокойное натяжение — выстрел', await turnState() !== 'aim');
 
+// --- испытания: все собираются, звёзды и монеты за победу ---
+const challengeIds = await page.evaluate(async () => (await import('/src/campaign/challenges.js')).CHALLENGES.map((c) => c.id));
+const broken = [];
+for (const id of challengeIds) {
+  await page.evaluate(async (id) => {
+    const { challengeMatch } = await import('/src/core/match.js');
+    window.__WORMS__.scene.getScene('Game').registry.set('match', challengeMatch(id));
+    window.__WORMS__.scene.getScene('Game').registry.set('seed', challengeMatch(id).seed);
+    window.__WORMS__.scene.getScene('Game').scene.restart();
+  }, id);
+  await gameReady();
+  const ok = await page.evaluate(async () => {
+    const { CFG } = await import('/src/config.js');
+    const s = window.__WORMS__.scene.getScene('Game');
+    return s.shape.id === 'tower' && s.turn.currentTeam === 0
+      && s.worms.every((w) => w.grounded && w.y < CFG.DROWN_Y - 60);
+  });
+  if (!ok) broken.push(id);
+}
+check('все испытания собираются: башня, бойцы на этажах, первый ход за игроком', broken.length === 0, broken.join(','));
+
+await page.evaluate(async () => {
+  localStorage.removeItem('worms.challenges.v1');
+  const { challengeMatch } = await import('/src/core/match.js');
+  const g = window.__WORMS__.scene.getScene('Game');
+  g.registry.set('match', challengeMatch('first'));
+  g.registry.set('seed', challengeMatch('first').seed);
+  g.scene.restart();
+});
+await gameReady();
+const coins0 = await page.evaluate(() => JSON.parse(localStorage.getItem('worms.daily.v1') ?? '{}').coins ?? 0);
+await page.evaluate(() => {
+  const s = window.__WORMS__.scene.getScene('Game');
+  s.hud.setHelp(false);
+  const foe = s.worms.find((w) => w.team === 1);
+  s.explode(foe.x, foe.centerY, { radius: 30, damageRadius: 60, damage: 150, knockback: 50 });
+});
+await page.waitForFunction(() => window.__WORMS__.scene.getScene('Game').overButtons?.menu, null, { timeout: 30000 });
+const ch = await page.evaluate(() => ({
+  stars: JSON.parse(localStorage.getItem('worms.challenges.v1') ?? '{}').first,
+  coins: JSON.parse(localStorage.getItem('worms.daily.v1') ?? '{}').coins ?? 0,
+}));
+check('испытание за один ход без потерь — три звезды и монеты за них',
+  ch.stars === 3 && ch.coins - coins0 >= 120, `звёзд ${ch.stars}, монет +${ch.coins - coins0}`);
+
+// Голоса: фразы подгрузились после первого касания, итог боя сказан вслух
+const vo = await page.evaluate(async () => {
+  const { voice } = await import('./src/audio/Voice.js');
+  const { sfx } = await import('./src/audio/Sfx.js');
+  await voice.load();
+  return { n: voice.buffers.size, last: voice.last ?? null, ctx: sfx.state, muted: sfx.muted };
+});
+check('голоса смайликов загружены, победа сказана голосом',
+  vo.n === 10 && (vo.last === 'win' || vo.ctx !== 'running' || vo.muted), JSON.stringify(vo));
+
 check('нет ошибок в консоли', errors.length === 0, errors.slice(0, 5).join(' | '));
 
 await browser.close();

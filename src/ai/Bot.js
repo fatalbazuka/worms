@@ -34,6 +34,11 @@ import { simulateShot, muzzle } from './ballistics.js';
  */
 
 export const BOT_LEVELS = {
+  // Мишень для испытаний: стоит и пропускает ход
+  dummy: {
+    id: 'dummy', name: 'Мишень', passive: true,
+    angleErr: 0, powerErr: 0, coarse: 0, refine: 0, weapons: [], selfRisk: 0, moves: false,
+  },
   rookie: {
     id: 'rookie', name: 'Новичок',
     angleErr: 0.10, powerErr: 0.13, coarse: 7, refine: 0,
@@ -85,6 +90,7 @@ export class Bot {
 
       case 'think':
         if (this.timer < CFG.BOT_THINK) break;
+        if (this.level.passive) { this.phase = 'give-up'; this.timer = 0; break; }
         this.plan = this.decide(worm, { allowMove: this.level.moves });
         if (!this.plan) { this.phase = 'give-up'; this.timer = 0; break; }
         if (this.plan.hookTo) {

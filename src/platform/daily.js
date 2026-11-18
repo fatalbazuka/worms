@@ -73,6 +73,13 @@ export function claimDailyStreak() {
   return { coins: res.coins, box: res.box, streak: res.streak };
 }
 
+/** Начислить монеты (звёзды испытаний). */
+export function grantCoins(n) {
+  if (!(n > 0)) return;
+  const st = load();
+  save({ ...st, coins: st.coins + Math.floor(n) });
+}
+
 /**
  * Купить коробку за монеты.
  * @returns {'ok'|'poor'|'full'} куплено / не хватает / скины собраны все

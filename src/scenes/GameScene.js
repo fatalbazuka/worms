@@ -35,7 +35,11 @@ import { equippedSkin, syncCampaignBoxes } from '../platform/skins.js';
 import { recordBattle } from '../platform/daily.js';
 import { TASK_BY_ID } from '../core/daily.js';
 import { EMOTE_BY_ID, EMOTE_COOLDOWN } from '../core/emotes.js';
+import { CHALLENGE_BY_ID, starsFor } from '../campaign/challenges.js';
+import { saveChallenge } from '../platform/challenges.js';
+import { grantCoins } from '../platform/daily.js';
 import { CameraRig } from '../ui/CameraRig.js';
+import { voice } from '../audio/Voice.js';
 import { askText, closeOverlay } from '../ui/Overlay.js';
 import { isDesktop } from '../platform/device.js';
 
@@ -47,6 +51,7 @@ export default class GameScene extends Phaser.Scene {
     // и тогда игра ведёт себя как раньше: обычный хотсит на одном устройстве.
     this.match = this.registry.get('match') ?? HOTSEAT;
     this.overButtons = null;
+    this.myTurns = 0;            // своих ходов — для звёзд испытаний
     // Счётчики боя для ежедневных заданий: только за свою команду
     this.battleStats = { hits: 0, damage: 0, kills: 0, hooks: 0, crates: 0, grenadeHits: 0 };
     this.rules = this.match.rules ?? {};
@@ -228,7 +233,8 @@ export default class GameScene extends Phaser.Scene {
     w.mood = e.pose;
     this.time.delayedCall(1600, () => { if (w.mood === e.pose) w.mood = null; });
     w.squash = -0.8;
-    this.fx.sound('select');
+    // Эмоция говорит голосом; если голос занят или не загрузился — щелчок
+    if (!voice.say(id, { team })) this.fx.sound('select');
 
     const t = this.add.text(w.x, w.y - CFG.WORM_H - 64, e.text, font(20, 800, '#1a1408'))
       .setOrigin(0.5, 1).setPadding(12, 6, 12, 6).setBackgroundColor('#ffffff')
@@ -394,6 +400,7 @@ export default class GameScene extends Phaser.Scene {
   /** Начало хода: боту нужен чистый план, чужой ему не годится. */
   onTurnBegin() {
     for (const b of this.bots ?? []) b?.reset();
+    if (this.turn.currentTeam === this.myTeamIndex) this.myTurns++;
     // Тот, чей ход, подпрыгивает на месте: глаз сразу находит своего
     const active = this.turn.activeWorm;
     if (active) active.squash = -0.9;
@@ -411,6 +418,10 @@ export default class GameScene extends Phaser.Scene {
     };
     this.match.teams.forEach((t, team) => {
       set(team, t.control === 'bot' ? this.rules.enemyAmmo : this.rules.ammo);
+      // rules.only: у игрока остаётся только это оружие (испытание «Только граната»)
+      if (t.control !== 'bot' && Array.isArray(this.rules.only)) {
+        WEAPONS.forEach((w, i) => { if (!this.rules.only.includes(w.id)) this.turn.ammo[team][i] = 0; });
+      }
     });
   }
 
@@ -1288,6 +1299,9 @@ export default class GameScene extends Phaser.Scene {
       this.net?.sendShot(cmd);
     }
     this.fx.sound('shot');
+    // Иногда стрелок подаёт голос — каждый раз приелось бы за пять ходов.
+    // Только украшение: случайность здесь на ход боя не влияет.
+    if (Math.random() < 0.3) voice.say('shot', { team: w.team });
     if (!this.replaying && !this.isBotTurn()) {
       haptic('shot');
       if (this.sling) {
@@ -1338,6 +1352,7 @@ export default class GameScene extends Phaser.Scene {
     }
 
     let felt = 0;
+    let ouch = null, ouchDmg = 0;
     for (const w of this.worms) {
       if (!w.alive) continue;
       const wx = w.x, wy = w.centerY;
@@ -1354,7 +1369,10 @@ export default class GameScene extends Phaser.Scene {
       w.damage(dmg, 'взрыв');
       if (dmg > 0) felt = Math.max(felt, this.isLocalTeam(w.team) ? 2 : 1);
       if (dmg > 0) this._countHit(w, dmg);
+      if (dmg > ouchDmg) { ouch = w; ouchDmg = dmg; }
     }
+    // Сильно досталось — боец вскрикивает. Царапины молча, иначе «ой» на каждый чих
+    if (ouch && ouchDmg >= 25 && !this.gameOverUi) voice.say('hurt', { team: ouch.team });
     // Отдача в руку: задели своего — сильно, чужого — коротко
     if (felt === 2) haptic('hurt');
     else if (felt === 1) haptic('hit');
@@ -1475,6 +1493,9 @@ export default class GameScene extends Phaser.Scene {
     // Партия доиграна: запись сессии больше не нужна
     this.net?.forget();
     this.fx.sound(winner === mine ? 'victory' : 'defeat');
+    // Итог — голосом, поверх всего: в хотсите кричит победитель, иначе — ты
+    if (winner >= 0 && !solo) voice.say('win', { team: winner, force: true });
+    else if (winner >= 0) voice.say(winner === mine ? 'win' : 'lose', { team: mine, force: true });
     if (winner >= 0 && (winner === mine || !solo)) this.fx.confetti();
     haptic(winner === mine ? 'win' : 'lose');
     // Первая доигранная партия — момент предложить иконку на экран Домой.
@@ -1544,10 +1565,13 @@ export default class GameScene extends Phaser.Scene {
 
     this.gameOverUi = [shade, title, sub];
 
+    // Испытание: звёзды и монеты за новые звёзды — строкой над заголовком
+    if (this.match.mode === 'challenge') this._challengeResult(winner >= 0 && winner === mine);
+
     // Бой — в статистику: режим, итог, сколько ходов
     track('battle', {
       mode: this.match.fallback ? 'fallback' : this.net?.connected ? 'online'
-        : this.match.mode === 'campaign' ? 'campaign' : solo ? 'quick' : 'hotseat',
+        : ['campaign', 'challenge'].includes(this.match.mode) ? this.match.mode : solo ? 'quick' : 'hotseat',
       won: winner >= 0 && winner === mine, turns: this.turn.turnNumber,
     });
 
@@ -1595,6 +1619,35 @@ export default class GameScene extends Phaser.Scene {
     });
   }
 
+  /** Звёзды испытания на экране итога. */
+  _challengeResult(won) {
+    const c = CHALLENGE_BY_ID[this.match.challengeId];
+    if (!c) return;
+    const mine = this.worms.filter((w) => w.team === this.myTeamIndex);
+    const hpLost = mine.reduce((a, w) => a + (CFG.MAX_HEALTH - (w.alive ? w.health : 0)), 0);
+    const stars = starsFor(c, { won, myTurns: this.myTurns, hpLost });
+    const res = saveChallenge(c.id, stars);
+    if (res.coins) grantCoins(res.coins);
+    // Выше строки монет за бой (она на -96), чтобы не наезжали
+    const y = CFG.VIEW_H / 2 - 210;
+    for (let i = 0; i < 3; i++) {
+      const on = i < stars;
+      const t = this.rig.ui(this.add.text(CFG.VIEW_W / 2 + (i - 1) * 74, y, '★',
+        font(64, 800, on ? '#ffd23f' : '#3a4052')).setOrigin(0.5).setScrollFactor(0)
+        .setDepth(DEPTH.HUD + 11).setStroke('#10131a', 6).setScale(on ? 0.2 : 1));
+      if (on) this.tweens.add({ targets: t, scale: 1, duration: 320, delay: 300 + i * 260, ease: 'Back.easeOut' });
+      this.gameOverUi?.push(t);
+    }
+    const hint = won
+      ? (stars < 3 ? (stars < 2 ? `★★ — победи за ${c.stars.turns} ${c.stars.turns < 5 ? 'хода' : 'ходов'}` : '★★★ — ещё и без потерь здоровья') : 'идеально!')
+      : 'попробуй ещё раз';
+    const line = res.coins ? `${hint} · +${res.coins} монет за новые звёзды` : hint;
+    const t = this.rig.ui(this.add.text(CFG.VIEW_W / 2, y + 52, line, font(19, 800, '#ffe27a'))
+      .setOrigin(0.5).setScrollFactor(0).setDepth(DEPTH.HUD + 11).setStroke('#10131a', 5)
+      .setWordWrapWidth(CFG.VIEW_W - 40).setAlign('center'));
+    this.gameOverUi?.push(t);
+  }
+
   /** Кнопка на затемнении итога. */
   _overButton(dx, label, onTap, key = null) {
     const w = 250, h = 76;
@@ -1627,6 +1680,8 @@ export default class GameScene extends Phaser.Scene {
     this.registry.set('net', null);
     this.registry.set('seed', null);
     forgetStartRoom();
+    // Из испытания — обратно к списку испытаний
+    if (this.match.mode === 'challenge') this.registry.set('returnTo', 'challenges');
     if (new URLSearchParams(location.search).has('room')) {
       const url = new URL(location.href);
       url.searchParams.delete('room');

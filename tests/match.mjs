@@ -240,6 +240,24 @@ check('один в лобби никого не находит', findMatch(p('a'
   check('задания вчерашней копии не мешают сегодняшним', D.mergeDaily(a1, old).tasks[0].progress === 0);
 }
 
+// --- испытания: звёзды ---
+{
+  const C = await import('../src/campaign/challenges.js');
+  const c = C.CHALLENGE_BY_ID.first;
+  check('звёзды: поражение 0, долго 1, быстро с потерями 2, быстро без потерь 3',
+    C.starsFor(c, { won: false, myTurns: 1, hpLost: 0 }) === 0
+      && C.starsFor(c, { won: true, myTurns: c.stars.turns + 1, hpLost: 0 }) === 1
+      && C.starsFor(c, { won: true, myTurns: 1, hpLost: 10 }) === 2
+      && C.starsFor(c, { won: true, myTurns: 1, hpLost: 0 }) === 3);
+  let r = C.recordStars({}, 'first', 2);
+  const r2 = C.recordStars(r.best, 'first', 3);
+  const r3 = C.recordStars(r2.best, 'first', 1);
+  check('монеты только за новые звёзды', r.coins === 2 * C.STAR_COINS && r2.coins === C.STAR_COINS
+    && r3.coins === 0 && r3.best.first === 3);
+  check('следующее испытание открывается после звезды в предыдущем',
+    C.challengeOpen(0, {}) && !C.challengeOpen(1, {}) && C.challengeOpen(1, { first: 1 }));
+}
+
 console.log(failures.length
   ? `\nне прошло: ${failures.length}`
   : '\nпроверки подбора пройдены');
