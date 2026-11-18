@@ -319,7 +319,7 @@ export function shareMessage(id) {
 export function shareRoom(room, link = inviteLink(room)) {
   const tg = tgApi();
   if (!tg?.openTelegramLink) return false;
-  const text = `Го в Worms! Комната ${room}`;
+  const text = `Го в Smiles! Комната ${room}`;
   try {
     const url = `https://t.me/share/url?url=${encodeURIComponent(link)}`
       + `&text=${encodeURIComponent(text)}`;
