@@ -2,6 +2,7 @@
  * Игроки: заводятся из Telegram (вход в мини-приложение или /start в
  * боте), id — tg<id>. Здесь же вид игрока наружу и статистика кабинета.
  */
+import { randomBytes } from 'node:crypto';
 import { START_RATING } from './lib/elo.js';
 import { displayName } from './lib/telegram.js';
 
@@ -15,6 +16,9 @@ export function createPlayers({ db, now = () => Date.now(), adminIds = new Set()
     markApp: db.prepare('update player set app_at = ? where id = ? and app_at is null'),
     byLogin: db.prepare('select * from player where name_key = ?'),
     setLogin: db.prepare('update player set name_key = ?, pass_hash = ? where id = ?'),
+    // Аккаунт только для сайта, без Telegram: id u<hex>, вход логином и паролем
+    insertWeb: db.prepare(`insert into player (id, name, name_key, pass_hash, tg_id, rating, created_at, seen_at, app_at)
+                           values (?, ?, ?, ?, null, ?, ?, ?, ?)`),
     insert: db.prepare(`insert into player (id, name, name_key, pass_hash, tg_id, rating, photo, created_at, seen_at)
                         values (?, ?, null, null, ?, ?, ?, ?, ?)`),
     update: db.prepare('update player set name = ?, photo = coalesce(?, photo), seen_at = ? where id = ?'),
@@ -93,6 +97,12 @@ export function createPlayers({ db, now = () => Date.now(), adminIds = new Set()
     byId: (id) => q.byId.get(id),
     byTg: (tgId) => q.byTg.get(Number(tgId)),
     upsertTg, markApp, byLogin, setLogin, view, isAdmin, duelHistory,
+    createWeb: (login, name, passHash) => {
+      const id = `u${randomBytes(6).toString('hex')}`;
+      const t = now();
+      q.insertWeb.run(id, name, String(login).toLowerCase(), passHash, START_RATING, t, t, t);
+      return q.byId.get(id);
+    },
     search: (text, limit = 50) => {
       const t = String(text ?? '').trim().slice(0, 60);
       return q.search.all(t, `%${t}%`, t, t, Math.max(1, Math.min(200, limit))).map((r) => ({ ...r }));

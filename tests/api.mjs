@@ -473,6 +473,26 @@ check('«твой ход» бот не пишет', !calls('sendMessage').some((
   check('админка: рассылка — превью ничего не шлёт, отправка доходит до всех',
     prev.data.preview && prev.data.audience > 0 && noSend && go.status === 200 && delivered === go.data.total
       && status.items[0].sent === go.data.total, `превью ${prev.data.audience}, ушло ${delivered} из ${go.data.total}`);
+  // Аккаунт только для сайта: из админки со своим паролем и из бота с придуманным
+  const acc = await call('POST', '/api/admin/accounts', { login: 'EXS', name: 'Экс', password: 'exs123' }, T);
+  const dup = await call('POST', '/api/admin/accounts', { login: 'exs', password: 'other1' }, T);
+  const short = await call('POST', '/api/admin/accounts', { login: 'exs2', password: '123' }, T);
+  const web = await call('POST', '/api/login', { login: 'exs', password: 'exs123' });
+  const webMe = await call('GET', '/api/me', null, web.data.token);
+  check('аккаунт для сайта: создаётся со своим паролем, вход работает, без Telegram; занятый логин и короткий пароль — отказ',
+    acc.status === 200 && acc.data.password === null && web.status === 200 && /^u[0-9a-f]+$/.test(webMe.data.player.id)
+      && webMe.data.player.name === 'Экс' && dup.status === 409 && short.status === 409,
+    JSON.stringify({ acc: acc.data, me: webMe.data?.player?.id, dup: dup.status, short: short.status }));
+  await hook({ message: { from: { id: ADMIN }, chat: { id: ADMIN, type: 'private' }, text: '/newweb vasya Вася' } });
+  const nw = calls('sendMessage').at(-1)?.params.text ?? '';
+  const nwPass = /пароль: (\S+)/.exec(nw)?.[1];
+  const nwLogin = await call('POST', '/api/login', { login: 'vasya', password: nwPass });
+  const reset = await call('POST', '/api/admin/password', { id: webMe.data.player.id }, T);
+  const oldPass = await call('POST', '/api/login', { login: 'exs', password: 'exs123' });
+  const newPass = await call('POST', '/api/login', { login: 'exs', password: reset.data.password });
+  check('/newweb в боте придумывает пароль; «новый пароль» в админке — старый больше не подходит',
+    /логин: vasya/.test(nw) && nwLogin.status === 200 && reset.status === 200 && oldPass.status === 401 && newPass.status === 200,
+    `${nwLogin.status} ${oldPass.status} ${newPass.status}`);
   // Копия базы — файл SQLite
   const res = await fetch(`${base}/api/admin/backup`, { headers: { authorization: `Bearer ${T}` } });
   const buf = Buffer.from(await res.arrayBuffer());

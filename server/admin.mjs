@@ -12,6 +12,7 @@
  * турниры, рассылка от бота (с превью и подтверждением) и копия базы.
  */
 import { randomBytes } from 'node:crypto';
+import { hashPassword, newPassword } from './lib/accounts.js';
 import { mkdtempSync, rmSync, statSync, createReadStream } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -130,6 +131,47 @@ export function createAdmin({ db, players, analytics, tournaments, shop, saves, 
     return r;
   }
 
+  // ------------------------------------------------- аккаунты для сайта
+
+  const LOGIN_RE = /^[a-z0-9_.-]{3,24}$/;
+
+  /** Пароль: свой (6–64 знака) или придуманный. */
+  function pickPassword(password) {
+    const p = String(password ?? '');
+    if (!p) return { password: newPassword(), generated: true };
+    if (p.length < 6 || p.length > 64) return { error: 'пароль — от 6 до 64 знаков' };
+    return { password: p, generated: false };
+  }
+
+  /**
+   * Отдельный аккаунт только для сайта — для тех, у кого нет Telegram.
+   * Вход на сайте логином и паролем, прогресс хранится на сервере.
+   */
+  function createAccount({ login, name, password } = {}) {
+    const l = String(login ?? '').trim().toLowerCase();
+    if (!LOGIN_RE.test(l)) return { ok: false, error: 'логин: 3–24 знака — латиница, цифры, _ . -' };
+    if (players.byLogin(l)) return { ok: false, error: `логин «${l}» уже занят` };
+    const nick = String(name ?? '').trim().slice(0, 24) || l;
+    const pw = pickPassword(password);
+    if (pw.error) return { ok: false, error: pw.error };
+    const p = players.createWeb(l, nick, hashPassword(pw.password));
+    return { ok: true, id: p.id, login: l, name: p.name, password: pw.generated ? pw.password : null };
+  }
+
+  /** Новый пароль (и при желании логин) уже существующему игроку. */
+  function setPassword(id, { login, password } = {}) {
+    const p = players.byId(String(id ?? ''));
+    if (!p) return { ok: false, error: 'нет такого игрока' };
+    const l = String(login ?? p.name_key ?? '').trim().toLowerCase();
+    if (!LOGIN_RE.test(l)) return { ok: false, error: 'логин: 3–24 знака — латиница, цифры, _ . -' };
+    const taken = players.byLogin(l);
+    if (taken && taken.id !== p.id) return { ok: false, error: `логин «${l}» уже занят` };
+    const pw = pickPassword(password);
+    if (pw.error) return { ok: false, error: pw.error };
+    players.setLogin(p.id, l, hashPassword(pw.password));
+    return { ok: true, login: l, password: pw.generated ? pw.password : null };
+  }
+
   // ----------------------------------------------------------- рассылка
 
   /** Сколько человек получит рассылку: с Telegram, не в бане, не отписались. */
@@ -172,7 +214,7 @@ export function createAdmin({ db, players, analytics, tournaments, shop, saves, 
   }
 
   return {
-    newKey, useKey, overview, search, card, setBan, gift, audience, broadcast,
+    newKey, useKey, overview, search, card, setBan, gift, audience, broadcast, createAccount, setPassword,
     broadcasts: () => q.bcList.all().map((r) => ({ ...r })),
     broadcastStatus: (id) => q.bc.get(Number(id)) ?? null,
     tours: () => tournaments.list(null),

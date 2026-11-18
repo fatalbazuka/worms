@@ -213,6 +213,7 @@ export function createBot({ db, api, players, tournaments, analytics = null, adm
     '/stars — сколько звёзд пришло',
     '/metrics — игроки, новички, бои, возврат на второй день',
     '/web TG_ID логин — выдать вход на сайт (пароль придумаю сам; повтор — новый пароль)',
+    '/newweb логин [имя] — отдельный аккаунт только для сайта, без Telegram',
   ].join('\n');
 
   async function onCommand(msg) {
@@ -299,6 +300,14 @@ export function createBot({ db, api, players, tournaments, analytics = null, adm
       }
       case '/metrics':
         return send(chat, analytics ? analytics.report() : 'Статистика не подключена.');
+      case '/newweb': {
+        // Аккаунт для человека без Telegram: логин и придуманный пароль
+        if (!adminPanel) return send(chat, 'Админка не подключена.');
+        const r = adminPanel.createAccount({ login: args[0], name: args.slice(1).join(' ') });
+        if (!r.ok) return send(chat, r.error);
+        const site = publicUrl ? `\nСайт: ${publicUrl}` : '';
+        return send(chat, `Аккаунт для сайта «${r.name}»:\nлогин: ${r.login}\nпароль: ${r.password}${site}`);
+      }
       case '/web': {
         // Вход на сайт: логин и пароль к уже существующему игроку из Telegram
         const who = players.byId(`tg${Number(args[0])}`);
