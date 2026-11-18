@@ -3,7 +3,7 @@ import { CFG } from '../config.js';
 import { MISSIONS, loadProgress, isUnlocked } from '../campaign/missions.js';
 import { objectiveText } from '../campaign/objectives.js';
 import {
-  quickMatch, campaignMatch, onlineMatch, towerMatch, fallbackMatch, challengeMatch, ascentMatch, QUICK_OPTIONS,
+  quickMatch, campaignMatch, onlineMatch, towerMatch, fallbackMatch, challengeMatch, ascentMatch, dailyMatch, QUICK_OPTIONS,
 } from '../core/match.js';
 import { CHALLENGES, challengeOpen, totalStars, STAR_COINS } from '../campaign/challenges.js';
 import { ASCENT, CHAPTERS, ascentOpen } from '../campaign/ascent.js';
@@ -17,7 +17,7 @@ import { Lobby } from '../net/lobby.js';
 import { pendingSession, forgetSession } from '../net/session.js';
 import {
   syncMe, fetchTop, myRank, loggedIn, onAccountChange, track, fetchShop, buyShopItem,
-  trackStep, prepareChallenge,
+  trackStep, prepareChallenge, fetchDailyTower,
 } from '../net/server.js';
 import { openAccountDialog } from '../ui/AccountDialog.js';
 import { openTournaments } from '../ui/Tournaments.js';
@@ -108,6 +108,10 @@ export default class MenuScene extends Phaser.Scene {
     if (this.registry.get('returnTo') === 'challenges') {
       this.registry.set('returnTo', null);
       this.time.delayedCall(30, () => this.showChallenges());
+    }
+    if (this.registry.get('returnTo') === 'daily') {
+      this.registry.set('returnTo', null);
+      this.time.delayedCall(30, () => this.showDailyTower());
     }
     if (this.registry.get('returnTo') === 'ascent') {
       this.registry.set('returnTo', null);
@@ -932,23 +936,75 @@ export default class MenuScene extends Phaser.Scene {
     this._clear();
     this._title('Режимы');
     const cx = this.W / 2;
-    const y0 = 176, step = this.portrait ? 104 : 84;
-    const big = { w: Math.min(this.W - 64, 620), h: this.portrait ? 92 : 74, titleSize: 28, hintSize: 18 };
     const stars = totalStars(challengeStars());
     const done = ascentDone().size;
-    this._button('ascent', cx, y0, 'Кампания «Подъём»', `15 боёв на башне, монстры и Великан · пройдено ${done} из ${ASCENT.length}`,
-      () => this.showAscent(), { ...big, variant: 'primary' });
-    this._button('tower', cx, y0 + step, 'Башня', 'высокая арена и трос · выбрать соперника',
-      () => this.showTower(), big);
-    this._button('challenges', cx, y0 + step * 2, 'Испытания', `задачи на три звезды · собрано ★ ${stars} из ${CHALLENGES.length * 3}`,
-      () => this.showChallenges(), big);
-    this._button('online', cx, y0 + step * 3, 'Онлайн', 'бой с человеком на башне · рейтинг',
-      () => this.showOnline(), big);
-    this._button('campaign', cx, y0 + step * 4, 'Классика', 'старые миссии на широких картах · горизонтально',
-      () => this.showCampaign(), big);
-    this._button('quick', cx, y0 + step * 5, 'Свои правила', 'обычная карта, бот или вдвоём · горизонтально',
-      () => this.showQuick(), big);
+    const modes = [
+      ['ascent', 'Кампания «Подъём»', `15 боёв, монстры и Великан · пройдено ${done} из ${ASCENT.length}`, () => this.showAscent()],
+      ['daily', 'Башня дня', 'одна башня на всех · таблица дня', () => this.showDailyTower()],
+      ['tower', 'Башня', 'высокая арена и трос · выбрать соперника', () => this.showTower()],
+      ['challenges', 'Испытания', `задачи на три звезды · ★ ${stars} из ${CHALLENGES.length * 3}`, () => this.showChallenges()],
+      ['online', 'Онлайн', 'бой с человеком на башне · рейтинг', () => this.showOnline()],
+      ['campaign', 'Классика', 'старые миссии на широких картах', () => this.showCampaign()],
+      ['quick', 'Свои правила', 'обычная карта, бот или вдвоём', () => this.showQuick()],
+    ];
+    // В портрете — столбиком, в ландшафте — в две колонки: семь не влезают
+    const cols = this.portrait ? 1 : 2;
+    const w = this.portrait ? Math.min(this.W - 64, 620) : Math.min(420, (this.W - 96) / 2);
+    const h = this.portrait ? 92 : 72, step = this.portrait ? 104 : 84;
+    const y0 = 176;
+    modes.forEach(([key, title, hint, go], i) => {
+      const x = cols === 1 ? cx : cx + ((i % 2) ? 1 : -1) * (w / 2 + 12);
+      const y = y0 + Math.floor(i / cols) * step;
+      this._button(key, x, y, title, hint, go,
+        { w, h, titleSize: 28, hintSize: 17, variant: i < 2 ? 'primary' : 'normal' });
+    });
     this._back();
+  }
+
+  // ------------------------------------------------------------- башня дня
+
+  /** Башня дня: таблица дня, моё место, «В бой». Без сервера — просто бой. */
+  async showDailyTower() {
+    this.section = this.showDailyTower;
+    this._clear();
+    this._title('Башня дня', 'одна башня на всех · меньше ходов — выше место');
+    const cx = this.W / 2;
+    const wait = this.add.text(cx, 190, 'загружаю таблицу…', font(this.fs(14), 700, UI.textDim)).setOrigin(0.5, 0);
+    this.items.push(wait);
+    const local = (() => {
+      const d = new Date();
+      return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+    })();
+    const res = await fetchDailyTower();
+    if (this.section !== this.showDailyTower) return;
+    wait.destroy();
+    const day = res?.day ?? local;
+    const w = Math.min(560, this.W - 48);
+    let y = 186;
+    if (res) {
+      const head = res.players ? `сегодня сыграли: ${res.players}` : 'сегодня ещё никто не играл — будь первым';
+      this.items.push(this.add.text(cx, y, head, font(this.fs(14), 700, UI.textDim)).setOrigin(0.5, 0));
+      y += 40;
+      res.top.slice(0, this.portrait ? 10 : 5).forEach((r, i) => {
+        const what = r.won ? `${r.turns} ${r.turns < 5 ? 'хода' : 'ходов'} · ${r.hp} hp` : 'не взял';
+        this.items.push(this.add.text(cx - w / 2, y, `${i + 1}. ${r.name}`, font(this.fs(15), 800, i < 3 ? UI.accent : UI.text)).setOrigin(0, 0));
+        this.items.push(this.add.text(cx + w / 2, y, what, font(this.fs(15), 700, UI.textDim)).setOrigin(1, 0));
+        y += this.portrait ? 40 : 30;
+      });
+      if (res.me) {
+        const me = res.me.won ? `${res.me.turns} ходов · ${res.me.hp} hp` : 'пока не взята';
+        this.items.push(this.add.text(cx, y + 8, `ты: место ${res.me.place} · ${me} · попыток ${res.me.tries}`,
+          font(this.fs(15), 800, '#8ef0a0')).setOrigin(0.5, 0));
+        y += 40;
+      }
+    } else {
+      this.items.push(this.add.text(cx, y, 'таблица дня — в Telegram', font(this.fs(14), 700, UI.textDim)).setOrigin(0.5, 0));
+      y += 40;
+    }
+    this._button('daily-go', cx, Math.max(y + 70, this.portrait ? 640 : 0), 'В бой', 'первая победа дня — +60 монет',
+      () => this.start(dailyMatch(day)),
+      this.portrait ? { variant: 'primary', w: 360, h: 96, titleSize: 30 } : { variant: 'primary', w: 320, h: 74 });
+    this._back(() => this.showModes());
   }
 
   // ------------------------------------------------------ кампания «Подъём»

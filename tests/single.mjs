@@ -433,6 +433,24 @@ for (const id of upIds) {
 }
 check('«Подъём»: все 15 боёв собираются, монстры на этажах', upBroken.length === 0, upBroken.join(','));
 
+// Башня дня: одна и та же башня от даты, бойцы и монстры на этажах
+await page.evaluate(async () => {
+  const { dailyMatch } = await import('/src/core/match.js');
+  const g = window.__WORMS__.scene.getScene('Game');
+  g.registry.set('match', dailyMatch('2026-11-18'));
+  g.registry.set('seed', dailyMatch('2026-11-18').seed);
+  g.scene.restart();
+});
+await gameReady();
+const daily = await page.evaluate(async () => {
+  const { dailySeed } = await import('/src/core/match.js');
+  const s = window.__WORMS__.scene.getScene('Game');
+  return { mode: s.match.mode, seed: s.seed === dailySeed('2026-11-18'), shape: s.shape.id, monsters: s.monsters.length, bots: s.match.teams[1].level };
+});
+check('башня дня собирается: зерно от даты, башня, 3 монстра, «Бойцы»',
+  daily.mode === 'daily' && daily.seed && daily.shape === 'tower' && daily.monsters === 3 && daily.bots === 'fighter',
+  JSON.stringify(daily));
+
 await page.evaluate(async () => {
   localStorage.removeItem('worms.ascent.v1');
   const { ascentMatch } = await import('/src/core/match.js');

@@ -251,6 +251,18 @@ check('«вызвать друга»: комната башни, карточк�
   Boolean(shared?.length) && /startapp=ZW/.test(prep?.result?.reply_markup?.inline_keyboard?.[0]?.[0]?.url ?? ''),
   JSON.stringify({ shared, url: prep?.result?.reply_markup?.inline_keyboard?.[0]?.[0]?.url }));
 
+// --- башня дня: итог попытки уходит в таблицу, экран показывает место ---
+const dailyBoard = await A.evaluate(async () => {
+  const srv = await import('/src/net/server.js');
+  const b0 = await srv.fetchDailyTower();
+  await srv.submitDailyTower({ day: b0.day, won: true, turns: 5, hp: 140 });
+  const m = window.__WORMS__.scene.getScene('Menu');
+  await m.showDailyTower();
+  return { day: b0.day, go: Boolean(m.buttons['daily-go']), mine: (await srv.fetchDailyTower()).me };
+});
+check('башня дня в Telegram: попытка в таблице, место на экране',
+  dailyBoard.go && dailyBoard.mine?.place === 1 && dailyBoard.mine.turns === 5, JSON.stringify(dailyBoard));
+
 check('нет ошибок в консоли', errors.length === 0, errors.slice(0, 4).join(' | '));
 
 await Promise.all(browsers.map((b) => b.close()));

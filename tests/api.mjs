@@ -332,6 +332,33 @@ check('«твой ход» бот не пишет', !calls('sendMessage').some((
   check('обычный вход без ссылки подарка не даёт', (await call('GET', '/api/shop', null, guest.token)).data.owned.boxes === 0);
 }
 
+// --- «Башня дня»: лучшая попытка, места, вчерашняя не засчитывается ---
+{
+  const { dailySeed } = await import('../server/dailytower.mjs');
+  const { dailySeed: clientSeed } = await import('../src/core/match.js');
+  const a = await login(61, 'Аля');
+  const b = await login(62, 'Боря');
+  const c = await login(63, 'Вова');
+  let board = (await call('GET', '/api/daily-tower', null, a.token)).data;
+  const day = board.day;
+  check('башня дня: день и зерно, у игры зерно то же', /^\d{4}-\d{2}-\d{2}$/.test(day)
+    && board.seed === dailySeed(day) && clientSeed(day) === board.seed && board.me === null, `${day} ${board.seed}`);
+  await call('POST', '/api/daily-tower', { day, won: true, turns: 6, hp: 120 }, a.token);
+  await call('POST', '/api/daily-tower', { day, won: true, turns: 4, hp: 30 }, b.token);
+  await call('POST', '/api/daily-tower', { day, won: false, turns: 9, hp: 0 }, c.token);
+  const worse = (await call('POST', '/api/daily-tower', { day, won: true, turns: 8, hp: 200 }, a.token)).data;
+  const better = (await call('POST', '/api/daily-tower', { day, won: true, turns: 4, hp: 90 }, a.token)).data;
+  check('башня дня: хуже прежней попытка не засчитана, лучше — засчитана',
+    worse.accepted === false && better.accepted === true && better.me.turns === 4 && better.me.tries === 3,
+    JSON.stringify(better.me));
+  board = (await call('GET', '/api/daily-tower', null, c.token)).data;
+  check('башня дня: места — победы, меньше ходов, больше здоровья',
+    board.top.map((r) => r.name).join(',') === 'Аля,Боря,Вова' && board.me.place === 3 && board.players === 3,
+    board.top.map((r) => `${r.name}:${r.turns}/${r.hp}`).join(' '));
+  const stale = (await call('POST', '/api/daily-tower', { day: '2001-01-01', won: true, turns: 1, hp: 300 }, c.token)).data;
+  check('башня дня: попытка не того дня не засчитывается', stale.accepted === false && stale.me.place === 3);
+}
+
 server.close();
 fakeTg.close();
 db.close();

@@ -90,6 +90,31 @@ export function campaignMatch(missionId) {
 }
 
 /** Испытание на башне: его зерно, вид башни, стороны и правила. */
+/** Зерно «Башни дня» из строки YYYY-MM-DD. То же — dailySeed в server/dailytower.mjs. */
+export function dailySeed(day) {
+  let h = 2166136261;
+  for (const ch of `daily:${day}`) { h ^= ch.charCodeAt(0); h = Math.imul(h, 16777619); }
+  return (h >>> 0) % 900000 + 100000;
+}
+
+/**
+ * «Башня дня»: одна башня на всех на сутки — двое против двух «Бойцов», два
+ * слизня и кактус. Вид башни — от зерна. Итог (ходы, здоровье) уходит в
+ * таблицу дня на сервер.
+ */
+export function dailyMatch(day) {
+  return {
+    mode: 'daily',
+    day,
+    seed: dailySeed(day),
+    shape: 'tower',
+    teams: [{ worms: 2, control: 'human' }, { worms: 2, control: 'bot', level: 'fighter' }],
+    rules: { turnTime: 35, hook: 3, crateChance: 0.25, bounce: 0.5, roll: 0.7, flood: { after: 8, step: 85 } },
+    monsters: { slime: 2, cactus: 1 },
+    boss: false,
+  };
+}
+
 /** Бой кампании «Подъём»: башня главы, монстры, Великан в конце главы. */
 export function ascentMatch(id) {
   const m = ASCENT_BY_ID[id];

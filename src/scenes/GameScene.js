@@ -34,7 +34,7 @@ import { Bot } from '../ai/Bot.js';
 import { markDone, MISSION_BY_ID } from '../campaign/missions.js';
 import { checkObjective, snapshot, objectiveText } from '../campaign/objectives.js';
 import { player, eloDelta, recordResult } from '../platform/player.js';
-import { reportResult, serverAvailable, track, trackStep } from '../net/server.js';
+import { reportResult, serverAvailable, track, trackStep, submitDailyTower } from '../net/server.js';
 import { leagueOf, nextLeague, toNextLeague } from '../platform/league.js';
 import { OffscreenMarkers } from '../ui/OffscreenMarkers.js';
 import { SKIN_BY_ID, rivalSkin } from '../core/skins.js';
@@ -1695,6 +1695,8 @@ export default class GameScene extends Phaser.Scene {
 
     // Испытание: звёзды и монеты за новые звёзды — строкой над заголовком
     if (this.match.mode === 'challenge') this._challengeResult(winner >= 0 && winner === mine);
+    // Башня дня: итог — в таблицу дня, за первую победу дня монеты
+    if (this.match.mode === 'daily') this._dailyResult(winner >= 0 && winner === mine);
 
     // Бой — в статистику: режим, итог, сколько ходов
     track('battle', {
@@ -1790,6 +1792,33 @@ export default class GameScene extends Phaser.Scene {
     this.scene.restart();
   }
 
+  /** Башня дня: монеты за первую победу дня и место в таблице. */
+  _dailyResult(won) {
+    const day = this.match.day;
+    const hp = this.worms.filter((w) => w.team === this.myTeamIndex && w.alive).reduce((a, w) => a + w.health, 0);
+    let st = {};
+    try { st = JSON.parse(localStorage.getItem('worms.dailyTower.v1') ?? '{}') || {}; } catch { st = {}; }
+    let coins = 0;
+    if (won && st.rewarded !== day) {
+      coins = 60;
+      grantCoins(coins);
+      st.rewarded = day;
+      try { localStorage.setItem('worms.dailyTower.v1', JSON.stringify(st)); } catch { /* инкогнито */ }
+    }
+    const head = won ? `Башня дня: ${this.myTurns} ${this.myTurns < 5 ? 'хода' : 'ходов'}` : 'Башня дня: не взята';
+    const t = this.rig.ui(this.add.text(CFG.VIEW_W / 2, CFG.VIEW_H / 2 + 62,
+      `${head}${coins ? ` · +${coins} монет` : ''} · отправляю…`, font(18, 800, UI.accent))
+      .setOrigin(0.5).setScrollFactor(0).setDepth(DEPTH.HUD + 11)
+      .setWordWrapWidth(CFG.VIEW_W - 40).setAlign('center'));
+    this.gameOverUi?.push(t);
+    submitDailyTower({ day, won, turns: this.myTurns, hp }).then((res) => {
+      if (!t.active) return;
+      if (!res?.me) { t.setText(`${head}${coins ? ` · +${coins} монет` : ''} · без сервера не в таблице`); return; }
+      const best = res.accepted ? 'лучшая попытка' : 'прежняя попытка лучше';
+      t.setText(`${head}${coins ? ` · +${coins} монет` : ''} · место ${res.me.place} из ${res.players} · ${best}`);
+    });
+  }
+
   /** Звёзды испытания на экране итога. */
   _challengeResult(won) {
     const c = CHALLENGE_BY_ID[this.match.challengeId];
@@ -1855,6 +1884,7 @@ export default class GameScene extends Phaser.Scene {
     // Из испытания — обратно к списку испытаний
     if (this.match.mode === 'challenge' && !this.match.tutorial) this.registry.set('returnTo', 'challenges');
     if (this.match.mode === 'ascent') this.registry.set('returnTo', 'ascent');
+    if (this.match.mode === 'daily') this.registry.set('returnTo', 'daily');
     if (new URLSearchParams(location.search).has('room')) {
       const url = new URL(location.href);
       url.searchParams.delete('room');

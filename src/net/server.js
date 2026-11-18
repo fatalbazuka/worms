@@ -158,6 +158,18 @@ export async function fetchShop() {
 }
 
 /** Счёт на покупку: box1 | box5 | skin-<id>. @returns {Promise<string>} ссылка на счёт */
+/** «Башня дня»: таблица и моё место. null — сервера нет. */
+export async function fetchDailyTower() {
+  if (!token) return null;
+  try { return await call('GET', '/daily-tower'); } catch { return null; }
+}
+
+/** Итог попытки «Башни дня». */
+export async function submitDailyTower(run) {
+  if (!token) return null;
+  try { return await call('POST', '/daily-tower', run); } catch { return null; }
+}
+
 /** Карточка «вызов на бой» для комнаты башни. @returns {Promise<string|null>} id сообщения */
 export async function prepareChallenge(room, link) {
   if (!token) return null;

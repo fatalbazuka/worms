@@ -150,6 +150,19 @@ const MIGRATIONS = [
     where exists (select 1 from event e where e.player_id = player.id)
        or wins + losses > 0;
   `,
+  // 6: «Башня дня» — лучшая попытка игрока за день
+  `
+  create table daily_tower (
+    day        text not null,
+    player_id  text not null references player (id) on delete cascade,
+    won        integer not null,
+    turns      integer not null,
+    hp         integer not null,
+    tries      integer not null default 1,
+    created_at integer not null,
+    primary key (day, player_id)
+  );
+  `,
 ];
 
 export function openDb(path) {

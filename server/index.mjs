@@ -37,6 +37,8 @@
  *   GET  /api/shop                        → {items, skinStars, owned}  товары и что положено
  *   POST /api/shop/buy {item}             → {invoice}        box1 | box5 | skin-<id>
  *   POST /api/challenge {room, link}      → {id}             карточка «вызов на бой» для shareMessage
+ *   GET  /api/daily-tower                 → {day, seed, top, me, players}  «Башня дня»
+ *   POST /api/daily-tower {day, won, turns, hp} → то же + accepted       итог попытки
  *   POST /api/bot/webhook                 ← обновления Telegram
  *   GET  /api/config, /api/health
  */
@@ -55,6 +57,7 @@ import { createTournaments } from './tournaments.mjs';
 import { createBot, webhookSecret } from './bot.mjs';
 import { createAnalytics } from './analytics.mjs';
 import { createShop, SHOP, SKIN_STARS, shopItem } from './shop.mjs';
+import { createDailyTower } from './dailytower.mjs';
 
 export function createApp({
   db, botToken = '', trustProxy = false, staticDir = null, now = () => Date.now(),
@@ -74,6 +77,7 @@ export function createApp({
   });
   const analytics = createAnalytics({ db, now, tz });
   const shop = createShop({ db, now });
+  const daily = createDailyTower({ db, players, dayOf: () => analytics.dayOf(), now });
   bot = createBot({ db, api, players, tournaments, analytics, adminIds: admins, publicUrl, tz, now, log });
   const hookSecret = botToken ? webhookSecret(botToken, secret) : '';
 
@@ -277,6 +281,8 @@ export function createApp({
         const me = auth(req);
         return { items: SHOP, skinStars: SKIN_STARS, owned: shop.owned(me.id), stars: api.enabled };
       }
+      case 'GET /api/daily-tower': return daily.board(auth(req));
+      case 'POST /api/daily-tower': { const me = auth(req); return daily.submit(me, await readJson(req)); }
       case 'POST /api/challenge': {
         const me = auth(req);
         const { room, link } = await readJson(req);
