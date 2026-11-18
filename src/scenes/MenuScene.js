@@ -1425,7 +1425,7 @@ export default class MenuScene extends Phaser.Scene {
     if (this.topFrom === 'tab') this._tabs('top');
     else this._back(() => this.showOnline());
 
-    fetchTop(20, kind).then((rows) => {
+    fetchTop(10, kind).then((rows) => {
       if (this.section !== this.showTop || this.topKind !== kind) return;
       this.topRows = rows;
       note.destroy();
@@ -1436,33 +1436,94 @@ export default class MenuScene extends Phaser.Scene {
     });
   }
 
+  /**
+   * Топ-10 лестницей: тройка — на пьедестале в своих скинах (первый в
+   * короне и радуется), дальше ступени вниз — место, моделька, ник, лига
+   * и рейтинг. В портрете пьедестал над лестницей, в ландшафте — рядом.
+   */
   _renderTop(rows, kind = 'rating') {
-    const cx = this.W / 2;
+    const W = this.W, cx = W / 2;
     const me = player();
-    const x0 = cx - 300, top = 200, step = 32;
-    const maxRows = Math.max(3, Math.floor((this.bottomY(70) - top) / step));
+    const top = 196;
+    const bottom = this.bottomY(this.topFrom === 'tab' ? (this.portrait ? 170 : 140) : 110);
     if (!rows.length) {
-      this.items.push(this.add.text(cx, top, kind === 'tourney'
+      this.items.push(this.add.text(cx, top + 20, kind === 'tourney'
         ? 'пока ни одного чемпиона — турниры впереди' : 'пока пусто — сыграй первый бой по сети на рейтинг',
       font(this.fs(14), 700, UI.textDim)).setOrigin(0.5, 0));
       return;
     }
-    rows.slice(0, maxRows).forEach((r, i) => {
-      const y = top + i * step;
+    const score = (r) => (kind === 'tourney' ? `🏆 ${r.tourney_wins}` : `${r.rating}`);
+    const sheetOf = (r) => {
+      const sheet = SKIN_BY_ID[r.skin]?.sheet;
+      return sheet && this.textures.exists(sheet) ? sheet : 'smiley';
+    };
+    const short = (name, n) => (name.length > n ? `${name.slice(0, n - 1)}…` : name);
+    const add = (o) => { this.items.push(o); return o; };
+
+    // Где пьедестал и где лестница
+    const podW = this.portrait ? W : W * 0.46;
+    const podCx = this.portrait ? cx : podW / 2 + 10;
+    const podBottom = this.portrait ? top + Math.min(380, (bottom - top) * 0.47) : bottom - 10;
+    const lx0 = this.portrait ? 24 : podW + 20;
+    const lx1 = W - 24;
+    const ly0 = this.portrait ? podBottom + 18 : top;
+
+    // --- пьедестал ---
+    const bw = Math.min(200, (podW - 60) / 3);
+    const heights = [Math.min(170, (podBottom - top) * 0.45), 0, 0];
+    heights[1] = heights[0] * 0.82; heights[2] = heights[0] * 0.68;
+    const spots = [[podCx, heights[0]], [podCx - bw - 10, heights[1]], [podCx + bw + 10, heights[2]]];
+    const medal = [0xffc93c, 0xc9d4e6, 0xd98c4a];
+    const g = add(this.add.graphics());
+    rows.slice(0, 3).forEach((r, i) => {
+      const [x, h] = spots[i];
       const mine = r.id === me.id;
-      const color = mine ? UI.accent : UI.text;
-      this.items.push(this.add.text(x0, y, `${i + 1}.`, font(this.fs(15), 800, UI.textDim)).setOrigin(0, 0));
-      this.items.push(this.add.text(x0 + 40, y, r.name, font(this.fs(15), 800, color)).setOrigin(0, 0));
-      this.items.push(this.add.text(x0 + 330, y, leagueLabel(r.rating),
-        font(this.fs(13), 700, leagueOf(r.rating).text)).setOrigin(0, 0));
-      this.items.push(this.add.text(x0 + 600, y, kind === 'tourney' ? `🏆 ${r.tourney_wins}` : `${r.wins}–${r.losses}`,
-        font(this.fs(13), 700, kind === 'tourney' ? UI.accent : UI.textDim)).setOrigin(1, 0));
+      const y = podBottom - h;
+      g.fillStyle(0x1a2338, 1).fillRoundedRect(x - bw / 2, y, bw, h, 14);
+      g.fillStyle(medal[i], 1).fillRoundedRect(x - bw / 2, y, bw, 10, { tl: 14, tr: 14, bl: 0, br: 0 });
+      g.lineStyle(mine ? 4 : 2, mine ? 0xffd166 : 0xffffff, mine ? 1 : 0.12).strokeRoundedRect(x - bw / 2, y, bw, h, 14);
+      add(this.add.text(x, y + 16, `${i + 1}`, font(this.fs(i ? 26 : 32), 800, `#${medal[i].toString(16).padStart(6, '0')}`)).setOrigin(0.5, 0));
+      add(this.add.text(x, y + h - 52, short(r.name, 11), font(this.fs(13), 800, mine ? UI.accent : UI.text)).setOrigin(0.5, 0));
+      add(this.add.text(x, y + h - 28, score(r), font(this.fs(12), 700, kind === 'tourney' ? UI.accent : leagueOf(r.rating).text)).setOrigin(0.5, 0));
+      // Моделька на ступени: первый радуется, остальные стоят
+      const sheet = sheetOf(r);
+      const k = (bw * (i ? 0.68 : 0.8)) / 100;
+      const hero = add(this.add.sprite(x, y + 4, sheet, 0).setOrigin(0.5, 0.92).setScale(k).setFlipX(i !== 2));
+      hero.play(i === 0 ? `${sheet}_win` : `${sheet}_idle`);
+      if (i === 0) {
+        const crown = add(this.add.text(x, y - 100 * k * 0.86, '👑', { fontSize: `${Math.round(40 * k)}px` }).setOrigin(0.5, 1));
+        this.tweens.add({ targets: crown, y: crown.y - 8, yoyo: true, repeat: -1, duration: 900, ease: 'Sine.easeInOut' });
+      }
     });
+
+    // --- лестница 4–10: каждая ступень чуть ниже и правее ---
+    const rest = rows.slice(3, 10);
+    const rowH = Math.min(86, (bottom - ly0) / Math.max(1, rest.length));
+    const shift = Math.min(14, (lx1 - lx0) * 0.02);
+    rest.forEach((r, i) => {
+      const place = i + 4;
+      const mine = r.id === me.id;
+      const y = ly0 + i * rowH;
+      const x0 = lx0 + i * shift;
+      const w = lx1 - x0;
+      const h = rowH - 8;
+      g.fillStyle(mine ? 0x2a2a1a : 0x161d2e, 1).fillRoundedRect(x0, y, w, h, 12);
+      g.lineStyle(mine ? 3 : 2, mine ? 0xffd166 : 0xffffff, mine ? 1 : 0.08).strokeRoundedRect(x0, y, w, h, 12);
+      add(this.add.text(x0 + 30, y + h / 2, `${place}`, font(this.fs(16), 800, UI.textDim)).setOrigin(0.5));
+      const sheet = sheetOf(r);
+      add(this.add.sprite(x0 + 82, y + h - 2, sheet, 0).setOrigin(0.5, 0.92).setScale((h * 0.95) / 100).setFlipX(true))
+        .play(`${sheet}_idle`);
+      add(this.add.text(x0 + 128, y + h / 2 - 2, short(r.name, 16), font(this.fs(14), 800, mine ? UI.accent : UI.text)).setOrigin(0, 1));
+      add(this.add.text(x0 + 128, y + h / 2 + 2, leagueLabel(r.rating), font(this.fs(11), 700, leagueOf(r.rating).text)).setOrigin(0, 0));
+      add(this.add.text(lx1 - 18, y + h / 2, score(r), font(this.fs(15), 800, kind === 'tourney' ? UI.accent : UI.text)).setOrigin(1, 0.5));
+    });
+
     const rank = myRank(rows);
     const foot = rank ? `ты на ${rank} месте` : !loggedIn() ? 'открой игру в Telegram, чтобы попасть в таблицу'
-      : kind === 'tourney' ? 'выиграй турнир — и ты здесь' : 'тебя пока нет в таблице — доиграй бой по сети';
-    this.items.push(this.add.text(cx, this.bottomY(74), foot, font(this.fs(12), 700, UI.textDim)).setOrigin(0.5, 1));
+      : kind === 'tourney' ? 'выиграй турнир — и ты здесь' : 'тебя пока нет в десятке — побеждай в боях по сети';
+    add(this.add.text(cx, bottom + 8, foot, font(this.fs(12), 700, UI.textDim)).setOrigin(0.5, 0));
   }
+
 
   /** Личный кабинет. */
   openAccount() {

@@ -58,7 +58,7 @@ import { createPlayers } from './players.mjs';
 import { createTournaments } from './tournaments.mjs';
 import { createBot, webhookSecret } from './bot.mjs';
 import { createAnalytics } from './analytics.mjs';
-import { createShop, SHOP, SKIN_STARS, shopItem } from './shop.mjs';
+import { createShop, SHOP, SKIN_STARS, SKIN_IDS, shopItem } from './shop.mjs';
 import { createDailyTower } from './dailytower.mjs';
 import { createSaves } from './saves.mjs';
 
@@ -210,7 +210,8 @@ export function createApp({
   function top(url) {
     const limit = Math.max(1, Math.min(100, Number(url.searchParams.get('limit')) || 20));
     const rows = url.searchParams.get('kind') === 'tourney' ? players.topTourney(limit) : players.top(limit);
-    return { players: rows };
+    // Скин — только из известных: в копию прогресса пишет клиент
+    return { players: rows.map((r) => ({ ...r, skin: SKIN_IDS.includes(r.skin) ? r.skin : 'classic' })) };
   }
 
   // --------------------------------------------------------------- турниры

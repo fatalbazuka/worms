@@ -391,6 +391,19 @@ check('«твой ход» бот не пишет', !calls('sendMessage').some((
   check('повторная выдача — новый пароль, старый не подходит', old.status === 401);
 }
 
+// --- топ-10 лестницей: у каждого — надетый скин из его прогресса ---
+{
+  const a = await login(81, 'Нинзя'), b = await login(82, 'Битый');
+  db.prepare('update player set wins = 5, rating = 3001 where id = ?').run(a.player.id);
+  db.prepare('update player set wins = 4, rating = 3000 where id = ?').run(b.player.id);
+  await call('PUT', '/api/save', { key: 'worms.skins.v1', value: JSON.stringify({ owned: ['classic', 'ninja'], equipped: 'ninja' }) }, a.token);
+  await call('PUT', '/api/save', { key: 'worms.skins.v1', value: '{битый' }, b.token);
+  const top = await call('GET', '/api/top?limit=10');
+  const ra = top.data.players.find((r) => r.id === a.player.id), rb = top.data.players.find((r) => r.id === b.player.id);
+  check('топ отдаёт надетый скин; битая копия — обычный смайлик, топ не падает',
+    top.status === 200 && ra?.skin === 'ninja' && rb?.skin === 'classic', JSON.stringify({ ra: ra?.skin, rb: rb?.skin }));
+}
+
 server.close();
 fakeTg.close();
 db.close();

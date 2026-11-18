@@ -5,6 +5,9 @@
 import { START_RATING } from './lib/elo.js';
 import { displayName } from './lib/telegram.js';
 
+const SKIN_SQL = `(select case when json_valid(s.value) then json_extract(s.value, '$.equipped') end
+  from save_kv s where s.player_id = player.id and s.key = 'worms.skins.v1')`;
+
 export function createPlayers({ db, now = () => Date.now(), adminIds = new Set() }) {
   const q = {
     byId: db.prepare('select * from player where id = ?'),
@@ -16,9 +19,11 @@ export function createPlayers({ db, now = () => Date.now(), adminIds = new Set()
                         values (?, ?, null, null, ?, ?, ?, ?, ?)`),
     update: db.prepare('update player set name = ?, photo = coalesce(?, photo), seen_at = ? where id = ?'),
     rank: db.prepare('select count(*) + 1 as rank from player where wins + losses > 0 and rating > ?'),
-    top: db.prepare(`select id, name, photo, rating, wins, losses, tourney_wins from player
+    // skin — надетый скин из прогресса на сервере (save_kv): топ показывает
+    // игроков в их модельках. Битая копия — null, а не ошибка всего топа
+    top: db.prepare(`select id, name, photo, rating, wins, losses, tourney_wins, ${SKIN_SQL} as skin from player
                      where wins + losses > 0 order by rating desc, wins desc, created_at asc limit ?`),
-    topTourney: db.prepare(`select id, name, photo, rating, tourney_wins from player
+    topTourney: db.prepare(`select id, name, photo, rating, wins, losses, tourney_wins, ${SKIN_SQL} as skin from player
                             where tourney_wins > 0 order by tourney_wins desc, rating desc limit ?`),
     duels: db.prepare(`select * from match where (p1 = ? or p2 = ?) and status in ('confirmed', 'disputed')
                        order by settled_at desc limit ?`),
