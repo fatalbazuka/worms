@@ -313,7 +313,11 @@ check('башня дня в Telegram: попытка в таблице, мест
     m.start({ mode: 'quick', teams: [{ worms: 2, control: 'human' }, { worms: 2, control: 'bot', bot: 'rookie' }], rules: {} });
     return { id: player().id, name: player().name };
   });
-  const fought = await X.waitForFunction(() => window.__WORMS__.scene.getScene('Game')?.canPlayerAct?.(), null, { timeout: 30000 })
+  // Бой пошёл: сцена боя открыта и ход у кого-то из бойцов (первым может ходить и бот)
+  const fought = await X.waitForFunction(() => {
+    const g = window.__WORMS__.scene;
+    return g.isActive('Game') && Boolean(g.getScene('Game').turn?.activeWorm);
+  }, null, { timeout: 60000 })
     .then(() => true).catch(() => false);
   check('аккаунт без Telegram: вход логином на сайте, меню и бой работают',
     /^u[0-9a-f]+$/.test(who.id) && who.name === 'Экс' && fought, JSON.stringify(who));
