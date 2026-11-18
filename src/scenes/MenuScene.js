@@ -26,7 +26,7 @@ import {
 } from '../platform/telegram.js';
 import { leagueOf, nextLeague, leagueProgress, toNextLeague, leagueLabel } from '../platform/league.js';
 import { BOT_LEVELS } from '../ai/Bot.js';
-import { isDesktop, setUiMode } from '../platform/device.js';
+import { isDesktop, setUiMode, aimScheme, setAimScheme } from '../platform/device.js';
 import { sfx } from '../audio/Sfx.js';
 import { SKINS, SKIN_BY_ID, rewardMissions } from '../core/skins.js';
 import {
@@ -440,6 +440,11 @@ export default class MenuScene extends Phaser.Scene {
     };
     if (canOfferHomeScreen()) pill('home', '⌂ На экран Домой', 250, () => addToHomeScreen());
     const desktop = isDesktop();
+    if (!desktop) {
+      const sling = aimScheme() === 'sling';
+      pill('aim-mode', sling ? 'Прицел: рогатка' : 'Прицел: кнопки', 230,
+        () => { setAimScheme(sling ? 'buttons' : 'sling'); this.showRoot(); });
+    }
     if (!inTelegram()) {
       pill('ui-mode', desktop ? 'Управление: ПК' : 'Управление: сенсор', 260,
         () => { setUiMode(desktop ? 'touch' : 'desktop'); this.showRoot(); });

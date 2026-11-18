@@ -405,6 +405,28 @@ const vo = await page.evaluate(async () => {
 check('голоса смайликов загружены, победа сказана голосом',
   vo.n === 10 && (vo.last === 'win' || vo.ctx !== 'running' || vo.muted), JSON.stringify(vo));
 
+// --- выбор прицела в меню: прежние кнопки вместо рогатки ---
+await page.goto(`${BASE}${BASE.includes('?') ? '&' : '?'}aim=buttons`, { waitUntil: 'domcontentloaded' });
+await menuReady();
+const pillLabel = await page.evaluate(() => Boolean(window.__WORMS__.scene.getScene('Menu').buttons['aim-mode']));
+await menuTap('play');
+await gameReady();
+await page.waitForFunction(() => window.__WORMS__.scene.getScene('Game').canPlayerAct(), null, { timeout: 40000 });
+const btnHud = await page.evaluate(() => {
+  const s = window.__WORMS__.scene.getScene('Game');
+  s.hud.setHelp(false);
+  return { slingAim: s.slingAim, fire: Boolean(s.hud.buttons.fire), up: Boolean(s.hud.buttons.aimUp), turn: s.turn.turnNumber };
+});
+await page.evaluate(() => { window.__WORMS__.scene.getScene('Game').moveInput.fire = true; });
+await page.waitForTimeout(600);
+await page.evaluate(() => { window.__WORMS__.scene.getScene('Game').moveInput.fire = false; });
+const fired = await page.waitForFunction(() => {
+  const s = window.__WORMS__.scene.getScene('Game');
+  return s.turn.state !== 'aim' || s.projectiles.length > 0;
+}, null, { timeout: 5000 }).then(() => true).catch(() => false);
+check('прицел «кнопки»: на башне ▲▼ и «Огонь», удержание и отпускание — выстрел',
+  pillLabel && !btnHud.slingAim && btnHud.fire && btnHud.up && fired, JSON.stringify({ pillLabel, ...btnHud, fired }));
+
 check('нет ошибок в консоли', errors.length === 0, errors.slice(0, 5).join(' | '));
 
 await browser.close();

@@ -41,7 +41,7 @@ import { grantCoins } from '../platform/daily.js';
 import { CameraRig } from '../ui/CameraRig.js';
 import { voice } from '../audio/Voice.js';
 import { askText, closeOverlay } from '../ui/Overlay.js';
-import { isDesktop } from '../platform/device.js';
+import { isDesktop, aimScheme } from '../platform/device.js';
 
 export default class GameScene extends Phaser.Scene {
   constructor() { super('Game'); }
@@ -82,6 +82,9 @@ export default class GameScene extends Phaser.Scene {
     this.hookPerTurn = Math.max(0, Number(this.rules.hook) || 0);
     this.hooksLeft = this.hookPerTurn;
     this.sling = this.hookPerTurn > 0;
+    // Схема прицела на башне — выбор игрока: рогатка (по умолчанию) или
+    // прежние кнопки угла и «Огонь». Раскладка экрана от неё не зависит
+    this.slingAim = this.sling && aimScheme() === 'sling';
     this.explosionLog = [];
     // Все воронки с начала партии — для соперника, вернувшегося после
     // обрыва: у него земля чистая, журнал одного хода ему не поможет
@@ -357,7 +360,7 @@ export default class GameScene extends Phaser.Scene {
    * две подсказки разом на первом ходу только путают.
    */
   get slingHint() {
-    if (!this.sling) return false;
+    if (!this.slingAim) return false;
     if (this._slingUses == null) {
       try { this._slingUses = Number(localStorage.getItem('worms.slingUses')) || 0; } catch { this._slingUses = 0; }
     }
@@ -1092,7 +1095,7 @@ export default class GameScene extends Phaser.Scene {
   heldDirection() {
     const w = this.turn.activeWorm;
     const face = { x: w ? w.facing : 1, y: 0 };
-    if (!this.sling) return this.aimDirection();
+    if (!this.slingAim) return this.aimDirection();
     if (this.aim?.mode === 'aim') {
       const shot = this.aim.computeShot();
       if (!shot) return face;
@@ -1304,7 +1307,7 @@ export default class GameScene extends Phaser.Scene {
     if (Math.random() < 0.3) voice.say('shot', { team: w.team });
     if (!this.replaying && !this.isBotTurn()) {
       haptic('shot');
-      if (this.sling) {
+      if (this.slingAim) {
         this._slingUses = (this._slingUses ?? 0) + 1;
         try { localStorage.setItem('worms.slingUses', String(this._slingUses)); } catch { /* инкогнито */ }
       }

@@ -28,8 +28,8 @@ const BLOB_STEP = 4.6;     // шаг между шариками: соседни
  * 2. Свайп по бойцу: направление задаёт угол, длина — силу, отпустили =
  *    выстрел. Быстрее на мыши, но на тач-экране кисть накрывает поле.
  *
- * 3. Рогатка — на арене с крюком (scene.sling), вместо первых двух на
- *    телефоне: палец ставится на бойца и тянется НАЗАД, от цели; длина
+ * 3. Рогатка — на арене с крюком (scene.slingAim, по умолчанию; в меню
+ *    можно вернуть первые две), вместо первых двух на телефоне: палец ставится на бойца и тянется НАЗАД, от цели; длина
  *    натяжения — сила, отпустил — выстрел. Палец при этом не закрывает то,
  *    куда летит снаряд. Натяжение меряется в экранных пикселях.
  *
@@ -82,7 +82,7 @@ export class AimController {
     // pointer.worldX смотрит на камеру неба — мировую точку берём у рига
     const p = this.scene.rig.worldPoint(pointer);
 
-    if (this.scene.sling) {
+    if (this.scene.slingAim) {
       // Рогатка: хват и натяжение — в экранных пикселях, зум не мешает
       const rig = this.scene.rig;
       const sx = (o.x - rig.viewLeft) * rig.zoom, sy = (o.y - rig.viewTop) * rig.zoom;
@@ -148,7 +148,7 @@ export class AimController {
     }
     if (this.scene.rig.pinching) { this.cancel(); return; }
 
-    if (this.scene.sling) {
+    if (this.scene.slingAim) {
       this.dragX = pointer.x - this.startX;
       this.dragY = pointer.y - this.startY;
       const len = Math.hypot(this.dragX, this.dragY);
@@ -189,7 +189,7 @@ export class AimController {
       const shot = this.computeShot();
       // Отпустил до того, как стало ясно, что это натяжение, или всё касание
       // было коротким мазком — не стреляем
-      if (shot && this.scene.sling
+      if (shot && this.scene.slingAim
         && (!this.armed || performance.now() - this.downAt < CFG.SLING_MIN_HOLD)) {
         this.mode = null;
         this.dragX = 0; this.dragY = 0;
@@ -207,7 +207,7 @@ export class AimController {
             -CFG.AIM_ANGLE_LIMIT, CFG.AIM_ANGLE_LIMIT,
           );
         }
-        if (this.scene.sling) this.scene.fx.sound('twang');
+        if (this.scene.slingAim) this.scene.fx.sound('twang');
         this.scene.fireActiveWorm(shot.vx, shot.vy);
       }
     }
@@ -260,7 +260,7 @@ export class AimController {
   /** Вектор выстрела из текущего свайпа, либо null, если свайп слишком короткий. */
   computeShot() {
     const len = Math.hypot(this.dragX, this.dragY);
-    if (this.scene.sling) {
+    if (this.scene.slingAim) {
       // Рогатка: летит в сторону, обратную натяжению
       if (len < CFG.SLING_MIN) return null;
       const k = Math.min(1, (len - CFG.SLING_MIN) / (CFG.SLING_MAX - CFG.SLING_MIN));
@@ -301,7 +301,7 @@ export class AimController {
 
     // Свайп имеет приоритет; иначе показываем прицел кнопочной схемы
     if (this.mode === 'aim') { this.hintLabel?.setVisible(false); this._drawSwipe(); }
-    else if (scene.sling && !this.desktop && !scene.charging) {
+    else if (scene.slingAim && !this.desktop && !scene.charging) {
       // У рогатки прицела «в покое» нет: направления ещё никто не задал
       if (this.crosshair) this.crosshair.setVisible(false);
       this._drawSlingHint();
@@ -309,6 +309,8 @@ export class AimController {
       this._drawHookPreview();
     } else {
       this._drawButtonAim(scene.charging ? scene.charge : 0);
+      // Кнопочная схема на башне: точки, куда достанет трос, — те же
+      if (scene.sling && !this.desktop && !scene.charging) this._drawHookHints();
       this._drawHookPreview();
     }
   }
@@ -532,7 +534,7 @@ export class AimController {
     const shot = this.computeShot();
     // Рогатка: пока палец в круге отмены, круг виден — отпусти здесь, и
     // выстрела не будет. Особенно ясно, когда натянул и вернул обратно
-    if (this.scene.sling) {
+    if (this.scene.slingAim) {
       const o = this.origin();
       const r = CFG.SLING_MIN / this.scene.rig.zoom;
       const inside = !shot;
@@ -554,7 +556,7 @@ export class AimController {
     this.crosshair.setVisible(true);
     this.crosshair.setPosition(o.x + d.x * CFG.AIM_RAY_LEN, o.y + d.y * CFG.AIM_RAY_LEN);
     this._drawPower(o, d, shot.power / CFG.AIM_MAX_POWER);
-    if (this.scene.sling) {
+    if (this.scene.slingAim) {
       // Резинка «щёлкает» на каждом шаге шкалы — сила слышна и чувствуется
       // в руке, глаз можно держать на цели
       const stepN = Math.ceil((shot.power / CFG.AIM_MAX_POWER) * POWER_BLOBS.length);
