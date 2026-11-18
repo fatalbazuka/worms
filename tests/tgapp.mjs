@@ -18,6 +18,7 @@ import { launchOptions } from './browser.mjs';
 import { openDb } from '../server/db.mjs';
 import { createApp } from '../server/index.mjs';
 import { signInitData } from '../server/lib/telegram.js';
+import { hashPassword } from '../server/lib/accounts.js';
 
 const failures = [];
 function check(name, ok, detail = '') {
@@ -33,7 +34,10 @@ const fakeTg = createServer((req, res) => {
   req.on('end', () => {
     const method = req.url.split('/').pop();
     tgCalls.push({ method, params: body ? JSON.parse(body) : {} });
-    const result = { getMe: { username: 'worms_test_bot' }, createInvoiceLink: 'https://t.me/$inv' }[method] ?? true;
+    const result = {
+      getMe: { username: 'worms_test_bot' }, createInvoiceLink: 'https://t.me/$inv',
+      savePreparedInlineMessage: { id: 'prep-1', expiration_date: 0 },
+    }[method] ?? true;
     res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({ ok: true, result }));
   });
 });
@@ -83,6 +87,7 @@ async function tgPage(i, user, { gateOnly = false } = {}) {
         checkHomeScreenStatus(cb) { cb('missed'); }, addToHomeScreen() {},
         requestWriteAccess(cb) { cb(true); },
         openInvoice(link, cb) { globalThis.__invoices = [...(globalThis.__invoices ?? []), link]; cb('paid'); },
+        shareMessage(id) { globalThis.__shared = [...(globalThis.__shared ?? []), id]; },
         HapticFeedback: {
           impactOccurred: (k) => haptics.push(`impact:${k}`),
           notificationOccurred: (k) => haptics.push(`note:${k}`),
@@ -232,6 +237,62 @@ const boxesAfter = await A.waitForFunction((b) => {
 }, boxesBefore, { timeout: 20000 }).then((h) => h.jsonValue()).catch(() => boxesBefore);
 check('коробка за звёзды: счёт на 25 ⭐, после оплаты коробка в профиле',
   shopInv?.prices?.[0]?.amount === 25 && boxesAfter === boxesBefore + 1, `${boxesBefore} → ${boxesAfter}`);
+
+// --- вызов друга с главного экрана: карточка с кнопкой в комнату башни ---
+await A.evaluate(() => {
+  globalThis.WORMS_TG = { bot: 'worms_test_bot', app: 'game' };
+  window.__WORMS__.scene.getScene('Menu').showRoot();
+});
+await A.waitForTimeout(300);
+await A.evaluate(() => window.__WORMS__.scene.getScene('Menu').challengeFriend());
+const shared = await A.waitForFunction(() => globalThis.__shared?.length && globalThis.__shared, null, { timeout: 8000 })
+  .then((h) => h.jsonValue()).catch(() => null);
+const prep = tgCalls.filter((c) => c.method === 'savePreparedInlineMessage').at(-1)?.params;
+check('«вызвать друга»: комната башни, карточка с кнопкой ушла в окно «поделиться»',
+  Boolean(shared?.length) && /startapp=ZW/.test(prep?.result?.reply_markup?.inline_keyboard?.[0]?.[0]?.url ?? ''),
+  JSON.stringify({ shared, url: prep?.result?.reply_markup?.inline_keyboard?.[0]?.[0]?.url }));
+
+// --- башня дня: итог попытки уходит в таблицу, экран показывает место ---
+const dailyBoard = await A.evaluate(async () => {
+  const srv = await import('/src/net/server.js');
+  const b0 = await srv.fetchDailyTower();
+  await srv.submitDailyTower({ day: b0.day, won: true, turns: 5, hp: 140 });
+  const m = window.__WORMS__.scene.getScene('Menu');
+  await m.showDailyTower();
+  return { day: b0.day, go: Boolean(m.buttons['daily-go']), mine: (await srv.fetchDailyTower()).me };
+});
+check('башня дня в Telegram: попытка в таблице, место на экране',
+  dailyBoard.go && dailyBoard.mine?.place === 1 && dailyBoard.mine.turns === 5, JSON.stringify(dailyBoard));
+
+// --- вход с сайта: тот же аккаунт и прогресс, что в Telegram ---
+{
+  // Прогресс из Telegram уходит на сервер с задержкой — даём ему доехать
+  await A.waitForTimeout(2000);
+  const tgBoxes = await A.evaluate(() => JSON.parse(localStorage.getItem('worms.skins.v1') ?? '{}').boxes ?? 0);
+  db.prepare('update player set name_key = ?, pass_hash = ? where id = ?').run('admin.site', hashPassword('pw-12345'), `tg${ADMIN}`);
+  const W = await browsers[1].newPage({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true });
+  W.on('pageerror', (e) => errors.push(`[сайт] pageerror: ${e.message}`));
+  await W.addInitScript(() => { globalThis.WORMS_TELEGRAM_ONLY = true; });
+  await W.goto(URL, { waitUntil: 'domcontentloaded' });
+  const gate = await W.waitForSelector('#gate-login', { state: 'visible', timeout: 15000 }).then(() => true).catch(() => false);
+  await W.fill('#gate-login input[name=login]', 'admin.site');
+  await W.fill('#gate-login input[name=password]', 'wrong');
+  await W.click('#gate-login button');
+  const wrongMsg = await W.waitForFunction(() => document.querySelector('#gate .gate-error')?.textContent, null, { timeout: 8000 })
+    .then((h) => h.jsonValue()).catch(() => '');
+  await W.fill('#gate-login input[name=password]', 'pw-12345');
+  await W.click('#gate-login button');
+  await W.waitForFunction(() => window.__WORMS__?.scene.isActive('Menu'), null, { timeout: 40000 });
+  const web = await W.evaluate(async () => {
+    const { player } = await import('/src/platform/player.js');
+    return { id: player().id, boxes: JSON.parse(localStorage.getItem('worms.skins.v1') ?? '{}').boxes ?? 0,
+      gate: getComputedStyle(document.getElementById('gate')).display };
+  });
+  check('сайт: форма входа, неверный пароль — ошибка, верный — тот же аккаунт и прогресс из Telegram',
+    gate && /неверный/.test(wrongMsg) && web.id === `tg${ADMIN}` && web.gate === 'none' && web.boxes === tgBoxes && tgBoxes > 0,
+    JSON.stringify({ wrongMsg, ...web, tgBoxes }));
+  await W.close();
+}
 
 check('нет ошибок в консоли', errors.length === 0, errors.slice(0, 4).join(' | '));
 

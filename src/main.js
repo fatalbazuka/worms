@@ -5,10 +5,12 @@ import GameScene from './scenes/GameScene.js';
 import { initTelegram, startRoom, screenInsets, inTelegram, botLink } from './platform/telegram.js';
 import { apiBase } from './net/server.js';
 import { applyUiClass } from './platform/device.js';
-import { loggedIn, telegramLogin, syncMe, track, fetchShop } from './net/server.js';
+import { loggedIn, telegramLogin, syncMe, track, fetchShop, passwordLogin } from './net/server.js';
+import { prefetchServerSave } from './platform/cloud.js';
 import { syncSkinsCloud, applyServerOwned } from './platform/skins.js';
 import { syncDailyCloud } from './platform/daily.js';
 import { syncAscentCloud } from './platform/ascent.js';
+import { syncCosmeticsCloud } from './platform/cosmetics.js';
 import { syncChallengesCloud } from './platform/challenges.js';
 import { dailyState } from './platform/daily.js';
 import { dayKey, prevDay } from './core/daily.js';
@@ -18,11 +20,12 @@ initTelegram();
 applyUiClass();
 
 // Игра живёт в Telegram. На сервере env.js включает WORMS_TELEGRAM_ONLY, и
-// в обычном браузере вместо игры — ссылка на бота. Локально и в тестах
-// флага нет — игра открывается как есть.
-if (globalThis.WORMS_TELEGRAM_ONLY && !inTelegram()) {
+// в обычном браузере вместо игры — ссылка на бота и вход по логину и
+// паролю (их выдаёт админ командой /web). Вошёл — тот же аккаунт, что в
+// Telegram, игра грузится как обычно. Локально и в тестах флага нет.
+if (globalThis.WORMS_TELEGRAM_ONLY && !inTelegram() && !loggedIn()) {
   await showTelegramGate();
-  await new Promise(() => {});   // дальше не грузимся: игра здесь не запускается
+  await new Promise(() => {});   // дальше не грузимся, пока не вошли
 }
 
 async function showTelegramGate() {
@@ -39,6 +42,22 @@ async function showTelegramGate() {
   gate.style.display = 'flex';
   const a = gate.querySelector('a');
   if (link) { a.href = link; a.textContent = `Открыть в Telegram`; } else a.remove();
+  // Вход по логину и паролю: удался — перезагрузка, игра поднимется уже с аккаунтом
+  const form = gate.querySelector('#gate-login');
+  const err = form?.querySelector('.gate-error');
+  form?.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const btn = form.querySelector('button');
+    btn.disabled = true;
+    err.textContent = '';
+    try {
+      await passwordLogin(form.login.value.trim(), form.password.value);
+      location.reload();
+    } catch (ex) {
+      err.textContent = ex.message || 'не вышло';
+      btn.disabled = false;
+    }
+  });
 }
 
 // Логическая ширина подгоняется под пропорции экрана ДО создания игры:
@@ -51,7 +70,10 @@ fitViewToScreen(window.innerWidth, window.innerHeight, screenInsets());
 // метрики при создании, и текст, созданный на запасном шрифте, так и
 // останется криво расположенным. Профиль из облака Telegram — тоже до
 // старта: имя и рейтинг читаются синхронно, второго шанса подменить их нет.
-await Promise.all([loadUiFont(), loadCloudProfile(), syncSkinsCloud(), syncDailyCloud(), syncChallengesCloud(), syncAscentCloud()]);
+// Копия прогресса с сервера — до сведения облаков: с сайта по логину она
+// единственная, в Telegram — вторая к облаку Telegram
+await prefetchServerSave();
+await Promise.all([loadUiFont(), loadCloudProfile(), syncSkinsCloud(), syncDailyCloud(), syncChallengesCloud(), syncAscentCloud(), syncCosmeticsCloud()]);
 
 // Аккаунт. Профиль помнит, что вход был, а токена уже нет (вышли в другой
 // вкладке, почистили хранилище) — значит, мы аноним. Иначе — освежаем

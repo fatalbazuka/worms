@@ -1,4 +1,5 @@
 import { CFG, DEPTH } from '../config.js';
+import { item } from '../core/cosmetics.js';
 import { has, rotFrame, meta, fitScale } from '../core/assets.js';
 
 /**
@@ -45,9 +46,10 @@ export class Projectile {
     if (has(s, own)) {
       this.own = true;
       this.sprited = false;
-      this.pointed = ['bazooka', 'mole', 'mortar', 'airmissile'].includes(this.weapon.id);
-      // Авиаракета нарисована носом вниз-вправо, остальные — вправо
-      this.tilt = this.weapon.id === 'airmissile' ? -Math.PI / 4 : 0;
+      // Огненный шар нарисован с хвостом пламени — летит хвостом назад
+      this.pointed = ['bazooka', 'mole', 'mortar', 'airmissile', 'fireball', 'icicle', 'meteor'].includes(this.weapon.id);
+      // Авиаракета нарисована носом вниз-вправо, комета ☄️ — вниз-влево, остальные — вправо
+      this.tilt = { airmissile: -Math.PI / 4, meteor: (-3 * Math.PI) / 4 }[this.weapon.id] ?? 0;
       const size = Math.max(14, (meta(key)?.frameWidth ?? p.radius * 4) * 1.35);
       this.view = s.add.image(this.x, this.y, own).setScale(fitScale(s, own, size));
       if (this.pointed) this.view.setRotation(Math.atan2(this.vy, this.vx) + this.tilt);
@@ -317,9 +319,18 @@ export class Projectile {
     if (this.trail) {
       this.trail.clear();
       const pts = this.trailPts;
-      for (let i = 2; i < pts.length; i += 2) {
-        const a = (i / pts.length) * 0.45;
-        this.trail.lineStyle(2, this.weapon.color, a);
+      // След по украшению стрелка: свой цвет, радуга или точки-звёздочки
+      const cos = this.owner?.cos && item('trail', this.owner.cos.trail);
+      const n = pts.length;
+      for (let i = 2; i < n; i += 2) {
+        const a = (i / n) * (cos?.price ? 0.85 : 0.45);
+        let color = cos?.color ?? this.weapon.color;
+        if (cos?.rainbow) color = Phaser.Display.Color.HSVToRGB(((i / n) + this.age) % 1, 0.8, 1).color;
+        if (cos?.dots) {
+          if (i % 8 === 0) this.trail.fillStyle(color, a).fillCircle(pts[i], pts[i + 1], 3.5);
+          continue;
+        }
+        this.trail.lineStyle(cos?.price ? 3 : 2, color, a);
         this.trail.lineBetween(pts[i - 2], pts[i - 1], pts[i], pts[i + 1]);
       }
     }

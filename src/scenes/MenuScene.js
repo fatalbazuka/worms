@@ -3,10 +3,11 @@ import { CFG } from '../config.js';
 import { MISSIONS, loadProgress, isUnlocked } from '../campaign/missions.js';
 import { objectiveText } from '../campaign/objectives.js';
 import {
-  quickMatch, campaignMatch, onlineMatch, towerMatch, fallbackMatch, challengeMatch, ascentMatch, QUICK_OPTIONS,
+  quickMatch, campaignMatch, onlineMatch, towerMatch, fallbackMatch, challengeMatch, ascentMatch, dailyMatch, QUICK_OPTIONS,
 } from '../core/match.js';
 import { CHALLENGES, challengeOpen, totalStars, STAR_COINS } from '../campaign/challenges.js';
-import { ASCENT, CHAPTERS, ascentOpen } from '../campaign/ascent.js';
+import { ASCENT, CHAPTERS, ascentOpen, bossName, chapterOf } from '../campaign/ascent.js';
+import { AFFIXES, DEFAULT_AFFIXES } from '../entities/Affixes.js';
 import { ascentDone } from '../platform/ascent.js';
 import { challengeStars } from '../platform/challenges.js';
 import { onboardStage } from '../platform/onboard.js';
@@ -17,7 +18,7 @@ import { Lobby } from '../net/lobby.js';
 import { pendingSession, forgetSession } from '../net/session.js';
 import {
   syncMe, fetchTop, myRank, loggedIn, onAccountChange, track, fetchShop, buyShopItem,
-  trackStep,
+  trackStep, prepareChallenge, fetchDailyTower,
 } from '../net/server.js';
 import { openAccountDialog } from '../ui/AccountDialog.js';
 import { openTournaments } from '../ui/Tournaments.js';
@@ -25,23 +26,26 @@ import { askText, closeOverlay } from '../ui/Overlay.js';
 import { makeTransport } from '../net/connect.js';
 import { player } from '../platform/player.js';
 import {
-  inviteLink as tgInviteLink, shareRoom, canOfferHomeScreen, addToHomeScreen, onHomeScreenChange,
+  inviteLink as tgInviteLink, shareRoom, shareMessage, canOfferHomeScreen, addToHomeScreen, onHomeScreenChange,
   haptic, inTelegram, botLink, openInvoice, refLink, shareLink,
 } from '../platform/telegram.js';
 import { leagueOf, nextLeague, leagueProgress, toNextLeague, leagueLabel } from '../platform/league.js';
 import { BOT_LEVELS } from '../ai/Bot.js';
 import { isDesktop, setUiMode, aimScheme, setAimScheme } from '../platform/device.js';
 import { sfx } from '../audio/Sfx.js';
-import { SKINS, SKIN_BY_ID, SKIN_STARS, rewardMissions } from '../core/skins.js';
+import { SKINS, SKIN_BY_ID, SKIN_STARS, BOX_SKINS, RARITY, rewardMissions } from '../core/skins.js';
 import {
   skinState, equippedSkin, equipSkin, openSkinBox, syncCampaignBoxes, applyServerOwned,
 } from '../platform/skins.js';
 import {
-  TASK_BY_ID, BOX_PRICE, STREAK_COINS, STREAK_BOX_DAY, streakReady, dayKey, prevDay as prevDayOf,
+  TASK_BY_ID, BOX_PRICE, STREAK_COINS, STREAK_BOX_DAY, streakReady, dayKey, claimStreak,
+  FREEZE_PRICE, FREEZE_MAX,
 } from '../core/daily.js';
 import {
-  dailyState, rewardWaiting, claimDailyTask, claimDailyStreak, buyBox,
+  dailyState, rewardWaiting, claimDailyTask, claimDailyStreak, buyBox, buyStreakFreeze,
 } from '../platform/daily.js';
+import { COSMETICS, KINDS, KIND_NAMES } from '../core/cosmetics.js';
+import { cosState, buyCosmetic, equipCosmetic } from '../platform/cosmetics.js';
 import { fitScale } from '../core/assets.js';
 
 /**
@@ -108,6 +112,10 @@ export default class MenuScene extends Phaser.Scene {
     if (this.registry.get('returnTo') === 'challenges') {
       this.registry.set('returnTo', null);
       this.time.delayedCall(30, () => this.showChallenges());
+    }
+    if (this.registry.get('returnTo') === 'daily') {
+      this.registry.set('returnTo', null);
+      this.time.delayedCall(30, () => this.showDailyTower());
     }
     if (this.registry.get('returnTo') === 'ascent') {
       this.registry.set('returnTo', null);
@@ -269,6 +277,9 @@ export default class MenuScene extends Phaser.Scene {
     // Надписи кнопки — чтобы обновлять подсказку на месте (счётчик поиска)
     this.buttonTexts ??= {};
     this.buttonTexts[key] = { title, sub };
+    // Действие кнопки — чтобы нажать её из кода (вызов друга с главного экрана)
+    this.buttonHandlers ??= {};
+    this.buttonHandlers[key] = enabled ? onTap : null;
 
     if (enabled) {
       img.setInteractive({ useHandCursor: true });
@@ -470,8 +481,13 @@ export default class MenuScene extends Phaser.Scene {
         : choice.level ? `Башня · бот «${BOT_LEVELS[choice.level].name}»` : 'Башня · вдвоём на одном телефоне',
       () => this.start(tutorial ? { ...challengeMatch('first'), tutorial: true } : towerMatch(choice.level)),
       { w: Math.min(W - 72, 560), h: playH, variant: 'primary', big: true });
-    this._button('modes', cx, playY + playH / 2 + (portrait ? 48 : 36), 'другие режимы', '',
-      () => this.showModes(), { w: 300, h: portrait ? 56 : 48, titleSize: 22 });
+    // Под «Играть»: другие режимы и вызов друга — бок о бок
+    const subY = playY + playH / 2 + (portrait ? 48 : 36);
+    const subW = Math.min(300, (Math.min(W - 72, 560) - 16) / 2);
+    this._button('modes', cx - subW / 2 - 8, subY, 'другие режимы', '',
+      () => this.showModes(), { w: subW, h: portrait ? 56 : 48, titleSize: 22 });
+    this._button('challenge', cx + subW / 2 + 8, subY, 'вызвать друга', '',
+      () => this.challengeFriend(), { w: subW, h: portrait ? 56 : 48, titleSize: 22 });
 
     // Партия оборвалась (Telegram перезапустился, погас экран), а мы
     // открылись без ссылки: предлагаем вернуться, пока соперник ждёт
@@ -562,10 +578,9 @@ export default class MenuScene extends Phaser.Scene {
   _streakPopup() {
     const W = this.W, H = this.H, cx = W / 2;
     const st = dailyState();
-    const yesterday = st.streakDay && st.streakDay === prevDayOf(dayKey());
-    const day = yesterday ? st.streak + 1 : 1;
-    const coins = STREAK_COINS[Math.min(day, STREAK_COINS.length) - 1];
-    const box = day % STREAK_BOX_DAY === 0;
+    // Что даст «Забрать» — те же правила, что и само забирание (с заморозкой)
+    const pre = claimStreak(st, dayKey());
+    const day = pre.streak, coins = pre.coins, box = pre.box;
     const cy = this.topY(H * 0.42);
     const layer = [];
     const add = (o) => { o.setDepth(50); layer.push(o); this.items.push(o); return o; };
@@ -575,7 +590,8 @@ export default class MenuScene extends Phaser.Scene {
     ensureButton(this, `menu-streak-${pw}x${ph}`, pw, ph, 'normal');
     add(this.add.image(cx, cy, `menu-streak-${pw}x${ph}`));
     add(this.add.text(cx, cy - 160, `День ${day} подряд`, font(36, 800, UI.accent)).setOrigin(0.5));
-    add(this.add.text(cx, cy - 116, 'заходи каждый день — награда растёт', font(18, 700, UI.textDim)).setOrigin(0.5));
+    add(this.add.text(cx, cy - 116, pre.frozen ? 'вчера пропустил — заморозка спасла серию!' : 'заходи каждый день — награда растёт',
+      font(18, 700, pre.frozen ? '#8fe3ff' : UI.textDim)).setOrigin(0.5));
     // Семь кружков недели
     const n = STREAK_BOX_DAY, step = Math.min(78, (pw - 60) / n);
     const inWeek = ((day - 1) % n) + 1;
@@ -675,7 +691,7 @@ export default class MenuScene extends Phaser.Scene {
     if (wide) { cx = W * 0.79; y = 150; }
     y += 10;
     this.items.push(this.add.text(cx, y, st.streak > 0
-      ? `Серия: ${st.streak} ${plural(st.streak, 'день', 'дня', 'дней')} подряд · на ${STREAK_BOX_DAY}-й день — коробка`
+      ? `Серия: ${st.streak} ${plural(st.streak, 'день', 'дня', 'дней')} подряд · на ${STREAK_BOX_DAY}-й день — коробка · заморозок: ${st.freezes ?? 0}`
       : `Заходи каждый день: на ${STREAK_BOX_DAY}-й день подряд — коробка`,
       font(19, 700, UI.textDim)).setOrigin(0.5, 0).setAlign('center').setWordWrapWidth(wide ? W * 0.36 : cw));
 
@@ -698,7 +714,71 @@ export default class MenuScene extends Phaser.Scene {
           copyText(link);
         }
       }, { w: Math.min(cw, 460), h: 90, titleSize: 25, hintSize: 17, enabled: Boolean(link), variant: 'primary' });
+    // Куда тратить монеты, кроме коробок
+    this._button('cosmetics', cx, y + 212, 'Украшения', 'трос, след, надгробие · заморозка серии',
+      () => this.showCosmetics(), { w: Math.min(cw, 460), h: 90, titleSize: 25, hintSize: 17 });
     this._tabs('tasks');
+  }
+
+  // ------------------------------------------------------------ украшения
+
+  /**
+   * Украшения за монеты: по ряду на трос, след и надгробие. Купленное —
+   * тап, и надето; некупленное — цена, тап — купить и надеть. Внизу —
+   * заморозка серии.
+   */
+  showCosmetics() {
+    this.section = this.showCosmetics;
+    this._clear();
+    this._title('Украшения', 'на бой не влияют · соперник видит их тоже');
+    const W = this.W, cx = W / 2;
+    this._coinBadge(W - 40, 72, true);
+    const st = cosState();
+    const coins = dailyState().coins;
+    const toast = (msg, color = '#ff9a9a') => {
+      const t = this.add.text(cx, 150, msg, font(22, 800, color)).setOrigin(0.5).setDepth(60);
+      this.items.push(t);
+      this.tweens.add({ targets: t, alpha: 0, delay: 1400, duration: 400 });
+    };
+    let y = 176;
+    const rowH = this.portrait ? 92 : 70;
+    for (const kind of KINDS) {
+      this.items.push(this.add.text(cx, y, KIND_NAMES[kind], font(this.fs(15), 800, UI.accent)).setOrigin(0.5, 0));
+      y += 34;
+      const list = COSMETICS[kind];
+      const cols = this.portrait ? 3 : list.length;
+      const bw = Math.min(200, (W - 48 - (cols - 1) * 10) / cols), bh = rowH - 10;
+      list.forEach((it, i) => {
+        const x = cx + ((i % cols) - (cols - 1) / 2) * (bw + 10);
+        const yy = y + Math.floor(i / cols) * rowH + bh / 2;
+        const own = st.owned[kind].includes(it.id);
+        const on = st.equipped[kind] === it.id;
+        this._button(`cos-${kind}-${it.id}`, x, yy, it.name, on ? 'надето' : own ? 'надеть' : `${it.price} монет`, () => {
+          if (own) { equipCosmetic(kind, it.id); haptic('select'); this.showCosmetics(); return; }
+          const res = buyCosmetic(kind, it.id);
+          if (res === 'ok') { haptic('win'); sfx.play('pickup'); this.showCosmetics(); toast(`«${it.name}» куплено и надето`, '#8ef0a0'); return; }
+          haptic('warn'); toast('не хватает монет');
+        }, {
+          w: bw, h: bh, titleSize: this.portrait ? 21 : 18, hintSize: 15,
+          variant: on ? 'active' : 'normal', enabled: own || coins >= it.price,
+        });
+        // Образец цвета у троса и следа
+        if (it.color || it.rainbow) {
+          const c = it.rainbow ? 0xff7ad9 : it.color;
+          this.items.push(this.add.rectangle(x - bw / 2 + 12, yy, 8, bh - 22, c).setOrigin(0.5).setDepth(1));
+        }
+      });
+      y += Math.ceil(list.length / cols) * rowH + 12;
+    }
+    // Заморозка серии
+    const d = dailyState();
+    const full = (d.freezes ?? 0) >= FREEZE_MAX;
+    this._button('freeze', cx, y + 40, `Заморозка серии · ${FREEZE_PRICE}`,
+      `в запасе ${d.freezes ?? 0} из ${FREEZE_MAX} · спасает серию, если пропустил день · одна бесплатно в неделю`, () => {
+        if (buyStreakFreeze()) { haptic('win'); sfx.play('pickup'); this.showCosmetics(); toast('заморозка в запасе', '#8fe3ff'); return; }
+        haptic('warn'); toast(full ? 'запас полон' : 'не хватает монет');
+      }, { w: Math.min(W - 48, 620), h: 84, titleSize: 24, hintSize: 14, enabled: !full && d.coins >= FREEZE_PRICE });
+    this._back(() => this.showTasks());
   }
 
   /** Купить коробку и сразу перейти к скинам, где её можно открыть. */
@@ -733,7 +813,7 @@ export default class MenuScene extends Phaser.Scene {
     const W = this.W, cx = W / 2;
 
     // --- коробки ---
-    const full = st.owned.length >= SKINS.length;
+    const full = BOX_SKINS.every((s) => st.owned.includes(s.id));
     const boxY = 186;
     if (this.textures.exists('shot_crate_weapon')) {
       this.items.push(this.add.image(cx - 190, boxY, 'shot_crate_weapon')
@@ -754,7 +834,7 @@ export default class MenuScene extends Phaser.Scene {
 
     // Что ещё можно получить: скины, которых нет, минус неоткрытые коробки.
     // Коробку, в которой заведомо ничего не будет, не продаём
-    const left = SKINS.length - st.owned.length - st.boxes;
+    const left = BOX_SKINS.filter((s) => !st.owned.includes(s.id)).length - st.boxes;
     const can = inTelegram() && loggedIn();
 
     // --- сетка скинов ---
@@ -781,7 +861,7 @@ export default class MenuScene extends Phaser.Scene {
       const buy = !owned && can;
       this.items.push(this.add.text(x, y + ch / 2 - 16,
         owned ? (on ? 'надет' : skin.name) : buy ? `${SKIN_STARS} ⭐` : '???',
-        font(17, 800, on ? '#2a1c06' : owned ? UI.text : buy ? UI.accent : UI.textDim)).setOrigin(0.5));
+        font(17, 800, on ? '#2a1c06' : owned ? RARITY[skin.rarity]?.color ?? UI.text : buy ? UI.accent : UI.textDim)).setOrigin(0.5));
       if (owned) {
         plate.setInteractive({ useHandCursor: true });
         plate.on('pointerup', () => { haptic('select'); equipSkin(skin.id); this.showSkins(); });
@@ -899,7 +979,8 @@ export default class MenuScene extends Phaser.Scene {
       const hero = add(this.add.sprite(cx, cy + 70, sheet, 0).setOrigin(0.5, 0.92).setScale(0.2).setFlipX(true));
       hero.play(`${sheet}_win`);
       this.tweens.add({ targets: hero, scale: 3, duration: 520, ease: 'Back.easeOut' });
-      add(this.add.text(cx, cy - 200, 'Новый скин!', font(26, 800, UI.textDim)).setOrigin(0.5));
+      const rar = RARITY[skin.rarity] ?? RARITY.common;
+      add(this.add.text(cx, cy - 200, `Новый скин · ${rar.name}!`, font(26, 800, rar.color)).setOrigin(0.5));
       const name = add(this.add.text(cx, cy + 120, skin.name, font(48, 800, UI.accent)).setOrigin(0.5).setScale(0.3));
       this.tweens.add({ targets: name, scale: 1, duration: 420, delay: 180, ease: 'Back.easeOut' });
 
@@ -924,23 +1005,75 @@ export default class MenuScene extends Phaser.Scene {
     this._clear();
     this._title('Режимы');
     const cx = this.W / 2;
-    const y0 = 176, step = this.portrait ? 104 : 84;
-    const big = { w: Math.min(this.W - 64, 620), h: this.portrait ? 92 : 74, titleSize: 28, hintSize: 18 };
     const stars = totalStars(challengeStars());
     const done = ascentDone().size;
-    this._button('ascent', cx, y0, 'Кампания «Подъём»', `15 боёв на башне, монстры и Великан · пройдено ${done} из ${ASCENT.length}`,
-      () => this.showAscent(), { ...big, variant: 'primary' });
-    this._button('tower', cx, y0 + step, 'Башня', 'высокая арена и трос · выбрать соперника',
-      () => this.showTower(), big);
-    this._button('challenges', cx, y0 + step * 2, 'Испытания', `задачи на три звезды · собрано ★ ${stars} из ${CHALLENGES.length * 3}`,
-      () => this.showChallenges(), big);
-    this._button('online', cx, y0 + step * 3, 'Онлайн', 'бой с человеком на башне · рейтинг',
-      () => this.showOnline(), big);
-    this._button('campaign', cx, y0 + step * 4, 'Классика', 'старые миссии на широких картах · горизонтально',
-      () => this.showCampaign(), big);
-    this._button('quick', cx, y0 + step * 5, 'Свои правила', 'обычная карта, бот или вдвоём · горизонтально',
-      () => this.showQuick(), big);
+    const modes = [
+      ['ascent', 'Кампания «Подъём»', `${ASCENT.length} боёв, монстры и боссы · пройдено ${done} из ${ASCENT.length}`, () => this.showAscent()],
+      ['daily', 'Башня дня', 'одна башня на всех · таблица дня', () => this.showDailyTower()],
+      ['tower', 'Башня', 'высокая арена и трос · выбрать соперника', () => this.showTower()],
+      ['challenges', 'Испытания', `задачи на три звезды · ★ ${stars} из ${CHALLENGES.length * 3}`, () => this.showChallenges()],
+      ['online', 'Онлайн', 'бой с человеком на башне · рейтинг', () => this.showOnline()],
+      ['campaign', 'Классика', 'старые миссии на широких картах', () => this.showCampaign()],
+      ['quick', 'Свои правила', 'обычная карта, бот или вдвоём', () => this.showQuick()],
+    ];
+    // В портрете — столбиком, в ландшафте — в две колонки: семь не влезают
+    const cols = this.portrait ? 1 : 2;
+    const w = this.portrait ? Math.min(this.W - 64, 620) : Math.min(420, (this.W - 96) / 2);
+    const h = this.portrait ? 92 : 72, step = this.portrait ? 104 : 84;
+    const y0 = 176;
+    modes.forEach(([key, title, hint, go], i) => {
+      const x = cols === 1 ? cx : cx + ((i % 2) ? 1 : -1) * (w / 2 + 12);
+      const y = y0 + Math.floor(i / cols) * step;
+      this._button(key, x, y, title, hint, go,
+        { w, h, titleSize: 28, hintSize: 17, variant: i < 2 ? 'primary' : 'normal' });
+    });
     this._back();
+  }
+
+  // ------------------------------------------------------------- башня дня
+
+  /** Башня дня: таблица дня, моё место, «В бой». Без сервера — просто бой. */
+  async showDailyTower() {
+    this.section = this.showDailyTower;
+    this._clear();
+    this._title('Башня дня', 'одна башня на всех · меньше ходов — выше место');
+    const cx = this.W / 2;
+    const wait = this.add.text(cx, 190, 'загружаю таблицу…', font(this.fs(14), 700, UI.textDim)).setOrigin(0.5, 0);
+    this.items.push(wait);
+    const local = (() => {
+      const d = new Date();
+      return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+    })();
+    const res = await fetchDailyTower();
+    if (this.section !== this.showDailyTower) return;
+    wait.destroy();
+    const day = res?.day ?? local;
+    const w = Math.min(560, this.W - 48);
+    let y = 186;
+    if (res) {
+      const head = res.players ? `сегодня сыграли: ${res.players}` : 'сегодня ещё никто не играл — будь первым';
+      this.items.push(this.add.text(cx, y, head, font(this.fs(14), 700, UI.textDim)).setOrigin(0.5, 0));
+      y += 40;
+      res.top.slice(0, this.portrait ? 10 : 5).forEach((r, i) => {
+        const what = r.won ? `${r.turns} ${r.turns < 5 ? 'хода' : 'ходов'} · ${r.hp} hp` : 'не взял';
+        this.items.push(this.add.text(cx - w / 2, y, `${i + 1}. ${r.name}`, font(this.fs(15), 800, i < 3 ? UI.accent : UI.text)).setOrigin(0, 0));
+        this.items.push(this.add.text(cx + w / 2, y, what, font(this.fs(15), 700, UI.textDim)).setOrigin(1, 0));
+        y += this.portrait ? 40 : 30;
+      });
+      if (res.me) {
+        const me = res.me.won ? `${res.me.turns} ходов · ${res.me.hp} hp` : 'пока не взята';
+        this.items.push(this.add.text(cx, y + 8, `ты: место ${res.me.place} · ${me} · попыток ${res.me.tries}`,
+          font(this.fs(15), 800, '#8ef0a0')).setOrigin(0.5, 0));
+        y += 40;
+      }
+    } else {
+      this.items.push(this.add.text(cx, y, 'таблица дня — в Telegram', font(this.fs(14), 700, UI.textDim)).setOrigin(0.5, 0));
+      y += 40;
+    }
+    this._button('daily-go', cx, Math.max(y + 70, this.portrait ? 640 : 0), 'В бой', 'первая победа дня — +60 монет',
+      () => this.start(dailyMatch(day)),
+      this.portrait ? { variant: 'primary', w: 360, h: 96, titleSize: 30 } : { variant: 'primary', w: 320, h: 74 });
+    this._back(() => this.showModes());
   }
 
   // ------------------------------------------------------ кампания «Подъём»
@@ -951,15 +1084,20 @@ export default class MenuScene extends Phaser.Scene {
     this._clear();
     const done = ascentDone();
     this._title('Подъём', `пройдено ${done.size} из ${ASCENT.length} · коробки со скинами по пути`);
-    const cx = this.W / 2;
-    const w = Math.min(this.W - 64, 620), h = this.portrait ? 120 : 96;
+    const cx0 = this.W / 2;
+    // Четыре главы: в портрете столбиком, в ландшафте — два на два
+    const cols = this.portrait ? 1 : 2;
+    const w = this.portrait ? Math.min(this.W - 64, 620) : Math.min(420, (this.W - 96) / 2);
+    const h = this.portrait ? 120 : 96;
     const step = h + 18;
-    CHAPTERS.forEach((ch, i) => {
+    CHAPTERS.forEach((ch, idx) => {
+      const i = Math.floor(idx / cols);
+      const cx = cols === 1 ? cx0 : cx0 + (idx % 2 ? 1 : -1) * (w / 2 + 12);
       const list = ASCENT.filter((m) => m.chapter === ch.id);
       const first = ASCENT.indexOf(list[0]);
       const open = ascentOpen(first, done);
       const n = list.filter((m) => done.has(m.id)).length;
-      this._button(`chapter-${ch.id}`, cx, 196 + h / 2 + i * step, `${i + 1}. ${ch.title}`,
+      this._button(`chapter-${ch.id}`, cx, 196 + h / 2 + i * step, `${idx + 1}. ${ch.title}`,
         open ? `${n} из ${list.length}${n === list.length ? ' · пройдено' : ''}` : 'откроется после предыдущей главы',
         () => this.showAscentChapter(ch), {
           w, h, enabled: open, variant: open && n < list.length ? 'primary' : 'normal', titleSize: 30, hintSize: 20,
@@ -980,7 +1118,7 @@ export default class MenuScene extends Phaser.Scene {
       const i = ASCENT.indexOf(m);
       const open = ascentOpen(i, done);
       const won = done.has(m.id);
-      const tag = m.boss && !/Великан/.test(m.title) ? ' · Великан' : '';
+      const tag = m.boss && m.title !== bossName(m) && !m.title.includes(bossName(m)) ? ` · ${bossName(m)}` : '';
       this._button(`up-${m.id}`, cx, 186 + h / 2 + k * (h + gap), `${i + 1}. ${m.title}${tag}`,
         won ? '✓ пройдено' : open ? 'открыто' : 'откроется после предыдущего боя',
         () => this.showAscentBrief(m), {
@@ -998,13 +1136,16 @@ export default class MenuScene extends Phaser.Scene {
     const w = Math.min(640, this.W - 56);
     const mons = m.monsters ?? {};
     const parts = [];
-    if (m.boss) parts.push('Великан');
+    if (m.boss) parts.push(`босс: ${bossName(m)}`);
     if (mons.slime) parts.push(`слизней: ${mons.slime}`);
     if (mons.cactus) parts.push(`кактусов: ${mons.cactus}`);
     const sides = m.teams.length > 1
       ? `${m.teams[0].worms} против ${m.teams[1].worms}`
-      : `${m.teams[0].worms} бойца против Великана`;
-    const t = this.add.text(cx, 176, [m.brief, '', sides, parts.join(' · ')].join('\n'), font(this.fs(16), 700))
+      : `${m.teams[0].worms} бойца против босса`;
+    // Аффиксы уровня — что здесь особенного
+    const affixes = (m.affixes ?? DEFAULT_AFFIXES[chapterOf(m).variant] ?? []).map((id) => AFFIXES[id]).filter(Boolean);
+    const affixLines = affixes.length ? ['', ...affixes.map((a) => `◆ ${a.name}: ${a.desc}`)] : [];
+    const t = this.add.text(cx, 176, [m.brief, '', sides, parts.join(' · '), ...affixLines].join('\n'), font(this.fs(16), 700))
       .setOrigin(0.5, 0).setAlign('center').setWordWrapWidth(w - 40).setLineSpacing(6);
     this.items.push(t);
     this._button('start', cx, 176 + t.height + 90, 'В бой', '', () => this.start(ascentMatch(m.id)),
@@ -1575,9 +1716,15 @@ export default class MenuScene extends Phaser.Scene {
     this.items.push(this.add.text(cx, 268, 'код для друга', font(this.fs(12), 700, UI.textDim)).setOrigin(0.5, 0));
 
     const link = this.inviteLink(room);
-    // В Telegram зовём родным выбором чата, снаружи — буфером обмена
-    this._button('copy', cx, 330, 'Позвать друга', '',
-      () => {
+    // В Telegram зовём родным выбором чата: в башню — карточкой «вызов на
+    // бой» с кнопкой (Telegram 8.0+), иначе ссылкой; снаружи — буфером обмена
+    this._button('copy', cx, 330, isTowerRoom(room) ? 'Вызвать друга' : 'Позвать друга', '',
+      async () => {
+        trackStep('invite');
+        if (isTowerRoom(room) && inTelegram()) {
+          const id = await prepareChallenge(room, link);
+          if (shareMessage(id)) return;
+        }
         if (shareRoom(room, link)) return;
         copyText(link);
         // Подтверждение одно на все нажатия: иначе оно множится стопкой
@@ -1598,6 +1745,13 @@ export default class MenuScene extends Phaser.Scene {
 
   inviteLink(room) {
     return tgInviteLink(room);
+  }
+
+  /** Вызов с главного экрана: комната башни и сразу выбор чата для карточки. */
+  challengeFriend() {
+    const room = randomRoom(true, true);
+    this.showRoom(room);
+    if (inTelegram()) this.time.delayedCall(250, () => this.buttonHandlers?.copy?.());
   }
 
   // ---------------------------------------------------------------- старт

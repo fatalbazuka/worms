@@ -2,6 +2,8 @@ import { captureState, applyState, applyCommand, applyMove, stateHash } from './
 import { randomId } from './transport.js';
 import { player } from '../platform/player.js';
 import { equippedSkin } from '../platform/skins.js';
+import { myCosmetics } from '../platform/cosmetics.js';
+import { cleanEquipped } from '../core/cosmetics.js';
 import { CFG } from '../config.js';
 
 /**
@@ -96,6 +98,7 @@ export class NetSession {
       type: 'hello', id: this.id, seed: this.seed,
       name: this.me.name, rating: this.me.rating,
       skin: equippedSkin().id,   // в чём я выхожу — чтобы соперник видел меня таким же
+      cos: myCosmetics(),        // и с какими украшениями (трос, след, надгробие)
       pid: this.me.id,   // кто это по паспорту (tg<id>) — для отчёта серверу
       // Уже в партии: новичок обязан взять моё зерно и другую команду,
       // а не считать их из порядка идентификаторов
@@ -163,7 +166,8 @@ export class NetSession {
       this.opponent = { id: msg.pid ?? this.opponent?.id ?? null,
         name: msg.name ?? this.opponent?.name ?? 'Соперник',
         rating: msg.rating ?? this.opponent?.rating ?? 1000,
-        skin: msg.skin ?? this.opponent?.skin ?? null };
+        skin: msg.skin ?? this.opponent?.skin ?? null,
+        cos: msg.cos ? cleanEquipped(msg.cos) : this.opponent?.cos ?? null };
       this._hello();
       this._status('соперник вернулся');
       return;
@@ -172,6 +176,7 @@ export class NetSession {
     this.peerId = msg.id;
     this.opponent = {
       id: msg.pid ?? null, name: msg.name ?? 'Соперник', rating: msg.rating ?? 1000, skin: msg.skin ?? null,
+      cos: msg.cos ? cleanEquipped(msg.cos) : null,
     };
 
     let seed;

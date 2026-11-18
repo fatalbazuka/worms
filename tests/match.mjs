@@ -192,8 +192,9 @@ check('один в лобби никого не находит', findMatch(p('a'
   check('семь дней подряд — серия 7 и одна коробка',
     ss.streak === 7 && boxes === 1 && total === D.STREAK_COINS.reduce((a, b) => a + b, 0), `${ss.streak}, коробок ${boxes}`);
   check('дважды за день бонус не дают', D.claimStreak(ss, '2026-11-07').coins === 0);
-  const gap = D.claimStreak(ss, '2026-11-09');
-  check('пропустил день — серия с начала', gap.streak === 1 && gap.coins === D.STREAK_COINS[0]);
+  // Без заморозок в запасе (бесплатная за эту неделю уже выдана)
+  const gap = D.claimStreak({ ...ss, freezes: 0, freezeWeek: D.weekKey('2026-11-09') }, '2026-11-09');
+  check('пропустил день без заморозки — серия с начала', gap.streak === 1 && gap.coins === D.STREAK_COINS[0]);
 
   // Коробка за монеты
   check('без монет коробку не купить', !D.payForBox({ ...D.emptyState(), coins: D.BOX_PRICE - 1 }).ok);
@@ -257,6 +258,58 @@ check('один в лобби никого не находит', findMatch(p('a'
     && r3.coins === 0 && r3.best.first === 3);
   check('следующее испытание открывается после звезды в предыдущем',
     C.challengeOpen(0, {}) && !C.challengeOpen(1, {}) && C.challengeOpen(1, { first: 1 }));
+}
+
+// --- заморозка серии и украшения ---
+{
+  const D = await import('../src/core/daily.js');
+  const K = await import('../src/core/cosmetics.js');
+  // Пропустил один день: с заморозкой серия растёт, без — с начала
+  let st = { ...D.emptyState(), streak: 4, streakDay: '2026-11-16', freezes: 1, freezeWeek: D.weekKey('2026-11-18') };
+  let r = D.claimStreak(st, '2026-11-18');
+  check('заморозка: пропуск одного дня не сжигает серию, заморозка тратится',
+    r.streak === 5 && r.frozen && r.state.freezes === 0, JSON.stringify({ s: r.streak, f: r.state.freezes }));
+  r = D.claimStreak({ ...st, freezes: 0 }, '2026-11-18');
+  check('без заморозки пропуск — серия с начала', r.streak === 1 && !r.frozen);
+  r = D.claimStreak({ ...st, streakDay: '2026-11-15' }, '2026-11-18');
+  check('два пропущенных дня заморозка не спасает', r.streak === 1 && r.state.freezes === 1);
+  // Новая неделя — бесплатная заморозка, но не больше FREEZE_MAX
+  r = D.claimStreak({ ...D.emptyState(), streak: 2, streakDay: '2026-11-22', freezes: 0, freezeWeek: '2026-11-16' }, '2026-11-23');
+  const capped = D.claimStreak({ ...D.emptyState(), freezes: D.FREEZE_MAX, freezeWeek: '2026-11-16' }, '2026-11-23');
+  check('новая неделя — бесплатная заморозка, запас не больше максимума',
+    r.state.freezes === 1 && r.state.freezeWeek === '2026-11-23' && capped.state.freezes === D.FREEZE_MAX);
+  const bought = D.buyFreeze({ ...D.emptyState(), coins: D.FREEZE_PRICE, freezes: 0 });
+  const poor = D.buyFreeze({ ...D.emptyState(), coins: D.FREEZE_PRICE - 1 });
+  check('заморозку можно купить за монеты', bought.ok && bought.state.coins === 0 && bought.state.freezes === 1 && !poor.ok);
+  // Украшения: купить — списать и надеть; дважды не продаётся; мусор из сети чистится
+  const c0 = K.emptyCos();
+  const b = K.buyCos(c0, 'rope', 'gold', 500);
+  const again = K.buyCos(b.state, 'rope', 'gold', 500);
+  const cheap = K.buyCos(c0, 'grave', 'crown', 10);
+  check('украшение: покупка надевает, повтор и бедность — отказ',
+    b.ok && b.price === 200 && b.state.equipped.rope === 'gold' && !again.ok && !cheap.ok);
+  const merged = K.mergeCos({ owned: { rope: ['gold'] }, equipped: { rope: 'gold' } }, { owned: { trail: ['fire'] } });
+  const net = K.cleanEquipped({ rope: 'hacked', trail: 'fire', grave: 42 });
+  check('украшения: облако объединяет купленное, чужое из сети чистится',
+    merged.owned.rope.includes('gold') && merged.owned.trail.includes('fire') && merged.equipped.rope === 'gold'
+      && net.rope === 'classic' && net.trail === 'fire' && net.grave === 'ghost');
+}
+
+// --- редкость скинов: редкие выпадают реже, «только за звёзды» — не выпадают ---
+{
+  const K = await import('../src/core/skins.js');
+  const counts = {};
+  let seed = 7;
+  const rnd = () => { seed = (seed * 16807) % 2147483647; return seed / 2147483647; };
+  for (let i = 0; i < 3000; i++) {
+    const r = K.openBox({ ...K.emptyState(), boxes: 1 }, rnd);
+    const rar = K.SKIN_BY_ID[r.skin].rarity;
+    counts[rar] = (counts[rar] ?? 0) + 1;
+  }
+  const perSkin = (rar) => counts[rar] / K.BOX_SKINS.filter((s) => s.rarity === rar && s.id !== K.DEFAULT_SKIN).length;
+  check('коробка: обычный скин выпадает чаще редкого, редкий — чаще эпического',
+    perSkin('common') > perSkin('rare') * 1.4 && perSkin('rare') > perSkin('epic') * 1.8, JSON.stringify(counts));
+  check('у каждого скина есть редкость', K.SKINS.every((s) => K.RARITY[s.rarity]));
 }
 
 console.log(failures.length

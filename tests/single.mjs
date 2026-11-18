@@ -431,7 +431,107 @@ for (const id of upIds) {
   }, id);
   if (!ok) upBroken.push(id);
 }
-check('«Подъём»: все 15 боёв собираются, монстры на этажах', upBroken.length === 0, upBroken.join(','));
+check(`«Подъём»: все ${upIds.length} боёв собираются, монстры на этажах`, upIds.length === 20 && upBroken.length === 0, upBroken.join(','));
+
+// События мест: порыв метели толкает бойцов, извержение роняет лавовые бомбы
+const envEvent = async (id) => {
+  await page.evaluate(async (id) => {
+    const { ascentMatch } = await import('/src/core/match.js');
+    const g = window.__WORMS__.scene.getScene('Game');
+    g.registry.set('match', ascentMatch(id));
+    g.registry.set('seed', ascentMatch(id).seed);
+    g.scene.restart();
+  }, id);
+  await gameReady();
+  return page.evaluate(() => {
+    const s = window.__WORMS__.scene.getScene('Game');
+    s.hud.setHelp(false);
+    const before = s.worms.map((w) => w.x);
+    let turn = 0;
+    for (let t = 2; t <= 40 && !turn; t++) if (s.affixes.run(t)) turn = t;
+    return { turn, before };
+  });
+};
+const gust = await envEvent('up-6');
+await page.waitForTimeout(1500);
+const moved = await page.evaluate((before) => window.__WORMS__.scene.getScene('Game').worms
+  .filter((w, i) => Math.abs(w.x - before[i]) > 6).length, gust.before);
+check('Ледник: порыв метели сдвигает бойцов по ветру', gust.turn > 0 && moved >= 2, `ход ${gust.turn}, сдвинуто ${moved}`);
+const erupt = await envEvent('up-11');
+const bombs = await page.waitForFunction(() => window.__WORMS__.scene.getScene('Game').projectiles
+  .filter((p) => p.weapon.id === 'fireball').length, null, { timeout: 5000 }).then((h) => h.jsonValue()).catch(() => 0);
+check('Жерло: извержение — с неба падают лавовые бомбы', erupt.turn > 0 && bombs >= 1, `ход ${erupt.turn}, бомб ${bombs}`);
+// Жерло под ногами: трещина под бойцом, через круг ходов — извержение
+const vent = await envEvent('up-12');
+const ventFire = await page.evaluate(() => {
+  const s = window.__WORMS__.scene.getScene('Game');
+  const t = s.affixes.timers.find((x) => x.kind === 'vent');
+  if (!t) return null;
+  const hp = s.worms.reduce((a, w) => a + w.health, 0);
+  s.affixes.run(100); s.affixes.run(101);   // две фазы — круг ходов
+  return { left: s.affixes.timers.filter((x) => x.kind === 'vent').length, hpBefore: hp };
+});
+await page.waitForTimeout(700);
+const ventHp = await page.evaluate(() => window.__WORMS__.scene.getScene('Game').worms.reduce((a, w) => a + w.health, 0));
+check('жерло под ногами: трещина под бойцом, через круг ходов извергается и ранит',
+  vent.turn > 0 && ventFire && ventHp < ventFire.hpBefore, JSON.stringify({ turn: vent.turn, ...ventFire, ventHp }));
+// Сосульки: растут под потолком над бойцами и через круг падают
+const ice = await envEvent('up-7');
+const fell = await page.evaluate(() => {
+  const s = window.__WORMS__.scene.getScene('Game');
+  const n = s.affixes.timers.filter((x) => x.kind === 'icicle').length;
+  s.affixes.run(100); s.affixes.run(101);
+  return { n, falling: s.projectiles.filter((p) => p.weapon.id === 'icicle').length };
+});
+// Гроза: туча над вершиной, через круг молния выбивает кусок вершины
+const storm = await envEvent('up-2');
+const struck = await page.evaluate(() => {
+  const s = window.__WORMS__.scene.getScene('Game');
+  const peak = s.affixes._peak();
+  s.affixes.run(100); s.affixes.run(101);
+  return { x: peak.x, before: peak.y, after: s.terrain.surfaceYAt(peak.x, 0) };
+});
+check('гроза: молния бьёт в самую высокую точку и выбивает кусок',
+  storm.turn > 0 && struck.after > struck.before + 10, JSON.stringify({ turn: storm.turn, ...struck }));
+// Скачок гравитации: на ход тяжесть слабее, потом возвращается
+const grav = await page.evaluate(async () => {
+  const { ascentMatch } = await import('/src/core/match.js');
+  const g = window.__WORMS__.scene.getScene('Game');
+  g.registry.set('match', ascentMatch('up-17'));
+  g.registry.set('seed', ascentMatch('up-17').seed);
+  g.scene.restart();
+});
+await gameReady();
+const gv = await page.evaluate(async () => {
+  const { CFG } = await import('/src/config.js');
+  const s = window.__WORMS__.scene.getScene('Game');
+  const base = CFG.GRAVITY;
+  let low = null;
+  for (let t = 4; t <= 40 && low === null; t += 3) { s.affixes.run(t); if (CFG.GRAVITY < base) low = CFG.GRAVITY; }
+  s.affixes.run(200);
+  return { base, low, back: CFG.GRAVITY };
+});
+check('скачок гравитации: на ход тяжесть вдвое слабее, потом возвращается',
+  gv.low && Math.abs(gv.low - gv.base / 2) < 1 && gv.back === gv.base, JSON.stringify(gv));
+check('сосульки: растут над бойцами и через круг падают', ice.turn > 0 && fell.n > 0 && fell.falling === fell.n, JSON.stringify({ turn: ice.turn, ...fell }));
+
+// Башня дня: одна и та же башня от даты, бойцы и монстры на этажах
+await page.evaluate(async () => {
+  const { dailyMatch } = await import('/src/core/match.js');
+  const g = window.__WORMS__.scene.getScene('Game');
+  g.registry.set('match', dailyMatch('2026-11-18'));
+  g.registry.set('seed', dailyMatch('2026-11-18').seed);
+  g.scene.restart();
+});
+await gameReady();
+const daily = await page.evaluate(async () => {
+  const { dailySeed } = await import('/src/core/match.js');
+  const s = window.__WORMS__.scene.getScene('Game');
+  return { mode: s.match.mode, seed: s.seed === dailySeed('2026-11-18'), shape: s.shape.id, monsters: s.monsters.length, bots: s.match.teams[1].level };
+});
+check('башня дня собирается: зерно от даты, башня, 3 монстра, «Бойцы»',
+  daily.mode === 'daily' && daily.seed && daily.shape === 'tower' && daily.monsters === 3 && daily.bots === 'fighter',
+  JSON.stringify(daily));
 
 await page.evaluate(async () => {
   localStorage.removeItem('worms.ascent.v1');
@@ -462,7 +562,7 @@ for (let i = 0; i < 80; i++) {
 check('ход монстров: после хода игрока Великан кидает камень', rock);
 await page.evaluate(() => {
   const s = window.__WORMS__.scene.getScene('Game');
-  s.monsters.find((m) => m.kind === 'boss').damage(9999);
+  s.monsters.find((m) => m.def.boss).damage(9999);
   s.turn.endTurn();
 });
 const bossWin = await page.waitForFunction(() => window.__WORMS__.scene.getScene('Game').overButtons?.menu, null, { timeout: 20000 })

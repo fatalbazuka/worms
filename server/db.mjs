@@ -150,6 +150,30 @@ const MIGRATIONS = [
     where exists (select 1 from event e where e.player_id = player.id)
        or wins + losses > 0;
   `,
+  // 6: «Башня дня» — лучшая попытка игрока за день
+  `
+  create table daily_tower (
+    day        text not null,
+    player_id  text not null references player (id) on delete cascade,
+    won        integer not null,
+    turns      integer not null,
+    hp         integer not null,
+    tries      integer not null default 1,
+    created_at integer not null,
+    primary key (day, player_id)
+  );
+  `,
+  // 7: прогресс игры на сервере (скины, монеты, задания, кампания,
+  // украшения) — чтобы с сайта по логину был тот же аккаунт, что в Telegram
+  `
+  create table save_kv (
+    player_id  text not null references player (id) on delete cascade,
+    key        text not null,
+    value      text not null,
+    updated_at integer not null,
+    primary key (player_id, key)
+  );
+  `,
 ];
 
 export function openDb(path) {

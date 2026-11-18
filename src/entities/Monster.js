@@ -24,11 +24,40 @@ import { Weapon } from '../weapons/Weapon.js';
  * Урон от взрывов монстрам считает сцена (explode → hurtMonsters).
  */
 
+/**
+ * Боссы глав: у каждого свой снаряд, своя свита и свои картинки (стоит,
+ * бросает, повержен). Пока у нового босса нет картинки — рисуется тролль
+ * в его цвете (fallback + tint).
+ *   boss  — тролль-Великан (Подножие): камень, зовёт слизней;
+ *   yeti  — йети (Ледник): снежок замораживает — боец пропускает ход;
+ *   golem — лавовый голем (Жерло): огненный шар, взрыв шире;
+ *   slimeking — Король слизней (Космос): плюётся слизью, зовёт слизней чаще.
+ */
 const KINDS = {
-  slime: { hp: 30, w: 30, h: 22, image: 'mon_slime', size: 38, name: 'Слизень' },
-  cactus: { hp: 40, w: 30, h: 46, image: 'emoji_cactus', size: 60, name: 'Кактус' },
-  boss: { hp: 400, w: 96, h: 100, image: 'emoji_ogre', size: 132, name: 'Великан' },
+  slime: { hp: 30, w: 32, h: 26, image: 'mon_slime', size: 44, name: 'Слизень' },
+  cactus: { hp: 40, w: 30, h: 52, image: 'mon_cactus', size: 64, name: 'Кактус' },
+  boss: {
+    boss: true, hp: 400, w: 100, h: 140, image: 'mon_boss', size: 156, name: 'Великан',
+    throw: 'mon_boss_throw', down: 'mon_boss_down', shot: 'rock', every: 3, escort: 'slime',
+  },
+  yeti: {
+    boss: true, hp: 420, w: 100, h: 140, image: 'mon_yeti', size: 156, name: 'Йети',
+    throw: 'mon_yeti_throw', down: 'mon_yeti_down', shot: 'snowball', every: 3, escort: 'slime',
+    fallback: 'mon_boss', tint: 0x9fd0ff,
+  },
+  golem: {
+    boss: true, hp: 520, w: 100, h: 140, image: 'mon_golem', size: 160, name: 'Лавовый голем',
+    throw: 'mon_golem_throw', down: 'mon_golem_down', shot: 'fireball', every: 3, escort: 'cactus',
+    fallback: 'mon_boss', tint: 0xff6a3a,
+  },
+  slimeking: {
+    boss: true, hp: 460, w: 110, h: 100, image: 'mon_slime', size: 120, name: 'Король слизней',
+    shot: 'goo', every: 2, escort: 'slime',
+  },
 };
+
+/** Это босс — его повалить и есть победа. */
+export const isBoss = (kind) => Boolean(KINDS[kind]?.boss);
 
 const SLIME_STEP = 95;          // сколько проползает за ход монстров, px
 const SLIME_SPEED = 90;         // px/с
@@ -36,12 +65,31 @@ const SLIME_BURST = { radius: 20, damageRadius: 54, damage: 28, knockback: 260, 
 const CACTUS_BURST = { radius: 30, damageRadius: 70, damage: 34, knockback: 320, shake: 0.007 };
 const CACTUS_PRICK = 10;
 
-/** Камень босса: тяжёлый, ветер его почти не сносит. Не в арсенале игрока. */
+/** Снаряды боссов: тяжёлые, ветер их почти не сносит. Не в арсенале игрока. */
 export const ROCK = new Weapon({
   id: 'rock', name: 'Камень', color: 0x8a7a66,
   projectile: { radius: 9, windScale: 0.15, gravityScale: 1 },
   explosion: { radius: 38, damageRadius: 76, damage: 34, knockback: 330, shake: 0.008 },
 });
+const BOSS_SHOTS = {
+  rock: ROCK,
+  // Снежок слабее, но кого заденет — тот замерзает и пропускает свой ход
+  snowball: new Weapon({
+    id: 'snowball', name: 'Снежок', color: 0xe8f6ff,
+    projectile: { radius: 9, windScale: 0.15, gravityScale: 1 },
+    explosion: { radius: 28, damageRadius: 70, damage: 22, knockback: 220, shake: 0.006, freeze: true },
+  }),
+  fireball: new Weapon({
+    id: 'fireball', name: 'Огненный шар', color: 0xff7a2a,
+    projectile: { radius: 10, windScale: 0.1, gravityScale: 1 },
+    explosion: { radius: 50, damageRadius: 92, damage: 36, knockback: 360, shake: 0.011 },
+  }),
+  goo: new Weapon({
+    id: 'goo', name: 'Слизь', color: 0x8ee04a,
+    projectile: { radius: 8, windScale: 0.3, gravityScale: 1 },
+    explosion: { radius: 26, damageRadius: 64, damage: 26, knockback: 260, shake: 0.005 },
+  }),
+};
 
 export class Monster {
   constructor(scene, kind, x, y, hp = null) {
@@ -62,13 +110,19 @@ export class Monster {
     this.acts = 0;
     this.cool = new Map();
 
-    if (has(scene, k.image)) {
-      const sheet = scene.textures.get(k.image).frameTotal > 2;
+    // Нет своей картинки — запасная в цвете босса
+    this.imageKey = has(scene, k.image) ? k.image : (k.fallback && has(scene, k.fallback) ? k.fallback : k.image);
+    if (has(scene, this.imageKey)) {
+      const key = this.imageKey;
+      const sheet = scene.textures.get(key).frameTotal > 2;
       this.view = sheet
-        ? scene.add.sprite(x, y, k.image, 0).setOrigin(0.5, 0.92)
-        : scene.add.image(x, y, k.image).setOrigin(0.5, 1);
-      this.view.setScale(sheet ? k.size / 100 : fitScale(scene, k.image, k.size));
-      if (sheet && scene.anims.exists(`${k.image}_idle`)) this.view.play(`${k.image}_idle`);
+        ? scene.add.sprite(x, y, key, 0).setOrigin(0.5, 0.92)
+        : scene.add.image(x, y, key).setOrigin(0.5, 1);
+      // Размер — по высоте: тролль на картинке шире, чем выше
+      const src = scene.textures.get(key).getSourceImage();
+      this.view.setScale(sheet ? k.size / 100 : k.size / (src.height || k.size));
+      if (sheet && scene.anims.exists(`${key}_idle`)) this.view.play(`${key}_idle`);
+      if (key !== k.image && k.tint) this.view.setTint(k.tint);
     } else {
       this.view = scene.add.ellipse(x, y - k.h / 2, k.w, k.h, kind === 'cactus' ? 0x4caf50 : 0x8bd34a);
     }
@@ -105,7 +159,7 @@ export class Monster {
       this.busy = true;
       return true;
     }
-    if (this.kind === 'boss') return this._bossAct();
+    if (this.def.boss) return this._bossAct();
     return false;
   }
 
@@ -122,13 +176,14 @@ export class Monster {
   _bossAct() {
     const t = this._nearest();
     if (!t) return false;
-    // Каждый третий ход — подмога: по слизню с каждой стороны
-    if (this.acts % 3 === 0) {
+    // Раз в несколько ходов — подмога: по монстру свиты с каждой стороны
+    if (this.acts % this.def.every === 0) {
       for (const dx of [-70, 70]) {
         const x = Math.max(40, Math.min(this.terrain.width - 40, this.x + dx));
-        this.scene.addMonster('slime', x, this.y - 30);
+        this.scene.addMonster(this.def.escort, x, this.y - 30);
       }
-      this.scene.fx.banner('Великан зовёт слизней!', '#b4f08a', 1400);
+      const who = this.def.escort === 'cactus' ? 'кактусы' : 'слизней';
+      this.scene.fx.banner(`${this.def.name}: на помощь ${who}!`, '#b4f08a', 1400);
     }
     // Камень навесом: угол 55°, скорость — чтобы долететь до цели без учёта
     // земли и ветра. Мажет ровно настолько, насколько мешают этажи
@@ -144,12 +199,32 @@ export class Monster {
     this.facing = dir;
     // Камень вылетает из-за плеча, снаружи самого Великана
     const p = new Projectile(this.scene, this.x + dir * (this.def.w / 2 + 14), this.top - 14,
-      dir * v * cos, -v * Math.sin(ang), ROCK, null);
+      dir * v * cos, -v * Math.sin(ang), BOSS_SHOTS[this.def.shot] ?? ROCK, null);
     this.scene.projectiles.push(p);
-    this.view.setScale(this.baseScale * 1.08);
-    this.scene.tweens.add({ targets: this.view, scale: this.baseScale, duration: 260 });
+    // Поза броска: снаряд над головой — и обратно
+    if (this.def.throw) this._pose(has(this.scene, this.def.throw) ? this.def.throw : 'mon_boss_throw', 650);
+    else this._squish();
     this.scene.fx.sound('shot');
     return true;
+  }
+
+  /** Сменить картинку на время (поза), размер — по той же высоте. */
+  _pose(key, ms) {
+    if (!has(this.scene, key) || !this.view?.setTexture) return;
+    const h = this.def.size;
+    const set = (k) => {
+      if (!this.alive || !this.view?.active) return;
+      this.view.setTexture(k);
+      this.view.setScale(h / (this.scene.textures.get(k).getSourceImage().height || h));
+    };
+    set(key);
+    this.scene.time.delayedCall(ms, () => set(this.imageKey));
+  }
+
+  /** Плевок без отдельной позы: сжался и распрямился. */
+  _squish() {
+    const s = this.view?.scaleY ?? 1;
+    this.scene.tweens.add({ targets: this.view, scaleY: { from: s * 0.75, to: s }, duration: 320, ease: 'Back.easeOut' });
   }
 
   damage(amount) {
@@ -157,7 +232,11 @@ export class Monster {
     this.hp = Math.max(0, this.hp - amount);
     this.scene.fx.damageNumber(this.x, this.centerY - 10, amount);
     this.view.setTintFill?.(0xffffff);
-    this.scene.time.delayedCall(90, () => { if (this.alive) this.view.clearTint?.(); });
+    this.scene.time.delayedCall(90, () => {
+      if (!this.alive) return;
+      this.view.clearTint?.();
+      if (this.imageKey !== this.def.image && this.def.tint) this.view.setTint(this.def.tint);
+    });
     if (this.hp <= 0) this.die();
   }
 
@@ -170,8 +249,18 @@ export class Monster {
     this.destroyView();
     if (this.kind === 'cactus') this.scene.explode(x, y, CACTUS_BURST, null);
     else if (this.kind === 'slime') this.scene.fx.splash?.(x, this.y);
-    else if (this.kind === 'boss') {
-      this.scene.fx.banner('Великан повержен!', '#ffe27a', 2000);
+    else if (this.def.boss) {
+      this.scene.fx.banner(`${this.def.name} повержен!`, '#ffe27a', 2000);
+      // Сидит, оглушённый, со звёздочками — и тает
+      const k = this.def.down && (has(this.scene, this.def.down) ? this.def.down
+        : this.imageKey === 'mon_boss' ? 'mon_boss_down' : null);
+      if (k && has(this.scene, k)) {
+        const down = this.scene.rig.world(this.scene.add.image(x, this.y, k).setOrigin(0.5, 1)
+          .setScale((this.def.size * 0.82) / (this.scene.textures.get(k).getSourceImage().height || 1))
+          .setDepth(DEPTH.WORM).setFlipX(this.facing > 0));
+        if (k !== this.def.down && this.def.tint) down.setTint(this.def.tint);
+        this.scene.tweens.add({ targets: down, alpha: 0, delay: 2600, duration: 900, onComplete: () => down.destroy() });
+      }
       this.scene.explode(x, y, { radius: 50, damageRadius: 0, damage: 0, knockback: 0, shake: 0.014 }, null);
     }
     this.scene.onMonsterDied?.(this);

@@ -8,10 +8,16 @@ import { subRng } from '../core/rng.js';
  * Фон — крупные эмодзи за башней (горы, солнце, облака, деревья), на
  * параллаксе, полупрозрачные. Их не трогает ничего.
  *
- * Предметы на этажах — деревья, грибы, камни, ящики, бочки. Бойцам не
- * мешают и пули не ловят, но взрыв рядом их ломает: предмет лопается
- * осколками. Бочка ещё и взрывается сама — цепочка через бочки рядом.
- * Пол под предметом снесли — падает вместе с обломками.
+ * Предметы на этажах двух видов.
+ *
+ * Укрытия (SOLID: деревья, камни, ящики, грибы, снеговики, лёд) впечатаны
+ * в саму землю (Terrain.stamp): ловят снаряды, на них можно встать, взрыв
+ * выгрызает из них куски так же, как из земли. За камнем можно спрятаться,
+ * но его можно и снести.
+ *
+ * Мелочь (трава, цветы) и бочки — отдельные предметы: бойцам не мешают,
+ * взрыв рядом их ломает — лопаются осколками. Бочка ещё и взрывается сама —
+ * цепочка через бочки рядом. Пол под ними снесли — падают.
  *
  * Расстановка — от зерна партии, поэтому у обоих игроков по сети она
  * одинаковая. Ломает их взрыв; у смотрящего чужой ход взрывы приходят
@@ -39,12 +45,35 @@ const THEMES = {
     props: ['rock', 'mushroom', 'bricks', 'box', 'barrel', 'barrel'],
     back: ['volcano', 'fire', 'mountain', 'cloud', 'volcano'],
   },
+  space: {
+    props: ['rock', 'gem', 'gem', 'satellite', 'rocket', 'barrel'],
+    back: ['planet', 'moon', 'star', 'comet', 'ufo'],
+  },
 };
 
 const SIZE = {
   tree: 84, pine: 84, palm: 88, mushroom: 52, herb: 46, sunflower: 62, rock: 52, box: 48,
-  barrel: 52, snowman: 70, ice: 48, bricks: 54,
+  barrel: 52, snowman: 70, ice: 48, bricks: 54, gem: 50, satellite: 60, rocket: 70,
 };
+
+/**
+ * Силуэт укрытия в долях размера s, от точки «низ по центру»: что из
+ * картинки станет землёй. Чуть уже самой картинки — края эмодзи не держат.
+ * [kind, x, y, w, h]: x от центра, y вверх от низа (отрицательный).
+ */
+const SILHOUETTE = {
+  tree: [['rect', -0.08, -0.36, 0.16, 0.36], ['ellipse', -0.4, -0.95, 0.8, 0.66]],
+  pine: [['rect', -0.07, -0.2, 0.14, 0.2], ['ellipse', -0.33, -0.95, 0.66, 0.8]],
+  palm: [['rect', -0.07, -0.7, 0.14, 0.7], ['ellipse', -0.42, -0.98, 0.84, 0.36]],
+  rock: [['ellipse', -0.43, -0.6, 0.86, 0.6]],
+  box: [['rect', -0.38, -0.78, 0.76, 0.78]],
+  ice: [['rect', -0.38, -0.78, 0.76, 0.78]],
+  bricks: [['rect', -0.45, -0.62, 0.9, 0.62]],
+  mushroom: [['rect', -0.13, -0.42, 0.26, 0.42], ['ellipse', -0.43, -0.9, 0.86, 0.52]],
+  snowman: [['ellipse', -0.3, -0.58, 0.6, 0.58], ['ellipse', -0.21, -0.98, 0.42, 0.44]],
+  gem: [['ellipse', -0.4, -0.8, 0.8, 0.8]],
+};
+export const SOLID = new Set(Object.keys(SILHOUETTE));
 
 const BARREL_BLAST = { radius: 34, damageRadius: 70, damage: 30, knockback: 300, shake: 0.008 };
 
@@ -56,6 +85,7 @@ export class Props {
     this.rng = subRng(seed >>> 0, SALT);
     this.items = [];
     this.backs = [];
+    this.stamped = [];
     this._tick = 0;
   }
 
@@ -82,7 +112,7 @@ export class Props {
     const n = 7;
     for (let i = 0; i < n; i++) {
       const name = this.theme.back[r.int(0, this.theme.back.length - 1)];
-      const high = name === 'cloud' || name === 'sun' || name === 'snowflake';
+      const high = ['cloud', 'sun', 'snowflake', 'planet', 'moon', 'star', 'comet', 'ufo'].includes(name);
       const x = (W / n) * (i + 0.2 + r() * 0.6);
       const y = high ? ground - 520 - r() * 900 : ground + 10;
       const size = high ? 130 + r() * 80 : 240 + r() * 160;
@@ -104,17 +134,34 @@ export class Props {
     }
     const want = Math.min(14, Math.max(6, Math.round(spots.length / 14)));
     for (const p of spots) {
-      if (this.items.length >= want) break;
+      const all = [...this.items, ...this.stamped];
+      if (all.length >= want) break;
       if (avoid.some((a) => Math.hypot(a.x - p.x, a.y - p.y) < 56)) continue;
-      if (this.items.some((q) => Math.hypot(q.x - p.x, q.y - p.y) < 100)) continue;
+      if (all.some((q) => Math.hypot(q.x - p.x, q.y - p.y) < 100)) continue;
       const name = this.theme.props[r.int(0, this.theme.props.length - 1)];
       const size = SIZE[name] ?? 36;
+      if (SOLID.has(name)) {
+        this._stamp(name, p.x, p.y + 2, size);
+        continue;
+      }
       const img = this._img(name, p.x, p.y + 3, size);
       if (!img) continue;
       img.setDepth(DEPTH.WORM - 2).setFlipX(r() < 0.5);
       this.scene.rig.world(img);
       this.items.push({ name, x: p.x, y: p.y + 3, size, img, vy: 0, alive: true });
     }
+  }
+
+  /** Укрытие — в землю: силуэт твердью, картинка поверх. */
+  _stamp(name, x, y, size) {
+    const shapes = SILHOUETTE[name].map(([kind, sx, sy, sw, sh]) => ({
+      kind, x: Math.round(x + sx * size), y: Math.round(y + sy * size),
+      w: Math.round(sw * size), h: Math.round(sh * size),
+    }));
+    const key = `emoji_${name}`;
+    const src = has(this.scene, key) ? this.scene.textures.get(key).getSourceImage() : null;
+    this.terrain.stamp(shapes, src && { src, x: x - size / 2, y: y - size, w: size, h: size });
+    this.stamped.push({ name, x, y, size });
   }
 
   /**
@@ -177,6 +224,7 @@ export class Props {
     }
   }
 
+  /** Сколько отдельных (не впечатанных) предметов цело. */
   get count() { return this.items.filter((it) => it.alive).length; }
 
   destroy() {

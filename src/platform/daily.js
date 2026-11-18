@@ -8,8 +8,9 @@
  */
 import {
   normalize, rollDay, addBattle, claimTask, claimStreak, payForBox, hasReward, dayKey, mergeDaily,
+  buyFreeze, spendCoins,
 } from '../core/daily.js';
-import { inTelegram, cloudGet, cloudSet } from './telegram.js';
+import { cloudReady, cloudLoad, cloudSave } from './cloud.js';
 import { grantBoxes, allSkinsOwned } from './skins.js';
 
 const STORE_KEY = 'worms.daily.v1';
@@ -24,17 +25,19 @@ function load() {
 function save(state) {
   const raw = JSON.stringify(state);
   try { localStorage.setItem(STORE_KEY, raw); } catch { /* инкогнито */ }
-  if (inTelegram()) cloudSet(STORE_KEY, raw);
+  cloudSave(STORE_KEY, raw);
   for (const fn of listeners) fn(state);
   return state;
 }
 
 /** Подтянуть облачную копию кошелька и заданий и свести с местной. */
 export async function syncDailyCloud() {
-  if (!inTelegram()) return;
-  let cloud = null;
-  try { cloud = JSON.parse((await cloudGet(STORE_KEY)) ?? 'null'); } catch { cloud = null; }
-  if (cloud) save(rollDay(mergeDaily(load(), cloud), dayKey()));
+  if (!cloudReady()) return;
+  let st = load();
+  for (const raw of await cloudLoad(STORE_KEY)) {
+    try { st = mergeDaily(st, JSON.parse(raw)); } catch { /* битая копия — мимо */ }
+  }
+  save(rollDay(st, dayKey()));
 }
 
 /** Подписка на изменения кошелька — меню перерисовывает счётчик. */
@@ -70,7 +73,7 @@ export function claimDailyStreak() {
   if (!res.coins) return null;
   save(res.state);
   if (res.box) grantBoxes(1);
-  return { coins: res.coins, box: res.box, streak: res.streak };
+  return { coins: res.coins, box: res.box, streak: res.streak, frozen: res.frozen };
 }
 
 /** Начислить монеты (звёзды испытаний). */
@@ -78,6 +81,20 @@ export function grantCoins(n) {
   if (!(n > 0)) return;
   const st = load();
   save({ ...st, coins: st.coins + Math.floor(n) });
+}
+
+/** Купить заморозку серии. @returns {boolean} */
+export function buyStreakFreeze() {
+  const res = buyFreeze(load());
+  if (res.ok) save(res.state);
+  return res.ok;
+}
+
+/** Списать монеты. @returns {boolean} хватило ли */
+export function payCoins(n) {
+  const res = spendCoins(load(), n);
+  if (res.ok) save(res.state);
+  return res.ok;
 }
 
 /**

@@ -19,6 +19,7 @@
  */
 import { createHash } from 'node:crypto';
 import { shopItem } from './shop.mjs';
+import { hashPassword, newPassword } from './lib/accounts.js';
 
 export const DONATE_AMOUNTS = [10, 50, 100];
 
@@ -211,6 +212,7 @@ export function createBot({ db, api, players, tournaments, analytics = null, adm
     '/refund CHARGE_ID — вернуть платёж звёздами',
     '/stars — сколько звёзд пришло',
     '/metrics — игроки, новички, бои, возврат на второй день',
+    '/web TG_ID логин — выдать вход на сайт (пароль придумаю сам; повтор — новый пароль)',
   ].join('\n');
 
   async function onCommand(msg) {
@@ -230,8 +232,10 @@ export function createBot({ db, api, players, tournaments, analytics = null, adm
       case '/stats': return send(chat, statsText(me), playButton());
       case '/top': return send(chat, topText(), playButton());
       case '/tours': return send(chat, toursText(), playButton('🏆 Турниры', '?tour=list'));
+      case '/id':
+        return send(chat, `Твой id: ${msg.from.id}. Его спросит админ, чтобы выдать вход на сайт.`);
       case '/help':
-        return send(chat, '/stats — статистика\n/top — топ-10\n/tours — турниры'
+        return send(chat, '/stats — статистика\n/top — топ-10\n/tours — турниры\n/id — твой id'
           + '\n/mute — не напоминать о серии\n/unmute — снова напоминать'
           + (admin ? `\n\n${ADMIN_HELP}` : ''), playButton());
       case '/mute':
@@ -289,6 +293,19 @@ export function createBot({ db, api, players, tournaments, analytics = null, adm
       }
       case '/metrics':
         return send(chat, analytics ? analytics.report() : 'Статистика не подключена.');
+      case '/web': {
+        // Вход на сайт: логин и пароль к уже существующему игроку из Telegram
+        const who = players.byId(`tg${Number(args[0])}`);
+        const login = String(args[1] ?? '').toLowerCase();
+        if (!who) return send(chat, 'Нет такого игрока. Пусть он откроет игру или напишет боту /start, потом /id.');
+        if (!/^[a-z0-9_.-]{3,24}$/.test(login)) return send(chat, 'Логин: 3–24 знака, латиница, цифры, _ . -');
+        const taken = players.byLogin(login);
+        if (taken && taken.id !== who.id) return send(chat, `Логин «${login}» уже занят.`);
+        const password = newPassword();
+        players.setLogin(who.id, login, hashPassword(password));
+        const site = publicUrl ? `\nСайт: ${publicUrl}` : '';
+        return send(chat, `Вход на сайт для ${who.name}:\nлогин: ${login}\nпароль: ${password}${site}`);
+      }
       default:
         return send(chat, `Не знаю такой команды.\n${ADMIN_HELP}`);
     }
@@ -379,8 +396,36 @@ export function createBot({ db, api, players, tournaments, analytics = null, adm
     return true;
   }
 
+  /**
+   * Вызов на бой карточкой: сообщение с кнопкой «Принять вызов», которое
+   * игра покажет родным окном Telegram «поделиться» (WebApp.shareMessage).
+   * Кнопка — ссылка в мини-приложение сразу в комнату вызвавшего.
+   * @returns {Promise<string|null>} id подготовленного сообщения
+   */
+  async function prepareChallenge(player, room, link) {
+    if (!player?.tg_id) return null;
+    const res = await api.call('savePreparedInlineMessage', {
+      user_id: Number(player.tg_id),
+      result: {
+        type: 'article',
+        id: `ch-${room}`.slice(0, 64),
+        title: 'Вызов на бой ⚔️',
+        description: `${player.name} зовёт на башню`,
+        input_message_content: {
+          message_text: `⚔️ ${player.name} вызывает тебя на бой на башне!\n`
+            + 'Тросы, рогатка и смайлики. Жми кнопку — и сразу в бой.',
+        },
+        reply_markup: { inline_keyboard: [[{ text: '⚔️ Принять вызов', url: link }]] },
+      },
+      allow_user_chats: true,
+      allow_group_chats: true,
+    });
+    return res?.id ?? null;
+  }
+
   return {
     handleUpdate, setup, notify, notifyAdmins, refund, donateInvoice, tourInvoice, shopInvoice, remind,
+    prepareChallenge,
     get username() { return username; },
   };
 }

@@ -7,9 +7,9 @@
  * останутся теми же снаружи.
  */
 import {
-  SKINS, SKIN_BY_ID, DEFAULT_SKIN, normalize, claimBoxes, openBox, equip, mergeSkins, applyOwned,
+  SKINS, SKIN_BY_ID, DEFAULT_SKIN, BOX_SKINS, normalize, claimBoxes, openBox, equip, mergeSkins, applyOwned,
 } from '../core/skins.js';
-import { inTelegram, cloudGet, cloudSet } from './telegram.js';
+import { cloudReady, cloudLoad, cloudSave } from './cloud.js';
 import { MISSIONS, loadProgress } from '../campaign/missions.js';
 import { ASCENT } from '../campaign/ascent.js';
 import { ascentDone } from './ascent.js';
@@ -24,16 +24,18 @@ function save(state) {
   const raw = JSON.stringify(state);
   try { localStorage.setItem(STORE_KEY, raw); } catch { /* инкогнито */ }
   // Копия в облаке Telegram: сменил телефон — скины с тобой
-  if (inTelegram()) cloudSet(STORE_KEY, raw);
+  cloudSave(STORE_KEY, raw);
   return state;
 }
 
 /** Подтянуть облачную копию и свести с местной. Зовётся при запуске. */
 export async function syncSkinsCloud() {
-  if (!inTelegram()) return;
-  let cloud = null;
-  try { cloud = JSON.parse((await cloudGet(STORE_KEY)) ?? 'null'); } catch { cloud = null; }
-  if (cloud) save(mergeSkins(load(), cloud));
+  if (!cloudReady()) return;
+  let st = load();
+  for (const raw of await cloudLoad(STORE_KEY)) {
+    try { st = mergeSkins(st, JSON.parse(raw)); } catch { /* битая копия — мимо */ }
+  }
+  save(st);
 }
 
 /**
@@ -71,7 +73,7 @@ export function grantBoxes(n = 1) {
 
 /** Собраны ли все скины — тогда коробку покупать незачем. */
 export function allSkinsOwned() {
-  return load().owned.length >= SKINS.length;
+  return BOX_SKINS.every((s) => load().owned.includes(s.id));
 }
 
 /**

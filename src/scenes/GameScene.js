@@ -10,7 +10,9 @@ import { Crate } from '../entities/Crate.js';
 import { Mine } from '../entities/Mine.js';
 import { Spring } from '../entities/Spring.js';
 import { Props } from '../entities/Props.js';
-import { Monster } from '../entities/Monster.js';
+import { Monster, isBoss } from '../entities/Monster.js';
+import { Ambience } from '../ui/Ambience.js';
+import { Affixes, DEFAULT_AFFIXES } from '../entities/Affixes.js';
 import { Hud, TOP_H } from '../ui/Hud.js';
 import { Fx } from '../ui/Fx.js';
 import { AimController } from '../ui/AimController.js';
@@ -34,11 +36,13 @@ import { Bot } from '../ai/Bot.js';
 import { markDone, MISSION_BY_ID } from '../campaign/missions.js';
 import { checkObjective, snapshot, objectiveText } from '../campaign/objectives.js';
 import { player, eloDelta, recordResult } from '../platform/player.js';
-import { reportResult, serverAvailable, track, trackStep } from '../net/server.js';
+import { reportResult, serverAvailable, track, trackStep, submitDailyTower } from '../net/server.js';
 import { leagueOf, nextLeague, toNextLeague } from '../platform/league.js';
 import { OffscreenMarkers } from '../ui/OffscreenMarkers.js';
 import { SKIN_BY_ID, rivalSkin } from '../core/skins.js';
 import { equippedSkin, syncCampaignBoxes } from '../platform/skins.js';
+import { myCosmetics } from '../platform/cosmetics.js';
+import { DEFAULTS as DEFAULT_COS } from '../core/cosmetics.js';
 import { recordBattle } from '../platform/daily.js';
 import { TASK_BY_ID } from '../core/daily.js';
 import { EMOTE_BY_ID, EMOTE_COOLDOWN } from '../core/emotes.js';
@@ -49,6 +53,11 @@ import { CameraRig } from '../ui/CameraRig.js';
 import { voice } from '../audio/Voice.js';
 import { askText, closeOverlay } from '../ui/Overlay.js';
 import { isDesktop, aimScheme } from '../platform/device.js';
+
+
+// Тяжесть и длина троса без правил партии: космос их меняет на один бой
+const BASE_GRAVITY = CFG.GRAVITY;
+const BASE_HOOK_RANGE = CFG.HOOK_RANGE;
 
 export default class GameScene extends Phaser.Scene {
   constructor() { super('Game'); }
@@ -82,8 +91,12 @@ export default class GameScene extends Phaser.Scene {
       : null;
     if (this.variant) {
       const v = this.variant.rules;
-      this.rules = { ...this.rules, ...v, flood: v.flood ?? this.rules.flood };
+      this.rules = { ...this.rules, ...v, flood: 'flood' in v ? v.flood : this.rules.flood };
     }
+    // Тяжесть и длина троса — от правил (космос); иначе как всегда.
+    // CFG общий на всю игру, поэтому выставляем каждый раз заново
+    CFG.GRAVITY = BASE_GRAVITY * (Number(this.rules.gravity) || 1);
+    CFG.HOOK_RANGE = BASE_HOOK_RANGE * (Number(this.rules.hookRange) || 1);
     // Крюк-трос: сколько раз за ход. Ноль — крюка в партии нет. Вместе с
     // ним приходит и новая схема под палец: рогатка, тап, любая ориентация
     this.hookPerTurn = Math.max(0, Number(this.rules.hook) || 0);
@@ -146,6 +159,12 @@ export default class GameScene extends Phaser.Scene {
     if (this.terrain.tops) {
       this.props = new Props(this, this.seed, this.variant?.id ?? 'classic')
         .build([...this.worms, ...this.monsters].map((w) => ({ x: w.x, y: w.y })));
+      // Атмосфера вида башни: дальний фон, частицы, события между ходами
+      this.ambience = new Ambience(this, this.variant?.id ?? 'classic', this.seed);
+      // Аффиксы: свои у уровня, иначе — по виду башни. Только без сети
+      const ids = this.match.affixes ?? DEFAULT_AFFIXES[this.variant?.id] ?? [];
+      this.affixes = new Affixes(this, ids, this.seed);
+      this.affixes.announce();
     }
     this._setupKeyboard();
     this._setupBots();
@@ -228,6 +247,16 @@ export default class GameScene extends Phaser.Scene {
     const theirs = this.registry.get('net')?.opponent?.skin;
     const id = SKIN_BY_ID[theirs] ? theirs : rivalSkin(this.seed, team, mine.id);
     return SKIN_BY_ID[id].sheet;
+  }
+
+  /** Украшения команды: свои — надетые, соперник по сети — присланные, остальные — обычные. */
+  cosmeticsFor(team) {
+    const net = this.registry.get('net');
+    const myTeam = (net && this.myTeam != null)
+      ? this.myTeam
+      : Math.max(0, this.match.teams.findIndex((t) => t.control !== 'bot'));
+    if (team === myTeam && this.match.teams[team]?.control !== 'bot') return myCosmetics();
+    return net?.opponent?.cos ?? DEFAULT_COS;
   }
 
   // ------------------------------------------------------------ эмоции
@@ -419,6 +448,18 @@ export default class GameScene extends Phaser.Scene {
   /** Начало хода: боту нужен чистый план, чужой ему не годится. */
   onTurnBegin() {
     for (const b of this.bots ?? []) b?.reset();
+    // Замёрзший боец ход пропускает — и оттаивает
+    const fw = this.turn.activeWorm;
+    if (fw?.frozen) {
+      fw.frozen = false;
+      fw.skipping = true;
+      this.fx.banner('Заморожен — ход пропущен', '#9fd8ff', 1300);
+      const turn = this.turn.turnNumber;
+      this.time.delayedCall(1100, () => {
+        fw.skipping = false;
+        if (this.turn.turnNumber === turn && this.turn.state === STATE.AIM) this.turn.endTurn();
+      });
+    }
     if (this.turn.currentTeam === this.myTeamIndex) this.myTurns++;
     // Тот, чей ход, подпрыгивает на месте: глаз сразу находит своего
     const active = this.turn.activeWorm;
@@ -651,6 +692,8 @@ export default class GameScene extends Phaser.Scene {
       grass: has(this, `${biome.id}_grass`)
         ? this.textures.get(`${biome.id}_grass`).getSourceImage() : null,
     });
+    // Форма башни — от места: карнизы, вулкан, астероиды (shapes.js)
+    this.terrain.layout = this.variant?.layout ?? null;
     this.terrain.generate(this.shape, shapeRng(this.seed));
 
     // По одной Phaser-текстуре на чанк: после взрыва в GPU уходит
@@ -674,14 +717,28 @@ export default class GameScene extends Phaser.Scene {
     const wide = CFG.WORLD_W + 4000;
     // Лава — гуще и ярче воды, с огненной кромкой
     const lava = this.rules.liquid === 'lava';
+    // Пустота космоса: тёмная, с фиолетовой кромкой — упал туда, и всё
+    const space = this.rules.liquid === 'void';
     this.waterBody = this.rig.world(this.add.rectangle(-2000, CFG.WATER_Y, wide, deep + 2000,
-      lava ? 0xd2400f : biome.water, lava ? 0.93 : biome.waterAlpha)
+      lava ? 0xd2400f : space ? 0x07041a : biome.water, lava ? 0.93 : space ? 0.97 : biome.waterAlpha)
       .setOrigin(0, 0).setDepth(DEPTH.WATER));
-    this.waterLine = this.rig.world(this.add.rectangle(-2000, CFG.WATER_Y, wide, lava ? 6 : 3,
-      lava ? 0xffc23a : 0xffffff, lava ? 0.9 : 0.25)
+    this.waterLine = this.rig.world(this.add.rectangle(-2000, CFG.WATER_Y, wide, lava || space ? 6 : 3,
+      lava ? 0xffc23a : space ? 0x9a6bff : 0xffffff, lava || space ? 0.9 : 0.25)
       .setOrigin(0, 0).setDepth(DEPTH.WATER));
+    if (space) this._buildStars();
     this.waterBase = CFG.WATER_Y;
     this.floodLevel = 0;
+  }
+
+  /** Космос: небо темнее и в звёздах — от зерна, у всех одинаково. */
+  _buildStars() {
+    this.skyImage?.setTint(0x3a2a6a);
+    const [cw, ch] = canvasSize();
+    const r = subRng(this.seed >>> 0, 0x57a2);
+    const g = this.rig.bg(this.add.graphics().setScrollFactor(0).setDepth(DEPTH.SKY + 1));
+    for (let i = 0; i < 140; i++) {
+      g.fillStyle(0xffffff, 0.35 + r() * 0.6).fillCircle(r() * cw, r() * ch, r() < 0.15 ? 2 : 1);
+    }
   }
 
   /**
@@ -915,6 +972,7 @@ export default class GameScene extends Phaser.Scene {
       this.mines = this.mines.filter((m) => m.alive);
     }
     this.props?.update(dt);
+    this.ambience?.update(dt);
     for (const m of this.monsters) m.update(dt);
     if (this.monsters.some((m) => !m.alive)) this.monsters = this.monsters.filter((m) => m.alive);
     for (const sp of this.springs) sp.update(dt);
@@ -1252,6 +1310,7 @@ export default class GameScene extends Phaser.Scene {
     if (this.turn.state !== STATE.AIM) return false;
     if (this.replaying) return false;         // идёт показ чужого хода
     if (this.landing()) return false;          // десант ещё в воздухе
+    if (this.turn.activeWorm?.skipping) return false;  // замёрз — ход пропускает
     // В сетевой партии ходит только тот, чья команда сейчас на очереди
     if (this.net?.connected && this.net.myTeam !== this.turn.currentTeam) return false;
     return true;
@@ -1370,13 +1429,20 @@ export default class GameScene extends Phaser.Scene {
       if (c.alive && Math.hypot(c.x - x, c.y - c.h / 2 - y) <= cfg.damageRadius) c.destroy();
     }
 
+    // Снежок йети: кого задело — замерзает и пропускает свой следующий ход
+    if (cfg.freeze) {
+      for (const w of this.worms) {
+        if (w.alive && Math.hypot(w.x - x, w.centerY - y) <= cfg.damageRadius) w.frozen = true;
+      }
+    }
+
     // Монстрам достаётся так же, как бойцам; Великана не отбрасывает
     for (const m of [...this.monsters]) {
       if (!m.alive) continue;
       const d = Math.max(0, Math.hypot(m.x - x, m.centerY - y) - m.def.w / 4);
       if (d > cfg.damageRadius) continue;
       const dmg = Math.round(cfg.damage * (1 - d / cfg.damageRadius));
-      if (m.kind !== 'boss' && cfg.knockback > 0) m.vy = -Math.min(320, cfg.knockback * 0.6);
+      if (!m.def.boss && cfg.knockback > 0) m.vy = -Math.min(320, cfg.knockback * 0.6);
       m.damage(dmg);
     }
 
@@ -1449,6 +1515,11 @@ export default class GameScene extends Phaser.Scene {
 
   // ------------------------------------------------------------ монстры
 
+  /** Множитель тяжести поверх правил партии (аффикс «скачок гравитации»). */
+  setGravityMul(k) {
+    CFG.GRAVITY = BASE_GRAVITY * (Number(this.rules.gravity) || 1) * k;
+  }
+
   addMonster(kind, x, y, hp = null) {
     const m = new Monster(this, kind, x, y, hp);
     this.monsters.push(m);
@@ -1470,23 +1541,29 @@ export default class GameScene extends Phaser.Scene {
       [spots[i], spots[j]] = [spots[j], spots[i]];
     }
     const taken = this.worms.map((w) => ({ x: w.x, y: w.y, r: 150 }));
-    const free = (p, r) => taken.every((q) => Math.hypot(q.x - p.x, q.y - p.y) >= Math.max(r, q.r));
+    // k — насколько строго держать дистанцию; на тесных башнях (вулкан)
+    // её постепенно ослабляем, чтобы все монстры нашли место
+    let k = 1;
+    const free = (p, r) => taken.every((q) => Math.hypot(q.x - p.x, q.y - p.y) >= Math.max(r, q.r) * k);
     if (this.match.boss) {
       // Великан — на самом верхнем месте, где хватает простора над головой
       const roomy = spots.filter((p) => !this.terrain.solidInRect(p.x - 46, p.y - 104, p.x + 46, p.y - 6)
         && free(p, 260));
       const top = (roomy.length ? roomy : spots).reduce((a, b) => (b.y < a.y ? b : a));
-      this.addMonster('boss', top.x, top.y, this.match.bossHp ?? null);
+      // boss: true — тролль; иначе имя босса главы (yeti, golem, slimeking)
+      this.addMonster(isBoss(this.match.boss) ? this.match.boss : 'boss', top.x, top.y, this.match.bossHp ?? null);
       taken.push({ x: top.x, y: top.y, r: 160 });
     }
     for (const [kind, n] of Object.entries(want)) {
       let placed = 0;
-      for (const p of spots) {
-        if (placed >= n) break;
-        if (!free(p, 90)) continue;
-        this.addMonster(kind, p.x, p.y);
-        taken.push({ x: p.x, y: p.y, r: 90 });
-        placed++;
+      for (k = 1; k >= 0.4 && placed < n; k -= 0.2) {
+        for (const p of spots) {
+          if (placed >= n) break;
+          if (!free(p, 90)) continue;
+          this.addMonster(kind, p.x, p.y);
+          taken.push({ x: p.x, y: p.y, r: 90 });
+          placed++;
+        }
       }
     }
   }
@@ -1499,15 +1576,18 @@ export default class GameScene extends Phaser.Scene {
     if (this.net) return false;
     let any = false;
     for (const m of [...this.monsters]) if (m.alive && m.act()) any = true;
+    // Событие места: метель, извержение, метеориты (ui/Ambience.js)
+    if (this.affixes?.run(this.turn.turnNumber)) any = true;
     return any;
   }
 
   monstersBusy() {
+    if (this.affixes?.busy) return true;
     return this.monsters.some((m) => m.alive && m.busy);
   }
 
   onMonsterDied(m) {
-    if (m.kind === 'boss') haptic('win');
+    if (m.def.boss) haptic('win');
   }
 
   /** Ход отыгран и очередь передана — отдаём второму игроку итог. */
@@ -1559,7 +1639,7 @@ export default class GameScene extends Phaser.Scene {
     if (this.match.boss) {
       const mine = this.myTeamIndex;
       if (!this.teamAlive(mine)) return mine === 0 ? 1 : 0;
-      return this.monsters.some((m) => m.kind === 'boss' && m.alive) ? null : mine;
+      return this.monsters.some((m) => m.def.boss && m.alive) ? null : mine;
     }
     // Задача миссии решает раньше обычного «кого выбили»
     const outcome = this.missionOutcome();
@@ -1695,6 +1775,8 @@ export default class GameScene extends Phaser.Scene {
 
     // Испытание: звёзды и монеты за новые звёзды — строкой над заголовком
     if (this.match.mode === 'challenge') this._challengeResult(winner >= 0 && winner === mine);
+    // Башня дня: итог — в таблицу дня, за первую победу дня монеты
+    if (this.match.mode === 'daily') this._dailyResult(winner >= 0 && winner === mine);
 
     // Бой — в статистику: режим, итог, сколько ходов
     track('battle', {
@@ -1790,6 +1872,33 @@ export default class GameScene extends Phaser.Scene {
     this.scene.restart();
   }
 
+  /** Башня дня: монеты за первую победу дня и место в таблице. */
+  _dailyResult(won) {
+    const day = this.match.day;
+    const hp = this.worms.filter((w) => w.team === this.myTeamIndex && w.alive).reduce((a, w) => a + w.health, 0);
+    let st = {};
+    try { st = JSON.parse(localStorage.getItem('worms.dailyTower.v1') ?? '{}') || {}; } catch { st = {}; }
+    let coins = 0;
+    if (won && st.rewarded !== day) {
+      coins = 60;
+      grantCoins(coins);
+      st.rewarded = day;
+      try { localStorage.setItem('worms.dailyTower.v1', JSON.stringify(st)); } catch { /* инкогнито */ }
+    }
+    const head = won ? `Башня дня: ${this.myTurns} ${this.myTurns < 5 ? 'хода' : 'ходов'}` : 'Башня дня: не взята';
+    const t = this.rig.ui(this.add.text(CFG.VIEW_W / 2, CFG.VIEW_H / 2 + 62,
+      `${head}${coins ? ` · +${coins} монет` : ''} · отправляю…`, font(18, 800, UI.accent))
+      .setOrigin(0.5).setScrollFactor(0).setDepth(DEPTH.HUD + 11)
+      .setWordWrapWidth(CFG.VIEW_W - 40).setAlign('center'));
+    this.gameOverUi?.push(t);
+    submitDailyTower({ day, won, turns: this.myTurns, hp }).then((res) => {
+      if (!t.active) return;
+      if (!res?.me) { t.setText(`${head}${coins ? ` · +${coins} монет` : ''} · без сервера не в таблице`); return; }
+      const best = res.accepted ? 'лучшая попытка' : 'прежняя попытка лучше';
+      t.setText(`${head}${coins ? ` · +${coins} монет` : ''} · место ${res.me.place} из ${res.players} · ${best}`);
+    });
+  }
+
   /** Звёзды испытания на экране итога. */
   _challengeResult(won) {
     const c = CHALLENGE_BY_ID[this.match.challengeId];
@@ -1855,6 +1964,7 @@ export default class GameScene extends Phaser.Scene {
     // Из испытания — обратно к списку испытаний
     if (this.match.mode === 'challenge' && !this.match.tutorial) this.registry.set('returnTo', 'challenges');
     if (this.match.mode === 'ascent') this.registry.set('returnTo', 'ascent');
+    if (this.match.mode === 'daily') this.registry.set('returnTo', 'daily');
     if (new URLSearchParams(location.search).has('room')) {
       const url = new URL(location.href);
       url.searchParams.delete('room');
@@ -1874,6 +1984,8 @@ export default class GameScene extends Phaser.Scene {
     this.springs = [];
     this.monsters = [];
     this.props = null;
+    this.ambience = null;
+    this.affixes = null;
     this.aim?.destroy();
     this.crates = [];
     this.rig?.destroy();

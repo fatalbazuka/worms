@@ -127,6 +127,32 @@ export async function telegramLogin() {
   }
 }
 
+/** Вход с сайта по логину и паролю, которые выдал админ (/web в боте). */
+export async function passwordLogin(login, password) {
+  return signedIn(await call('POST', '/login', { login, password }));
+}
+
+/** Прогресс игры на сервере: { ключ: строка JSON }. null — не вышло. */
+export async function fetchSave() {
+  if (!token) return null;
+  try { return (await call('GET', '/save')).items ?? {}; } catch { return null; }
+}
+
+// Запись прогресса — не чаще раза в полторы секунды на ключ: кошелёк и
+// задания сохраняются после каждого боя, серверу хватит последнего
+const pendingSave = new Map();
+export function putSave(key, value) {
+  if (!token) return;
+  const was = pendingSave.get(key);
+  if (was) { was.value = value; return; }
+  const entry = { value };
+  pendingSave.set(key, entry);
+  setTimeout(() => {
+    pendingSave.delete(key);
+    call('PUT', '/save', { key, value: entry.value }).catch(() => {});
+  }, 1500);
+}
+
 /**
  * Событие для статистики (open | battle). Только для вошедших в аккаунт и
  * без ожидания: игра от него не зависит, ошибки глотаются.
@@ -158,6 +184,24 @@ export async function fetchShop() {
 }
 
 /** Счёт на покупку: box1 | box5 | skin-<id>. @returns {Promise<string>} ссылка на счёт */
+/** «Башня дня»: таблица и моё место. null — сервера нет. */
+export async function fetchDailyTower() {
+  if (!token) return null;
+  try { return await call('GET', '/daily-tower'); } catch { return null; }
+}
+
+/** Итог попытки «Башни дня». */
+export async function submitDailyTower(run) {
+  if (!token) return null;
+  try { return await call('POST', '/daily-tower', run); } catch { return null; }
+}
+
+/** Карточка «вызов на бой» для комнаты башни. @returns {Promise<string|null>} id сообщения */
+export async function prepareChallenge(room, link) {
+  if (!token) return null;
+  try { return (await call('POST', '/challenge', { room, link })).id ?? null; } catch { return null; }
+}
+
 export async function buyShopItem(item) {
   const r = await call('POST', '/shop/buy', { item });
   return r.invoice;

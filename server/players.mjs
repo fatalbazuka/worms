@@ -10,6 +10,8 @@ export function createPlayers({ db, now = () => Date.now(), adminIds = new Set()
     byId: db.prepare('select * from player where id = ?'),
     byTg: db.prepare('select * from player where tg_id = ?'),
     markApp: db.prepare('update player set app_at = ? where id = ? and app_at is null'),
+    byLogin: db.prepare('select * from player where name_key = ?'),
+    setLogin: db.prepare('update player set name_key = ?, pass_hash = ? where id = ?'),
     insert: db.prepare(`insert into player (id, name, name_key, pass_hash, tg_id, rating, photo, created_at, seen_at)
                         values (?, ?, null, null, ?, ?, ?, ?, ?)`),
     update: db.prepare('update player set name = ?, photo = coalesce(?, photo), seen_at = ? where id = ?'),
@@ -32,6 +34,10 @@ export function createPlayers({ db, now = () => Date.now(), adminIds = new Set()
     else q.insert.run(id, name, tgId, START_RATING, photo, t, t);
     return q.byId.get(id);
   }
+
+  /** Вход с сайта: логин (в нижнем регистре) и хеш пароля. */
+  function byLogin(login) { return q.byLogin.get(String(login ?? '').trim().toLowerCase()) ?? null; }
+  function setLogin(id, login, passHash) { q.setLogin.run(String(login).toLowerCase(), passHash, id); }
 
   /** Игрок впервые открыл игру. */
   function markApp(id) { q.markApp.run(now(), id); }
@@ -76,7 +82,7 @@ export function createPlayers({ db, now = () => Date.now(), adminIds = new Set()
   return {
     byId: (id) => q.byId.get(id),
     byTg: (tgId) => q.byTg.get(Number(tgId)),
-    upsertTg, markApp, view, isAdmin, duelHistory,
+    upsertTg, markApp, byLogin, setLogin, view, isAdmin, duelHistory,
     top: (n) => q.top.all(n).map((r) => ({ ...r })),
     topTourney: (n) => q.topTourney.all(n).map((r) => ({ ...r })),
   };

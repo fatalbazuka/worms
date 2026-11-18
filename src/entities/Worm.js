@@ -1,4 +1,5 @@
 import { CFG, DEPTH, TEAM_COLORS } from '../config.js';
+import { item } from '../core/cosmetics.js';
 import { has, meta, fitScale, weaponIcon, AIMED } from '../core/assets.js';
 import { font } from '../ui/theme.js';
 
@@ -86,6 +87,8 @@ export class Worm {
     // Лист бойца — скин его команды (сцена знает, чей); нет такого листа —
     // обычный смайлик, нет и его — червяк
     const wanted = s.skinFor?.(this.team) ?? 'smiley';
+    // Украшения: цвет троса, след снаряда, надгробие (core/cosmetics.js)
+    this.cos = s.cosmeticsFor?.(this.team) ?? null;
     this.sheet = has(s, wanted) ? wanted : 'smiley';
     this.smiley = has(s, this.sheet);
     this.sprited = this.smiley || has(s, 'worm_idle');
@@ -597,7 +600,8 @@ export class Worm {
 
     const s = this.scene;
     const gx = Math.round(this.x), gy = Math.round(this.y);
-    if (this.smiley) this._ghost();
+    const grave = this.cos && item('grave', this.cos.grave);
+    if (this.smiley && !grave?.emoji) this._ghost();
     s.fx?.knockout(this.x, this.centerY);
     s.tweens.add({
       targets: [this.view, this.label, this.bar, this.barBg, this.eye, this.ring].filter(Boolean),
@@ -620,6 +624,16 @@ export class Worm {
   /** Надгробие на месте гибели — если под ним осталась земля. */
   _placeGrave(x, y) {
     const s = this.scene;
+    // Купленное надгробие-эмодзи — встаёт на месте гибели и остаётся
+    const bought = this.cos && item('grave', this.cos.grave);
+    if (bought?.emoji && has(s, `emoji_${bought.emoji}`)) {
+      const top = this.terrain.surfaceYAt(x, Math.max(0, y - 60));
+      if (top === null || top > CFG.DROWN_Y) return;
+      const g = s.rig.world(s.add.image(x, top + 2, `emoji_${bought.emoji}`).setOrigin(0.5, 1)
+        .setScale(0.3).setDepth(DEPTH.WORM - 1).setAlpha(0));
+      s.tweens.add({ targets: g, alpha: 1, scale: 0.42, duration: 360, ease: 'Back.easeOut' });
+      return;
+    }
     // У смайлика вместо надгробия улетает призрак
     if (this.smiley || !has(s, 'grave')) return;
     const top = this.terrain.surfaceYAt(x, Math.max(0, y - 60));
@@ -672,6 +686,7 @@ export class Worm {
     this.squash = Math.abs(sq) < 0.02 ? 0 : sq * 0.82;
     if (this.view.setTintFill) {
       if (this.scene.time.now < (this.flashUntil ?? 0)) this.view.setTintFill(0xffffff);
+      else if (this.frozen) this.view.setTint(0x9fd8ff);      // замёрз — голубой, пропустит ход
       else if (this.view.isTinted) this.view.clearTint();
     }
 
@@ -794,7 +809,7 @@ Worm.prototype._drawRope = function _drawRope() {
   const { ax, ay } = this.zip;
   g.clear();
   g.lineStyle(4, 0x1a1208, 0.55).lineBetween(this.x, this.centerY, ax, ay);
-  g.lineStyle(2, 0xe8d9a8, 1).lineBetween(this.x, this.centerY, ax, ay);
+  g.lineStyle(2, ropeColor(this.cos, s.time.now), 1).lineBetween(this.x, this.centerY, ax, ay);
   // На конце троса — крюк, носом в стену
   if (has(s, 'shot_hook')) {
     if (!this.hookTip) {
@@ -807,6 +822,13 @@ Worm.prototype._drawRope = function _drawRope() {
     g.fillStyle(0xe8d9a8, 1).fillCircle(ax, ay, 4);
   }
 };
+
+/** Цвет троса по украшению; радужный переливается со временем. */
+function ropeColor(cos, now) {
+  const it = cos && item('rope', cos.rope);
+  if (it?.rainbow) return Phaser.Display.Color.HSVToRGB(((now / 900) % 1), 0.75, 1).color;
+  return it?.color ?? 0xe8d9a8;
+}
 
 /** Ширина полоски здоровья над бойцом. */
 const HP_BAR_W = 26;
