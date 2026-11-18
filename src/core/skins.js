@@ -34,6 +34,15 @@ export const SKINS = [
   { id: 'rage', name: 'Злюка', sheet: 'skin_rage', rarity: 'rare' },
   { id: 'devil', name: 'Чертёнок', sheet: 'skin_devil', rarity: 'epic' },
   { id: 'clown', name: 'Клоун', sheet: 'skin_clown', rarity: 'rare' },
+  { id: 'cool', name: 'Крутой', sheet: 'skin_cool', rarity: 'common' },
+  { id: 'nerd', name: 'Ботаник', sheet: 'skin_nerd', rarity: 'common' },
+  { id: 'sleepy', name: 'Соня', sheet: 'skin_sleepy', rarity: 'common' },
+  { id: 'ninja', name: 'Ниндзя', sheet: 'skin_ninja', rarity: 'rare' },
+  { id: 'pirate', name: 'Пират', sheet: 'skin_pirate', rarity: 'rare' },
+  { id: 'robot', name: 'Робот', sheet: 'skin_robot', rarity: 'rare' },
+  { id: 'astro', name: 'Космонавт', sheet: 'skin_astro', rarity: 'epic' },
+  { id: 'king', name: 'Король', sheet: 'skin_king', rarity: 'epic' },
+  { id: 'rainbow', name: 'Радуга', sheet: 'skin_rainbow', rarity: 'epic', starsOnly: true },
 ];
 
 /** Что может выпасть из коробки: всё, кроме скинов только за звёзды. */

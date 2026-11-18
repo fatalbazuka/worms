@@ -78,8 +78,10 @@ export const SOLID = new Set(Object.keys(SILHOUETTE));
 const BARREL_BLAST = { radius: 34, damageRadius: 70, damage: 30, knockback: 300, shake: 0.008 };
 
 export class Props {
-  constructor(scene, seed, variantId = 'classic') {
+  /** painted — у места нарисованный фон: эмодзи-задник не ставим. */
+  constructor(scene, seed, variantId = 'classic', { painted = false } = {}) {
     this.scene = scene;
+    this.painted = painted;
     this.terrain = scene.terrain;
     this.theme = THEMES[variantId] ?? THEMES.classic;
     this.rng = subRng(seed >>> 0, SALT);
@@ -116,6 +118,8 @@ export class Props {
       const x = (W / n) * (i + 0.2 + r() * 0.6);
       const y = high ? ground - 520 - r() * 900 : ground + 10;
       const size = high ? 130 + r() * 80 : 240 + r() * 160;
+      // ГПСЧ уже потрачен как обычно — предметы на этажах встанут те же
+      if (this.painted) continue;
       const img = this._img(name, x, y, size);
       if (!img) continue;
       img.setAlpha(high ? 0.35 : 0.3).setTint(0xb8c4dd).setScrollFactor(0.55, 0.85)

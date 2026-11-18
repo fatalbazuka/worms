@@ -16,8 +16,10 @@ import { subRng } from '../core/rng.js';
  */
 
 export class Ambience {
-  constructor(scene, variantId = 'classic', seed = 0) {
+  /** painted — у места есть нарисованный фон: холмы, пики и туманности уже на нём. */
+  constructor(scene, variantId = 'classic', seed = 0, { painted = false } = {}) {
     this.scene = scene;
+    this.painted = painted;
     this.kind = variantId;
     this.seed = seed >>> 0;
     this.items = [];
@@ -53,7 +55,7 @@ export class Ambience {
       // Два ряда мягких холмов
       // Повторяемые текстуры — со сторонами степени двойки: иначе WebGL не
       // умеет их тайлить, и слой просто не рисуется
-      for (const [k, color, hgt, a] of [['amb-hills-far', '#41617a', 220, 0.55], ['amb-hills-near', '#2f4b3f', 160, 0.6]]) {
+      for (const [k, color, hgt, a] of this.painted ? [] : [['amb-hills-far', '#41617a', 220, 0.55], ['amb-hills-near', '#2f4b3f', 160, 0.6]]) {
         this._tex(k, 1024, 256, (ctx, w, h) => {
           ctx.fillStyle = color;
           ctx.beginPath(); ctx.moveTo(0, h);
@@ -71,7 +73,8 @@ export class Ambience {
       }, 24, 14);
       this._birds(r);
     } else if (this.kind === 'ice') {
-      // Северное сияние: полупрозрачные ленты, медленно колышутся
+      // Сияние и пики — только без нарисованного фона: на нём они уже есть
+      if (!this.painted) {
       this._tex('amb-aurora', 1024, 256, (ctx, w, h) => {
         for (const [c, off] of [['rgba(80,255,180,0.7)', 0], ['rgba(90,200,255,0.6)', 40], ['rgba(170,120,255,0.45)', 80]]) {
           const g = ctx.createLinearGradient(0, 0, 0, h);
@@ -97,6 +100,7 @@ export class Ambience {
         ctx.lineTo(w, h); ctx.closePath(); ctx.fill();
       });
       this._far('amb-peaks', ground + 30, 0.35, 0.2);
+      }
       this.snow = this._particles('snow', {
         x: { min: -200, max: cw + 200 }, y: -10, lifespan: 9000, speedY: { min: 110, max: 220 },
         speedX: { min: -20, max: 20 }, scale: { min: 0.5, max: 1.3 }, frequency: 35, alpha: { min: 0.6, max: 1 },
@@ -113,7 +117,9 @@ export class Ambience {
       const glow = this.scene.rig.world(this.scene.add.image(-400, ground + 40, 'amb-glow').setOrigin(0, 1)
         .setDisplaySize(CFG.WORLD_W + 800, 1100).setDepth(DEPTH.PARALLAX + 0.5));
       this.items.push(glow);
-      this.scene.tweens.add({ targets: glow, alpha: 0.6, yoyo: true, repeat: -1, duration: 1400, ease: 'Sine.easeInOut' });
+      // На нарисованном фоне зарево уже есть — своё только подыгрывает
+      if (this.painted) glow.setAlpha(0.45);
+      this.scene.tweens.add({ targets: glow, alpha: this.painted ? 0.25 : 0.6, yoyo: true, repeat: -1, duration: 1400, ease: 'Sine.easeInOut' });
       this._particles('smoke', {
         x: { min: 0, max: CFG.WORLD_W }, y: ground, lifespan: 12000, speedY: { min: -70, max: -40 }, speedX: { min: -8, max: 8 },
         scale: { start: 1.5, end: 6 }, alpha: { start: 0.35, end: 0 }, frequency: 500,
@@ -136,7 +142,7 @@ export class Ambience {
           ctx.fillStyle = g; ctx.fillRect(0, 0, w, h);
         }
       });
-      for (let i = 0; i < 3; i++) {
+      for (let i = 0; i < (this.painted ? 0 : 3); i++) {
         const n = this.scene.rig.world(this.scene.add.image(CFG.WORLD_W * (0.15 + i * 0.4), 300 + i * 450, 'amb-nebula')
           .setScale(2.2).setScrollFactor(0.25, 0.4).setDepth(DEPTH.PARALLAX + 0.5).setAngle(i * 70));
         this.items.push(n);
