@@ -298,6 +298,58 @@ check('быстрая игра против бота собирается',
   st.mode === 'quick' && st.bots[1] === 'sniper' && st.sizes.join() === '2,2',
   `${st.mode}, боты ${JSON.stringify(st.bots)}`);
 
+// --- быстрый бой онлайн: соперника нет — бой с ботом на башне ---
+await page.evaluate(() => window.__WORMS__.scene.getScene('Game').toMenu());
+await menuReady();
+await menuTap('modes');
+await menuTap('online');
+await menuTap('quickmatch');
+const searching = await page.evaluate(() => {
+  const m = window.__WORMS__.scene.getScene('Menu');
+  return { bot: Boolean(m.buttons['bot-now']), text: m.fallbackText?.text ?? '' };
+});
+check('в поиске видно, когда начнётся бой с ботом', searching.bot && /ботом/.test(searching.text), searching.text);
+await menuTap('bot-now');
+await gameReady();
+await page.waitForTimeout(800);
+const fb = await page.evaluate(() => {
+  const s = window.__WORMS__.scene.getScene('Game');
+  return { fallback: Boolean(s.match.fallback), shape: s.shape.id, bot: s.match.teams[1].control, net: Boolean(s.net) };
+});
+check('«Сразу с ботом» — башня против бота, без сети и рейтинга',
+  fb.fallback && fb.shape === 'tower' && fb.bot === 'bot' && !fb.net, JSON.stringify(fb));
+
+// --- рогатка не стреляет, когда хотели двинуть камеру ---
+// События подаются прямо в обработчик: через CDP касание идёт сотни
+// миллисекунд, настоящий быстрый мазок так не изобразить
+await page.evaluate(() => window.__WORMS__.scene.getScene('Game').hud.setHelp(false));
+const gesture = (steps) => page.evaluate((steps) => {
+  const s = window.__WORMS__.scene.getScene('Game');
+  const a = s.aim, w = s.turn.activeWorm;
+  const sx = (w.x - s.rig.viewLeft) * s.rig.zoom, sy = (w.centerY - s.rig.viewTop) * s.rig.zoom;
+  const p = (dx, dy, down) => ({ x: sx + dx, y: sy + dy, isDown: down, id: 1, downTime: 1 });
+  for (const [kind, dx, dy] of steps) {
+    if (kind === 'down') a.onDown(p(dx, dy, true));
+    if (kind === 'move') a.onMove(p(dx, dy, true));
+    if (kind === 'up') a.onUp(p(dx, dy, false));
+  }
+}, steps);
+const turnState = () => page.evaluate(() => window.__WORMS__.scene.getScene('Game').turn.state);
+await page.waitForFunction(() => window.__WORMS__.scene.getScene('Game').canPlayerAct(), null, { timeout: 20000 });
+await gesture([['down', 0, 0], ['move', 10, 60], ['move', 20, 140], ['up', 20, 140]]);
+await page.waitForTimeout(200);
+check('быстрый мазок с бойца — протяжка камеры, а не выстрел', await turnState() === 'aim');
+await gesture([['down', 0, 0]]);
+await page.waitForTimeout(350);
+await gesture([['move', -60, 20], ['move', -120, 40], ['move', -10, 2], ['up', -10, 2]]);
+await page.waitForTimeout(200);
+check('натянул и вернул к бойцу — выстрела нет', await turnState() === 'aim');
+await gesture([['down', 0, 0]]);
+await page.waitForTimeout(350);
+await gesture([['move', -60, 20], ['move', -140, 50], ['up', -140, 50]]);
+await page.waitForTimeout(200);
+check('спокойное натяжение — выстрел', await turnState() !== 'aim');
+
 check('нет ошибок в консоли', errors.length === 0, errors.slice(0, 5).join(' | '));
 
 await browser.close();

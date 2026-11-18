@@ -89,9 +89,21 @@ export function campaignMatch(missionId) {
 
 /** Сетевая партия: обе стороны — люди, состав как в обычной быстрой игре. */
 export function onlineMatch(room = null) {
-  // Комната башни — та же сетевая партия, но с её картой и правилами
-  if (isTowerRoom(room)) return { ...towerMatch(null), mode: 'online' };
-  return { ...HOTSEAT, mode: 'online' };
+  // Все сетевые бои — на башне: и рейтинг, и без рейтинга, и турниры, и
+  // с другом по ссылке. Режим по-прежнему зашит в код комнаты, карта — нет.
+  // ?map=classic в адресе — прежняя широкая карта: для отладки и для
+  // проверки сетевого движка в tests/net.mjs
+  const classic = new URLSearchParams(globalThis.location?.search ?? '').get('map') === 'classic';
+  if (classic && !isTowerRoom(room)) return { ...HOTSEAT, mode: 'online' };
+  return { ...towerMatch(null), mode: 'online' };
+}
+
+/**
+ * Быстрый бой, где соперник не нашёлся: башня против бота. В рейтинг не
+ * идёт — бой с ботом рейтинг не двигает нигде. Игроку это говорится прямо.
+ */
+export function fallbackMatch() {
+  return { ...towerMatch('fighter'), fallback: true };
 }
 
 /** Есть ли в партии хоть один бот. */

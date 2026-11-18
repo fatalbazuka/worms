@@ -2,7 +2,9 @@ import { UI, font, ensureButton, ensureIcon } from '../ui/theme.js';
 import { CFG } from '../config.js';
 import { MISSIONS, loadProgress, isUnlocked } from '../campaign/missions.js';
 import { objectiveText } from '../campaign/objectives.js';
-import { quickMatch, campaignMatch, onlineMatch, towerMatch, QUICK_OPTIONS } from '../core/match.js';
+import {
+  quickMatch, campaignMatch, onlineMatch, towerMatch, fallbackMatch, QUICK_OPTIONS,
+} from '../core/match.js';
 import { SHAPES } from '../core/shapes.js';
 import { randomRoom, copyText } from '../net/transport.js';
 import { isCasualRoom, isTowerRoom } from '../net/rooms.js';
@@ -40,6 +42,9 @@ import { fitScale } from '../core/assets.js';
  * Кнопки складываются в this.buttons — по ним ходит тест, чтобы не считать
  * раскладку у себя заново.
  */
+/** Через сколько секунд поиска без соперника предлагается бой с ботом. */
+const FALLBACK_AFTER = 20;
+
 export default class MenuScene extends Phaser.Scene {
   constructor() { super('Menu'); }
 
@@ -607,7 +612,7 @@ export default class MenuScene extends Phaser.Scene {
     const big = { w: Math.min(this.W - 64, 620), h: 92, titleSize: 28, hintSize: 18 };
     this._button('tower', cx, y0, 'Башня', 'высокая арена и трос · выбрать соперника',
       () => this.showTower(), { ...big, variant: 'primary' });
-    this._button('online', cx, y0 + step, 'Онлайн', 'бой с человеком · телефон горизонтально',
+    this._button('online', cx, y0 + step, 'Онлайн', 'бой с человеком на башне · рейтинг',
       () => this.showOnline(), big);
     this._button('campaign', cx, y0 + step * 2, 'Кампания', 'миссии с условиями · телефон горизонтально',
       () => this.showCampaign(), big);
@@ -1036,12 +1041,19 @@ export default class MenuScene extends Phaser.Scene {
       ? 'Подойдёт любой, кто тоже ищет бой без рейтинга.'
       : 'Круг поиска расширяется каждые пять секунд ожидания.',
       font(this.fs(13), 700, UI.textDim)).setOrigin(0.5, 0));
+    // Пока людей мало, ждать можно долго. Через FALLBACK_AFTER секунд — бой
+    // с ботом, честно подписанный и без рейтинга; можно и не ждать
+    this.searchStarted = performance.now();
+    this.fallbackText = this.add.text(cx, 284, '', font(this.fs(14), 700, UI.textDim)).setOrigin(0.5, 0);
+    this.items.push(this.fallbackText);
 
-    this._button('cancel', cx, 316, 'Отменить поиск', '', () => {
+    this._button('cancel', cx, 360, 'Отменить поиск', '', () => {
       this.lobby?.search(false);
       this._stopSearchTicker();
       this.showOnline();
     }, { w: 300, h: 56 });
+    this._button('bot-now', cx, 432, 'Сразу с ботом', 'без рейтинга', () => this._fallbackToBot(),
+      { w: 300, h: 60 });
 
     this._ensureLobby();
     this.searchQueue = queue;
@@ -1063,12 +1075,23 @@ export default class MenuScene extends Phaser.Scene {
       }
       const text = this.lobby?.statusText();
       if (text) this.searchStatus.setText(text);
+      const left = Math.ceil(FALLBACK_AFTER - (performance.now() - this.searchStarted) / 1000);
+      if (left <= 0 && !this.lobby?.matched) { this._fallbackToBot(); return; }
+      this.fallbackText?.setText(`никого не найдём за ${left} с — сыграешь с ботом`);
       const n = this.lobby?.searchingCount(this.searchQueue);
       if (n != null) this.searchCount?.setText(`Сейчас ищут: ${n}${n === 1 ? ' — только ты' : ''}`);
     };
     this.searchTicker = this.time.addEvent({ delay: 400, loop: true, callback: tick });
     tick();
     this.events.once('shutdown', () => this._stopSearchTicker());
+  }
+
+  /** Соперник не нашёлся (или ждать не хочется): бой с ботом на башне. */
+  _fallbackToBot() {
+    if (this.lobby?.matched) return;
+    this.lobby?.search(false);
+    this._stopSearchTicker();
+    this.start(fallbackMatch());
   }
 
   _stopSearchTicker() {

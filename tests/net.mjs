@@ -70,7 +70,7 @@ for (let i = 0; i < 2; i++) {
     });
   });
 
-  await page.goto(`${URL}/?biome=forest&seed=777&room=${ROOM}`, { waitUntil: 'domcontentloaded' });
+  await page.goto(`${URL}/?biome=forest&seed=777&map=classic&room=${ROOM}`, { waitUntil: 'domcontentloaded' });
   pages.push(page);
 }
 const [A, B] = pages;

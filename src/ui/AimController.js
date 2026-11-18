@@ -94,6 +94,12 @@ export class AimController {
         this.startX = pointer.x;
         this.startY = pointer.y;
         this.dragX = 0; this.dragY = 0;
+        // Пока не ясно, натяжение это или мазок по камере, начавшийся на
+        // бойце: решит скорость пальца в первые полторы десятых секунды
+        this.armed = false;
+        this.downAt = performance.now();
+        this.downPointer = { x: pointer.x, y: pointer.y };
+        this.wasOut = false;
       } else {
         this._beginPan(pointer);
       }
@@ -120,7 +126,7 @@ export class AimController {
   _beginPan(pointer) {
     this.mode = 'pan';
     if (this.scene.hookPerTurn > 0) {
-      this.tap = { x: pointer.x, y: pointer.y, moved: false };
+      this.tap = { x: pointer.x, y: pointer.y, moved: false, at: performance.now() };
     } else {
       this.tap = null;
       this.scene.rig.panStart(pointer);
@@ -145,6 +151,22 @@ export class AimController {
     if (this.scene.sling) {
       this.dragX = pointer.x - this.startX;
       this.dragY = pointer.y - this.startY;
+      const len = Math.hypot(this.dragX, this.dragY);
+      if (!this.armed) {
+        const quick = performance.now() - this.downAt < CFG.SLING_FLICK_MS;
+        if (quick && len > CFG.SLING_FLICK_PX) {
+          // Быстрый мазок: это камеру тянули. Переводим в протяжку с той
+          // точки, где палец коснулся, — кадр не дёрнется
+          this.mode = 'pan';
+          this.tap = null;
+          this.dragX = 0; this.dragY = 0;
+          this.scene.rig.panStart(this.downPointer);
+          this.scene.rig.panMove(pointer);
+          return;
+        }
+        if (!quick) this.armed = true;
+      }
+      if (len > CFG.SLING_MIN) this.wasOut = true;
       return;
     }
     const p = this.scene.rig.worldPoint(pointer);
@@ -154,8 +176,10 @@ export class AimController {
 
   onUp() {
     this.scene.rig.panEnd();
-    // Палец не двигался — это тап: трос в сторону точки
-    if (this.mode === 'pan' && this.tap && !this.tap.moved) {
+    // Палец не двигался и не задержался — это тап: трос в сторону точки.
+    // Подержал и отпустил — передумал, ничего не делаем
+    if (this.mode === 'pan' && this.tap && !this.tap.moved
+      && performance.now() - this.tap.at < CFG.TAP_TIME) {
       const p = this.scene.rig.worldPoint(this.tap);
       this.scene.tryHook(p.x, p.y);
     }
@@ -163,6 +187,15 @@ export class AimController {
     if (this.mode === 'charge') this.scene.mouseFire = false;
     if (this.mode === 'aim') {
       const shot = this.computeShot();
+      // Отпустил до того, как стало ясно, что это натяжение, или всё касание
+      // было коротким мазком — не стреляем
+      if (shot && this.scene.sling
+        && (!this.armed || performance.now() - this.downAt < CFG.SLING_MIN_HOLD)) {
+        this.mode = null;
+        this.dragX = 0; this.dragY = 0;
+        this.gfx.clear();
+        return;
+      }
       if (shot) {
         // Синхронизируем угол кнопочной схемы со свайпом, иначе после
         // выстрела свайпом ▲▼ продолжали бы крутить со старого значения
@@ -497,6 +530,19 @@ export class AimController {
   _drawSwipe() {
     if (this.worm?.marker?.visible) this.worm.setActiveMarker(false);
     const shot = this.computeShot();
+    // Рогатка: пока палец в круге отмены, круг виден — отпусти здесь, и
+    // выстрела не будет. Особенно ясно, когда натянул и вернул обратно
+    if (this.scene.sling) {
+      const o = this.origin();
+      const r = CFG.SLING_MIN / this.scene.rig.zoom;
+      const inside = !shot;
+      this.gfx.lineStyle(3, inside ? 0xff8a8a : 0xffffff, inside ? 0.85 : 0.22).strokeCircle(o.x, o.y, r);
+      if (inside && this.wasOut) {
+        this.gfx.lineStyle(4, 0xff8a8a, 0.9);
+        this.gfx.lineBetween(o.x - 9, o.y - 9, o.x + 9, o.y + 9);
+        this.gfx.lineBetween(o.x + 9, o.y - 9, o.x - 9, o.y + 9);
+      }
+    }
     if (!shot) return;
 
     // Свайп — тот же прицел и та же шкала силы, только направление и сила

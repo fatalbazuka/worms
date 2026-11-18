@@ -120,6 +120,9 @@ export default class GameScene extends Phaser.Scene {
     this.turn.begin(this._firstTeam());
 
     this._setupNet();
+    if (this.match.fallback) {
+      this.time.delayedCall(400, () => this.fx.banner('Соперник не нашёлся — бой с ботом, без рейтинга', '#ffd166', 2600, null));
+    }
     // Экран может поменять размер прямо посреди партии: повернули телефон,
     // уехала панель браузера. Логический размер тогда пересчитывается, и
     // интерфейс надо разложить заново.
