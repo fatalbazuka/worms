@@ -1,7 +1,7 @@
 import { CFG, DEPTH, TEAM_COLORS, TEAM_NAMES, canvasSize, applyWorld } from '../config.js';
 import { makeRng, subRng } from '../core/rng.js';
 import { BIOMES, pickBiome } from '../core/biomes.js';
-import { pickShape, shapeRng } from '../core/shapes.js';
+import { pickShape, shapeRng, towerVariant } from '../core/shapes.js';
 import { Terrain } from '../core/Terrain.js';
 import { TurnManager, STATE } from '../core/TurnManager.js';
 import { has, meta } from '../core/assets.js';
@@ -34,6 +34,7 @@ import { SKIN_BY_ID, rivalSkin } from '../core/skins.js';
 import { equippedSkin, syncCampaignBoxes } from '../platform/skins.js';
 import { recordBattle } from '../platform/daily.js';
 import { TASK_BY_ID } from '../core/daily.js';
+import { EMOTE_BY_ID, EMOTE_COOLDOWN } from '../core/emotes.js';
 import { CameraRig } from '../ui/CameraRig.js';
 import { askText, closeOverlay } from '../ui/Overlay.js';
 import { isDesktop } from '../platform/device.js';
@@ -62,6 +63,15 @@ export default class GameScene extends Phaser.Scene {
     this.shape = pickShape(this.seed,
       this.match.shape ?? (this.match.mode === 'campaign' ? 'island' : null));
     applyWorld(this.shape.world);
+    // Вид башни (ледяная, лавовая, ветреная) — от зерна, у обоих в сети один.
+    // Его правило ложится поверх правил партии; миссия может задать свой
+    this.variant = this.shape.id === 'tower'
+      ? towerVariant(this.seed, this.match.variant ?? new URLSearchParams(location.search).get('variant'))
+      : null;
+    if (this.variant) {
+      const v = this.variant.rules;
+      this.rules = { ...this.rules, ...v, flood: v.flood ?? this.rules.flood };
+    }
     // Крюк-трос: сколько раз за ход. Ноль — крюка в партии нет. Вместе с
     // ним приходит и новая схема под палец: рогатка, тап, любая ориентация
     this.hookPerTurn = Math.max(0, Number(this.rules.hook) || 0);
@@ -124,6 +134,10 @@ export default class GameScene extends Phaser.Scene {
     this.turn.begin(this._firstTeam());
 
     this._setupNet();
+    if (this.variant?.intro) {
+      this.time.delayedCall(this.match.fallback ? 3200 : 500,
+        () => this.fx.banner(this.variant.intro, '#ffd166', 2600, null));
+    }
     if (this.match.fallback) {
       this.time.delayedCall(400, () => this.fx.banner('Соперник не нашёлся — бой с ботом, без рейтинга', '#ffd166', 2600, null));
     }
@@ -191,6 +205,58 @@ export default class GameScene extends Phaser.Scene {
     const theirs = this.registry.get('net')?.opponent?.skin;
     const id = SKIN_BY_ID[theirs] ? theirs : rivalSkin(this.seed, team, mine.id);
     return SKIN_BY_ID[id].sheet;
+  }
+
+  // ------------------------------------------------------------ эмоции
+
+  /**
+   * Эмоция команды team: боец корчит рожу, над ним пузырь с фразой. Кто
+   * говорит — тот, кто сейчас ходит, если это эта команда; иначе первый
+   * живой. Своя эмоция по сети уходит и сопернику.
+   */
+  showEmote(team, id, { send = false } = {}) {
+    const e = EMOTE_BY_ID[id];
+    if (!e || this.turn?.state === 'over' && !this.gameOverUi) return false;
+    const now = performance.now();
+    this._emoteAt ??= {};
+    if (now - (this._emoteAt[team] ?? 0) < EMOTE_COOLDOWN) return false;
+    this._emoteAt[team] = now;
+    const active = this.turn?.activeWorm;
+    const w = active?.alive && active.team === team ? active : this.worms.find((x) => x.alive && x.team === team);
+    if (!w) return false;
+    if (send) this.net?.sendEmote(id);
+    w.mood = e.pose;
+    this.time.delayedCall(1600, () => { if (w.mood === e.pose) w.mood = null; });
+    w.squash = -0.8;
+    this.fx.sound('select');
+
+    const t = this.add.text(w.x, w.y - CFG.WORM_H - 64, e.text, font(20, 800, '#1a1408'))
+      .setOrigin(0.5, 1).setPadding(12, 6, 12, 6).setBackgroundColor('#ffffff')
+      .setDepth(DEPTH.FX + 2).setScale(0.3);
+    this.rig.world(t);
+    this.tweens.add({ targets: t, scale: 1, duration: 220, ease: 'Back.easeOut' });
+    this.tweens.add({
+      targets: t, alpha: 0, y: t.y - 18, delay: 1500, duration: 350, onComplete: () => t.destroy(),
+    });
+    // Пузырь едет за бойцом, пока тот двигается
+    const follow = () => { if (t.active && w.alive) t.setPosition(w.x, w.y - CFG.WORM_H - 64 - (t.alpha < 1 ? 18 * (1 - t.alpha) : 0)); };
+    this.events.on('update', follow);
+    t.once('destroy', () => this.events.off('update', follow));
+    return true;
+  }
+
+  /**
+   * Бот тоже корчит рожи: попал по игроку — смеётся, получил — злится или
+   * плачет. Не каждый раз, чтобы не надоедало. Только в бою с ботом.
+   */
+  _botReact(playerHurt) {
+    const botTeam = this.match.teams.findIndex((t) => t.control === 'bot');
+    if (botTeam < 0 || this.net || Math.random() > 0.4) return;
+    const botAttacked = this.turn.currentTeam === botTeam;
+    let id = null;
+    if (botAttacked && playerHurt) id = 'laugh';
+    else if (!botAttacked && !playerHurt) id = Math.random() < 0.5 ? 'angry' : 'cry';
+    if (id) this.time.delayedCall(700, () => this.showEmote(botTeam, id));
   }
 
   // ------------------------------------------------------------ задания
@@ -478,7 +544,9 @@ export default class GameScene extends Phaser.Scene {
   _chooseBiome() {
     const forced = this.registry.get('forceBiome')
       ?? new URLSearchParams(location.search).get('biome');
-    return BIOMES.find((b) => b.id === forced) ?? pickBiome(this.rng);
+    return BIOMES.find((b) => b.id === forced)
+      ?? BIOMES.find((b) => b.id === this.variant?.biome)
+      ?? pickBiome(this.rng);
   }
 
   _buildSky(biome) {
@@ -574,9 +642,13 @@ export default class GameScene extends Phaser.Scene {
     // Шире мира: на узкой башне в горизонтальном экране по бокам от неё
     // иначе была бы пустота вместо моря
     const wide = CFG.WORLD_W + 4000;
-    this.waterBody = this.rig.world(this.add.rectangle(-2000, CFG.WATER_Y, wide, deep + 2000, biome.water, biome.waterAlpha)
+    // Лава — гуще и ярче воды, с огненной кромкой
+    const lava = this.rules.liquid === 'lava';
+    this.waterBody = this.rig.world(this.add.rectangle(-2000, CFG.WATER_Y, wide, deep + 2000,
+      lava ? 0xd2400f : biome.water, lava ? 0.93 : biome.waterAlpha)
       .setOrigin(0, 0).setDepth(DEPTH.WATER));
-    this.waterLine = this.rig.world(this.add.rectangle(-2000, CFG.WATER_Y, wide, 3, 0xffffff, 0.25)
+    this.waterLine = this.rig.world(this.add.rectangle(-2000, CFG.WATER_Y, wide, lava ? 6 : 3,
+      lava ? 0xffc23a : 0xffffff, lava ? 0.9 : 0.25)
       .setOrigin(0, 0).setDepth(DEPTH.WATER));
     this.waterBase = CFG.WATER_Y;
     this.floodLevel = 0;
@@ -593,13 +665,17 @@ export default class GameScene extends Phaser.Scene {
     if (!f || !this.waterBody) return;
     const turn = this.turn?.turnNumber ?? 0;
     const level = Math.max(0, turn - f.after) * f.step;
-    if (turn === f.after) this.fx.banner('Со следующего хода вода пойдёт вверх', '#9fd8ff', 1800);
+    const lava = this.rules.liquid === 'lava';
+    if (turn === f.after) {
+      this.fx.banner(lava ? 'Со следующего хода лава пойдёт вверх' : 'Со следующего хода вода пойдёт вверх',
+        lava ? '#ffb37a' : '#9fd8ff', 1800);
+    }
     if (level === this.floodLevel) return;
     this.floodLevel = level;
     CFG.WATER_Y = this.waterBase - level;
     CFG.DROWN_Y = CFG.WATER_Y + 15;
     this.tweens.add({ targets: [this.waterBody, this.waterLine], y: CFG.WATER_Y, duration: 900, ease: 'Sine.easeInOut' });
-    this.fx.banner('Вода поднимается!', '#9fd8ff', 1300, 'splash');
+    this.fx.banner(lava ? 'Лава поднимается!' : 'Вода поднимается!', lava ? '#ffb37a' : '#9fd8ff', 1300, 'splash');
     this.rig.shake(260, 0.004);
   }
 
@@ -1282,6 +1358,7 @@ export default class GameScene extends Phaser.Scene {
     // Отдача в руку: задели своего — сильно, чужого — коротко
     if (felt === 2) haptic('hurt');
     else if (felt === 1) haptic('hit');
+    if (felt) this._botReact(felt === 2);
   }
 
   /**

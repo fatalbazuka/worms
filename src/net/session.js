@@ -144,6 +144,7 @@ export class NetSession {
       case 'shot': return this._onShot(msg);
       case 'state': return this._onState(msg);
       case 'rematch': return this._onRematch();
+      case 'emote': return this.sceneReady ? this.scene.showEmote?.(this.myTeam === 0 ? 1 : 0, msg.emote) : undefined;
       default: return undefined;
     }
   }
@@ -338,6 +339,11 @@ export class NetSession {
   }
 
   /** Живой ход: позиция, прицел, заряд — раз в сто миллисекунд, если менялось. */
+  /** Эмоция — сопернику: только id, остальное он знает сам. */
+  sendEmote(id) {
+    if (this.paired) this.transport.send({ type: 'emote', emote: String(id).slice(0, 12) });
+  }
+
   sendMove(m) {
     if (!this.paired || !m) return;
     this.transport.send({ type: 'move', m });

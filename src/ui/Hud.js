@@ -5,6 +5,7 @@ import { UI, font, ensureButton, ensureRoundButton, ensureIcon } from './theme.j
 import { Inventory } from './Inventory.js';
 import { isDesktop } from '../platform/device.js';
 import { sfx } from '../audio/Sfx.js';
+import { EMOTES } from '../core/emotes.js';
 
 export const TOP_H = 62;
 
@@ -324,6 +325,10 @@ export class Hud {
     let y = TOP_H + 12;
     const more = this._tap(x, y, SB, 'more', () => this.setMore(!this.moreOpen));
     this.buttons.more = { x: x + SB / 2, y: y + SB / 2 };
+    // Эмоции — слева от «⋯»: смайлик, по нажатию — ряд рож с фразами
+    this._tap(x - step, y, SB, 'emote', () => this.toggleEmotes());
+    this.buttons.emote = { x: x - step + SB / 2, y: y + SB / 2 };
+    this._buildEmotes(W, y + SB + 14);
     this.moreItems = [];
     const service = (icon, onTap) => {
       y += step;
@@ -351,8 +356,46 @@ export class Hud {
     this.netText = this.fix(s.add.text(16, TOP_H + 10, '', font(13, 800, UI.accent)), DEPTH.HUD + 1);
   }
 
+  /** Ряд эмоций под верхней панелью; скрыт, пока не нажали смайлик. */
+  _buildEmotes(W, y) {
+    const s = this.scene;
+    this.emoteItems = [];
+    const list = EMOTES;
+    const bw = Math.min(150, Math.floor((W - 24) / 3) - 8), bh = 64, gap = 8;
+    const cols = 3;
+    const x0 = Math.round((W - (cols * bw + (cols - 1) * gap)) / 2);
+    ensureButton(s, `ui-emote-${bw}x${bh}`, bw, bh, 'normal');
+    list.forEach((e, i) => {
+      const x = x0 + (i % cols) * (bw + gap), yy = y + Math.floor(i / cols) * (bh + gap);
+      const img = this.fix(s.add.image(x + bw / 2, yy + bh / 2, `ui-emote-${bw}x${bh}`), DEPTH.HUD + 6);
+      const t = this.fix(s.add.text(x + bw / 2, yy + bh / 2, e.text, font(18, 800)).setOrigin(0.5), DEPTH.HUD + 7);
+      if (t.width > bw - 12) t.setScale((bw - 12) / t.width);
+      img.setInteractive({ useHandCursor: true });
+      img.on('pointerup', () => {
+        this.toggleEmotes(false);
+        s.showEmote(s.myTeamIndex, e.id, { send: true });
+      });
+      const rect = { x, y: yy, w: bw, h: bh };
+      this.uiRects.push(rect);
+      this.emoteItems.push({ img, t, rect });
+      this.buttons[`emote-${e.id}`] = { x: x + bw / 2, y: yy + bh / 2 };
+    });
+    this.toggleEmotes(false);
+  }
+
+  toggleEmotes(on = !this.emotesOpen) {
+    this.emotesOpen = on;
+    if (on) this.setMore(false);
+    for (const it of this.emoteItems ?? []) {
+      it.img.setVisible(on); it.t.setVisible(on);
+      if (on) it.img.setInteractive(); else it.img.disableInteractive();
+      it.rect.h = on ? 64 : 0;
+    }
+  }
+
   setMore(on) {
     this.moreOpen = on;
+    if (on) this.toggleEmotes(false);
     for (const it of this.moreItems ?? []) {
       it.img.setVisible(on);
       it.img.iconImage?.setVisible(on);

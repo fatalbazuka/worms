@@ -255,6 +255,16 @@ const ICONS = {
     ctx.quadraticCurveTo(s * 0.74, s * 0.56, s * 0.76, s * 0.8);
     ctx.stroke();
   },
+  // Смайлик: эмоции в бою
+  emote: (ctx, s) => {
+    stroke(ctx, s);
+    const c = s / 2;
+    ctx.beginPath(); ctx.arc(c, c, s * 0.3, 0, Math.PI * 2); ctx.stroke();
+    ctx.fillStyle = UI.text;
+    ctx.beginPath(); ctx.arc(c - s * 0.1, c - s * 0.07, s * 0.035, 0, Math.PI * 2); ctx.fill();
+    ctx.beginPath(); ctx.arc(c + s * 0.1, c - s * 0.07, s * 0.035, 0, Math.PI * 2); ctx.fill();
+    ctx.beginPath(); ctx.arc(c, c + s * 0.02, s * 0.15, 0.2 * Math.PI, 0.8 * Math.PI); ctx.stroke();
+  },
   // Три точки: редкие кнопки спрятаны под одной
   more: (ctx, s) => {
     ctx.fillStyle = '#ffffff';

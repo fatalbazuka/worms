@@ -259,6 +259,47 @@ export const SHAPES = [
 
 export const SHAPE_BY_ID = Object.fromEntries(SHAPES.map((s) => [s.id, s]));
 
+/**
+ * Виды башни: та же арена, другие тема и правило. Выбирается от зерна
+ * партии — в сети у обоих один. rules поверх правил партии:
+ *   groundFriction — трение о землю (по умолчанию CFG.GROUND_FRICTION);
+ *   landKeep       — сколько скорости остаётся при приземлении (0.3);
+ *   flood, windRange — как у партии (match.js);
+ *   liquid         — 'lava': жидкость внизу — лава.
+ */
+export const TOWER_VARIANTS = [
+  { id: 'classic', name: 'Башня', weight: 2, biome: null, rules: {}, intro: null },
+  {
+    id: 'ice', name: 'Ледяная башня', weight: 1, biome: 'snow',
+    rules: { groundFriction: 0.9, landKeep: 0.85 },
+    intro: 'Ледяная башня: скользко — от взрыва катишься далеко',
+  },
+  {
+    id: 'lava', name: 'Лавовая башня', weight: 1, biome: 'hell',
+    rules: { flood: { after: 5, step: 90 }, liquid: 'lava' },
+    intro: 'Лавовая башня: лава пойдёт вверх уже с 6-го хода',
+  },
+  {
+    id: 'wind', name: 'Ветреная башня', weight: 1, biome: 'desert',
+    rules: { windRange: [170, 300] },
+    intro: 'Ветреная башня: сильный ветер, бей с поправкой',
+  },
+];
+
+/** Вид башни для партии: явный (?variant=ice) или от зерна. */
+export function towerVariant(seed, wanted = null) {
+  const forced = TOWER_VARIANTS.find((v) => v.id === wanted);
+  if (forced) return forced;
+  const rng = subRng(seed, SHAPE_SALT + 7);
+  const total = TOWER_VARIANTS.reduce((a, v) => a + v.weight, 0);
+  let r = rng() * total;
+  for (const v of TOWER_VARIANTS) {
+    r -= v.weight;
+    if (r < 0) return v;
+  }
+  return TOWER_VARIANTS[0];
+}
+
 /** Генератор формы: свой поток от зерна, основной не трогает. */
 export function shapeRng(seed) {
   return subRng(seed, SHAPE_SALT);

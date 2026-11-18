@@ -307,8 +307,12 @@ export class Fx {
   banner(text, color = '#ffffff', duration = 1600, sound = undefined) {
     const s = this.scene;
     sfx.play(sound === undefined ? (TURN_BANNER.test(text) ? 'turnStart' : 'select') : sound);
-    const t = s.add.text(CFG.VIEW_W / 2, 168, text, font(34, 800, color))
-      .setOrigin(0.5).setScrollFactor(0).setDepth(DEPTH.HUD + 5);
+    // Длинная плашка (вводная к башне) не должна вылезать за экран: кегль
+    // поменьше и перенос по ширине
+    const long = text.length > 28;
+    const t = s.add.text(CFG.VIEW_W / 2, 168, text, font(long ? 27 : 34, 800, color))
+      .setOrigin(0.5).setScrollFactor(0).setDepth(DEPTH.HUD + 5)
+      .setStroke('#10131a', 5).setWordWrapWidth(CFG.VIEW_W - 56);
     t.setAlign('center');
     s.rig.ui(t);
     t.setScale(0.7);
