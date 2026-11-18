@@ -44,6 +44,9 @@ export class Weapon {
       fuse: 0,            // сек до самоподрыва (0 = только от удара)
       digRadius: 0,       // >0 — бурит землю вместо взрыва при касании
       digTime: 0,         // сколько секунд бурит
+      pierce: 0,          // >0 — первый пол пробивает на столько px вглубь (гиря)
+      sticky: false,      // прилипает к первой же поверхности (липкая бомба)
+      stickFuse: 0,       // сек от прилипания до взрыва
       trail: true,
     }, cfg.projectile);
 
@@ -186,6 +189,21 @@ export class PlacedWeapon extends Weapon {
 export class MineWeapon extends Weapon {
   fire(scene, x, y, vx, vy, owner) {
     scene.addMine(owner ? owner.x : x, owner ? owner.y - 4 : y, this, owner);
+    return [];
+  }
+}
+
+/**
+ * Батут: ставится на пол перед бойцом (в сторону, куда он смотрит) и
+ * остаётся на карте, как мина. После установки — время отойти или
+ * запрыгнуть на него самому.
+ */
+export class SpringWeapon extends Weapon {
+  fire(scene, x, y, vx, vy, owner) {
+    const dir = owner ? owner.facing : (vx >= 0 ? 1 : -1);
+    const px = owner ? owner.x + dir * 34 : x;
+    const py = owner ? owner.y - 4 : y;
+    scene.addSpring(px, py, owner);
     return [];
   }
 }

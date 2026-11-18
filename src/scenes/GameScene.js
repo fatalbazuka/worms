@@ -8,6 +8,8 @@ import { has, meta } from '../core/assets.js';
 import { Worm } from '../entities/Worm.js';
 import { Crate } from '../entities/Crate.js';
 import { Mine } from '../entities/Mine.js';
+import { Spring } from '../entities/Spring.js';
+import { Props } from '../entities/Props.js';
 import { Hud, TOP_H } from '../ui/Hud.js';
 import { Fx } from '../ui/Fx.js';
 import { AimController } from '../ui/AimController.js';
@@ -97,6 +99,7 @@ export default class GameScene extends Phaser.Scene {
     this.projectiles = [];
     this.crates = [];
     this.mines = [];
+    this.springs = [];
     this.followTarget = null;
     this.moveInput = {
       left: false, right: false, jumpQueued: false,
@@ -134,6 +137,11 @@ export default class GameScene extends Phaser.Scene {
     this.offscreen = new OffscreenMarkers(this);
 
     this._spawnWorms();
+    // Эмодзи на башне: фон и ломкие предметы на этажах — от зерна, у всех одни
+    if (this.terrain.tops) {
+      this.props = new Props(this, this.seed, this.variant?.id ?? 'classic')
+        .build(this.worms.map((w) => ({ x: w.x, y: w.y })));
+    }
     this._setupKeyboard();
     this._setupBots();
     this._applyAmmoRules();
@@ -901,6 +909,11 @@ export default class GameScene extends Phaser.Scene {
     if (this.mines.some((m) => !m.alive)) {
       this.mines = this.mines.filter((m) => m.alive);
     }
+    this.props?.update(dt);
+    for (const sp of this.springs) sp.update(dt);
+    if (this.springs.some((sp) => !sp.alive)) {
+      this.springs = this.springs.filter((sp) => sp.alive);
+    }
     this._collectCrates();
     if (this.crates.some((c) => !c.alive)) {
       this.crates = this.crates.filter((c) => c.alive);
@@ -1333,6 +1346,7 @@ export default class GameScene extends Phaser.Scene {
     if (this.replaying) {
       this.fx.explosion(x, y, cfg.radius);
       this.rig.shake(220, cfg.shake ?? 0.006);
+      this.props?.hit(x, y, cfg.damageRadius * 0.9, false);
       return;
     }
     // Воронку режем ровно по целым: у соперника она восстанавливается из
@@ -1347,6 +1361,14 @@ export default class GameScene extends Phaser.Scene {
 
     for (const c of this.crates) {
       if (c.alive && Math.hypot(c.x - x, c.y - c.h / 2 - y) <= cfg.damageRadius) c.destroy();
+    }
+
+    // Эмодзи-предметы на этажах ломаются, бочки взрываются следом
+    this.props?.hit(x, y, cfg.damageRadius * 0.9, true);
+
+    // Батут взрыв ломает
+    for (const sp of this.springs) {
+      if (sp.alive && Math.hypot(sp.x - x, sp.y - 8 - y) <= cfg.damageRadius * 0.8) sp.destroy();
     }
 
     // Мина рядом со взрывом детонирует — так получаются цепочки.
@@ -1402,6 +1424,10 @@ export default class GameScene extends Phaser.Scene {
   /** Поставить мину. Оружие само её не хранит — предмет живёт в сцене. */
   addMine(x, y, weapon, owner) {
     this.mines.push(new Mine(this, x, y, weapon, owner));
+  }
+
+  addSpring(x, y, owner) {
+    this.springs.push(new Spring(this, x, y, owner));
   }
 
   /** Ход отыгран и очередь передана — отдаём второму игроку итог. */
@@ -1749,6 +1775,8 @@ export default class GameScene extends Phaser.Scene {
     this.input?.setDefaultCursor?.('default');
     this.mouseFire = false;
     this.mines = [];
+    this.springs = [];
+    this.props = null;
     this.aim?.destroy();
     this.crates = [];
     this.rig?.destroy();

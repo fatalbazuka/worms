@@ -286,7 +286,10 @@ export class TurnManager {
 
       case STATE.RESOLVE: {
         this.resolveTimer += dt;
-        const quiet = scene.projectiles.length === 0 && scene.worms.every((w) => w.settled);
+        // Затишье: снаряды долетели, бойцы встали, бочки отгремели, монстры
+        // доделали свой ход
+        const quiet = scene.projectiles.length === 0 && scene.worms.every((w) => w.settled)
+          && !(scene.barrelsPending > 0) && !scene.monstersBusy?.();
         if ((quiet && this.resolveTimer >= CFG.RESOLVE_SETTLE)
           || this.resolveTimer >= CFG.RESOLVE_TIMEOUT) {
           if (this._holding(dt)) break;   // очередь передаст тот, кто ходил

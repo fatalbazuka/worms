@@ -1,4 +1,4 @@
-import { IMAGES, SHEETS, meta, missing } from '../core/assets.js';
+import { IMAGES, SHEETS, EMOJI, meta, missing } from '../core/assets.js';
 import { onlineMatch } from '../core/match.js';
 import { startRoom } from '../platform/telegram.js';
 
@@ -25,6 +25,9 @@ export default class BootScene extends Phaser.Scene {
 
     for (const [key, path] of Object.entries(IMAGES)) {
       this.load.image(key, path);
+    }
+    for (const name of EMOJI) {
+      this.load.svg(`emoji_${name}`, `assets/emoji/${name}.svg`, { width: 128, height: 128 });
     }
     for (const key of Object.keys(SHEETS)) {
       const m = meta(key);

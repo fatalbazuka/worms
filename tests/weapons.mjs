@@ -375,6 +375,53 @@ for (const id of ['bazooka', 'grenade', 'cluster', 'mole', 'banana', 'holy', 'mo
   }
 }
 
+// --- оружие башни и эмодзи-предметы: на настоящей башне ---
+{
+  const tp = await browser.newPage({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true });
+  tp.on('pageerror', (e) => errors.push(`pageerror(башня): ${e.message}`));
+  await tp.addInitScript(() => localStorage.setItem('worms.play.v1', JSON.stringify({ level: 'rookie' })));
+  await tp.goto(`${URL}/?seed=4242`, { waitUntil: 'domcontentloaded' });
+  await tp.waitForFunction(() => window.__WORMS__?.scene.isActive('Menu'), null, { timeout: 40000 });
+  await tp.evaluate(async () => {
+    const { towerMatch } = await import('/src/core/match.js');
+    window.__WORMS__.scene.getScene('Menu').start(towerMatch('dummy'));
+  });
+  await tp.waitForFunction(() => window.__WORMS__.scene.getScene('Game')?.canPlayerAct?.(), null, { timeout: 40000 });
+  const r = await tp.evaluate(async () => {
+    const s = window.__WORMS__.scene.getScene('Game');
+    s.hud.setHelp(false);
+    const { WEAPONS_BY_ID } = await import('/src/weapons/index.js');
+    const { Projectile } = await import('/src/entities/Projectile.js');
+    const w = s.turn.activeWorm;
+    const step = (p, n, f) => { for (let i = 0; i < n && p.alive; i++) { p.update(1 / 60); f?.(p); } };
+    // Гиря сверху на пол рядом с бойцом: проламывает и рвётся ниже
+    const pw = new Projectile(s, w.x + 60, w.y - 200, 0, 0, WEAPONS_BY_ID.weight, null);
+    let at = null;
+    step(pw, 400, (p) => { if (p.pierced && at === null) at = p.y; });
+    const weight = { pierced: Boolean(pw.pierced), exploded: !pw.alive, below: pw.y > (at ?? 1e9) };
+    // Липучка: прилипает и рвётся сама
+    const ps = new Projectile(s, w.x, w.y - 40, 300, -100, WEAPONS_BY_ID.sticky, null);
+    let stuck = false;
+    step(ps, 600, (p) => { stuck ||= p.stuck; });
+    // Батут под ногами: подбрасывает
+    s.addSpring(w.x, w.y - 2, null);
+    const y0 = w.y; let minY = y0;
+    for (let i = 0; i < 60; i++) { s.springs[0]?.update(1 / 60); w.update(1 / 60); minY = Math.min(minY, w.y); }
+    // Предметы: есть на этажах, взрыв рядом их ломает
+    const it = s.props.items.find((x) => x.alive && x.name !== 'barrel');
+    const before = s.props.count;
+    s.explode(it.x, it.y - 10, { radius: 10, damageRadius: 30, damage: 0, knockback: 0, shake: 0 });
+    return { weight, sticky: { stuck, exploded: !ps.alive }, rise: y0 - minY, props: before, after: s.props.count };
+  });
+  check('гиря: проламывает пол и рвётся этажом ниже',
+    r.weight.pierced && r.weight.exploded && r.weight.below, JSON.stringify(r.weight));
+  check('липучка: прилипает к поверхности и взрывается по фитилю', r.sticky.stuck && r.sticky.exploded);
+  check('батут: подбрасывает вставшего на него бойца', r.rise > 60, `${Math.round(r.rise)} px`);
+  check('на башне стоят эмодзи-предметы, взрыв рядом их ломает',
+    r.props >= 6 && r.after < r.props, `${r.props} → ${r.after}`);
+  await tp.close();
+}
+
 check('нет ошибок в консоли', errors.length === 0, errors.slice(0, 3).join(' | '));
 
 await browser.close();
