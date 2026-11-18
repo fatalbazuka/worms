@@ -3,7 +3,7 @@
  * Правила и сами бои — campaign/ascent.js.
  */
 import { ASCENT_BY_ID } from '../campaign/ascent.js';
-import { inTelegram, cloudGet, cloudSet } from './telegram.js';
+import { cloudReady, cloudLoad, cloudSave } from './cloud.js';
 
 const STORE_KEY = 'worms.ascent.v1';
 
@@ -14,7 +14,7 @@ function clean(raw) {
 function save(done) {
   const raw = JSON.stringify([...done]);
   try { localStorage.setItem(STORE_KEY, raw); } catch { /* инкогнито */ }
-  if (inTelegram()) cloudSet(STORE_KEY, raw);
+  cloudSave(STORE_KEY, raw);
 }
 
 /** @returns {Set<string>} id пройденных боёв */
@@ -32,11 +32,10 @@ export function markAscentDone(id) {
 
 /** Облачная копия: объединение пройденного. */
 export async function syncAscentCloud() {
-  if (!inTelegram()) return;
-  let cloud = null;
-  try { cloud = clean(JSON.parse((await cloudGet(STORE_KEY)) ?? 'null')); } catch { cloud = null; }
-  if (!cloud?.size) return;
+  if (!cloudReady()) return;
   const done = ascentDone();
-  for (const id of cloud) done.add(id);
+  for (const raw of await cloudLoad(STORE_KEY)) {
+    try { for (const id of clean(JSON.parse(raw))) done.add(id); } catch { /* битая копия — мимо */ }
+  }
   save(done);
 }

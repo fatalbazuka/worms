@@ -37,6 +37,8 @@
  *   GET  /api/shop                        → {items, skinStars, owned}  товары и что положено
  *   POST /api/shop/buy {item}             → {invoice}        box1 | box5 | skin-<id>
  *   POST /api/challenge {room, link}      → {id}             карточка «вызов на бой» для shareMessage
+ *   POST /api/login {login, password}     → {token, player}  вход с сайта (логин и пароль выдаёт /web)
+ *   GET  /api/save · PUT /api/save {key, value}            прогресс игры на сервере
  *   GET  /api/daily-tower                 → {day, seed, top, me, players}  «Башня дня»
  *   POST /api/daily-tower {day, won, turns, hp} → то же + accepted       итог попытки
  *   POST /api/bot/webhook                 ← обновления Telegram
@@ -46,7 +48,7 @@ import { createServer } from 'node:http';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { openDb, tx } from './db.mjs';
-import { newToken, tokenHash } from './lib/accounts.js';
+import { newToken, tokenHash, verifyPassword } from './lib/accounts.js';
 import { verifyInitData } from './lib/telegram.js';
 import { settle } from './lib/elo.js';
 import { isCasualRoom } from './lib/rooms.js';
@@ -58,6 +60,7 @@ import { createBot, webhookSecret } from './bot.mjs';
 import { createAnalytics } from './analytics.mjs';
 import { createShop, SHOP, SKIN_STARS, shopItem } from './shop.mjs';
 import { createDailyTower } from './dailytower.mjs';
+import { createSaves } from './saves.mjs';
 
 export function createApp({
   db, botToken = '', trustProxy = false, staticDir = null, now = () => Date.now(),
@@ -65,7 +68,8 @@ export function createApp({
   log = console,
 }) {
   const admins = new Set(adminIds.map(Number).filter(Boolean));
-  const limits = { write: limiter(120, 60_000) };
+  // login — подбор пароля: не больше 10 попыток в минуту с одного адреса
+  const limits = { write: limiter(120, 60_000), login: limiter(10, 60_000) };
   const api = createTelegramApi({ token: botToken, base: telegramApiBase, log });
   const players = createPlayers({ db, now, adminIds: admins });
   let bot = null;
@@ -77,6 +81,7 @@ export function createApp({
   });
   const analytics = createAnalytics({ db, now, tz });
   const shop = createShop({ db, now });
+  const saves = createSaves({ db, now });
   const daily = createDailyTower({ db, players, dayOf: () => analytics.dayOf(), now });
   bot = createBot({ db, api, players, tournaments, analytics, adminIds: admins, publicUrl, tz, now, log });
   const hookSecret = botToken ? webhookSecret(botToken, secret) : '';
@@ -239,7 +244,7 @@ export function createApp({
       await bot.handleUpdate(await readJson(req));
       return { ok: true };
     }
-    if (method === 'POST' && !limits.write.hit(ip)) throw new HttpError(429, 'слишком часто');
+    if ((method === 'POST' || method === 'PUT') && !limits.write.hit(ip)) throw new HttpError(429, 'слишком часто');
 
     const tm = /^\/api\/tournaments\/(\d+)(?:\/(join|leave|start))?$/.exec(path);
     if (tm) {
@@ -269,6 +274,21 @@ export function createApp({
       case 'GET /api/config': return { bot: bot.username || null, stars: api.enabled };
       case 'GET /api/top': return top(url);
       case 'POST /api/telegram': return telegramLogin(await readJson(req));
+      case 'POST /api/login': {
+        if (!limits.login.hit(ip)) throw new HttpError(429, 'слишком много попыток, подожди минуту');
+        const { login, password } = await readJson(req);
+        const p = players.byLogin(login);
+        if (!p || !verifyPassword(password, p.pass_hash)) throw new HttpError(401, 'неверный логин или пароль');
+        return { token: issueToken(p.id), player: players.view(p, { self: true }) };
+      }
+      case 'GET /api/save': return { items: saves.all(auth(req).id) };
+      case 'PUT /api/save': {
+        const me = auth(req);
+        const { key, value } = await readJson(req);
+        const err = saves.put(me.id, String(key ?? ''), value);
+        if (err) throw new HttpError(400, err);
+        return { ok: true };
+      }
       case 'GET /api/me': return { player: players.view(auth(req), { self: true }) };
       case 'GET /api/me/history': return history(auth(req));
       case 'POST /api/result': { const me = auth(req); return result(me, await readJson(req)); }

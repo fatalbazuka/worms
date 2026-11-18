@@ -10,7 +10,7 @@ import {
   normalize, rollDay, addBattle, claimTask, claimStreak, payForBox, hasReward, dayKey, mergeDaily,
   buyFreeze, spendCoins,
 } from '../core/daily.js';
-import { inTelegram, cloudGet, cloudSet } from './telegram.js';
+import { cloudReady, cloudLoad, cloudSave } from './cloud.js';
 import { grantBoxes, allSkinsOwned } from './skins.js';
 
 const STORE_KEY = 'worms.daily.v1';
@@ -25,17 +25,19 @@ function load() {
 function save(state) {
   const raw = JSON.stringify(state);
   try { localStorage.setItem(STORE_KEY, raw); } catch { /* инкогнито */ }
-  if (inTelegram()) cloudSet(STORE_KEY, raw);
+  cloudSave(STORE_KEY, raw);
   for (const fn of listeners) fn(state);
   return state;
 }
 
 /** Подтянуть облачную копию кошелька и заданий и свести с местной. */
 export async function syncDailyCloud() {
-  if (!inTelegram()) return;
-  let cloud = null;
-  try { cloud = JSON.parse((await cloudGet(STORE_KEY)) ?? 'null'); } catch { cloud = null; }
-  if (cloud) save(rollDay(mergeDaily(load(), cloud), dayKey()));
+  if (!cloudReady()) return;
+  let st = load();
+  for (const raw of await cloudLoad(STORE_KEY)) {
+    try { st = mergeDaily(st, JSON.parse(raw)); } catch { /* битая копия — мимо */ }
+  }
+  save(rollDay(st, dayKey()));
 }
 
 /** Подписка на изменения кошелька — меню перерисовывает счётчик. */

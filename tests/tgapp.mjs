@@ -18,6 +18,7 @@ import { launchOptions } from './browser.mjs';
 import { openDb } from '../server/db.mjs';
 import { createApp } from '../server/index.mjs';
 import { signInitData } from '../server/lib/telegram.js';
+import { hashPassword } from '../server/lib/accounts.js';
 
 const failures = [];
 function check(name, ok, detail = '') {
@@ -262,6 +263,36 @@ const dailyBoard = await A.evaluate(async () => {
 });
 check('башня дня в Telegram: попытка в таблице, место на экране',
   dailyBoard.go && dailyBoard.mine?.place === 1 && dailyBoard.mine.turns === 5, JSON.stringify(dailyBoard));
+
+// --- вход с сайта: тот же аккаунт и прогресс, что в Telegram ---
+{
+  // Прогресс из Telegram уходит на сервер с задержкой — даём ему доехать
+  await A.waitForTimeout(2000);
+  const tgBoxes = await A.evaluate(() => JSON.parse(localStorage.getItem('worms.skins.v1') ?? '{}').boxes ?? 0);
+  db.prepare('update player set name_key = ?, pass_hash = ? where id = ?').run('admin.site', hashPassword('pw-12345'), `tg${ADMIN}`);
+  const W = await browsers[1].newPage({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true });
+  W.on('pageerror', (e) => errors.push(`[сайт] pageerror: ${e.message}`));
+  await W.addInitScript(() => { globalThis.WORMS_TELEGRAM_ONLY = true; });
+  await W.goto(URL, { waitUntil: 'domcontentloaded' });
+  const gate = await W.waitForSelector('#gate-login', { state: 'visible', timeout: 15000 }).then(() => true).catch(() => false);
+  await W.fill('#gate-login input[name=login]', 'admin.site');
+  await W.fill('#gate-login input[name=password]', 'wrong');
+  await W.click('#gate-login button');
+  const wrongMsg = await W.waitForFunction(() => document.querySelector('#gate .gate-error')?.textContent, null, { timeout: 8000 })
+    .then((h) => h.jsonValue()).catch(() => '');
+  await W.fill('#gate-login input[name=password]', 'pw-12345');
+  await W.click('#gate-login button');
+  await W.waitForFunction(() => window.__WORMS__?.scene.isActive('Menu'), null, { timeout: 40000 });
+  const web = await W.evaluate(async () => {
+    const { player } = await import('/src/platform/player.js');
+    return { id: player().id, boxes: JSON.parse(localStorage.getItem('worms.skins.v1') ?? '{}').boxes ?? 0,
+      gate: getComputedStyle(document.getElementById('gate')).display };
+  });
+  check('сайт: форма входа, неверный пароль — ошибка, верный — тот же аккаунт и прогресс из Telegram',
+    gate && /неверный/.test(wrongMsg) && web.id === `tg${ADMIN}` && web.gate === 'none' && web.boxes === tgBoxes && tgBoxes > 0,
+    JSON.stringify({ wrongMsg, ...web, tgBoxes }));
+  await W.close();
+}
 
 check('нет ошибок в консоли', errors.length === 0, errors.slice(0, 4).join(' | '));
 

@@ -359,6 +359,38 @@ check('«твой ход» бот не пишет', !calls('sendMessage').some((
   check('башня дня: попытка не того дня не засчитывается', stale.accepted === false && stale.me.place === 3);
 }
 
+// --- вход с сайта: админ выдаёт логин и пароль, это тот же аккаунт ---
+{
+  const tgUser = await login(71, 'Сайтовый');
+  // Игрок узнаёт свой id
+  await hook({ message: { from: { id: 71 }, chat: { id: 71, type: 'private' }, text: '/id' } });
+  const idMsg = calls('sendMessage').at(-1)?.params.text ?? '';
+  // Не админ выдать вход не может
+  await hook({ message: { from: { id: 71 }, chat: { id: 71, type: 'private' }, text: '/web 71 hacker' } });
+  const denied = calls('sendMessage').at(-1)?.params.text ?? '';
+  await hook({ message: { from: { id: ADMIN }, chat: { id: ADMIN, type: 'private' }, text: '/web 71 Site.User' } });
+  const issued = calls('sendMessage').at(-1)?.params.text ?? '';
+  const pass = /пароль: (\S+)/.exec(issued)?.[1];
+  check('/id и /web: админ выдаёт логин и пароль к аккаунту Telegram',
+    /71/.test(idMsg) && !/пароль/.test(denied) && /логин: site\.user/.test(issued) && pass?.length === 8, issued.split('\n')[0]);
+  const bad = await call('POST', '/api/login', { login: 'site.user', password: 'wrong-pass' });
+  const ok = await call('POST', '/api/login', { login: 'Site.User', password: pass });
+  check('вход с сайта: неверный пароль — отказ, верный — тот же аккаунт',
+    bad.status === 401 && ok.status === 200 && ok.data.player.id === 'tg71' && ok.data.player.id === tgUser.player.id,
+    `${bad.status} ${ok.status} ${ok.data?.player?.id}`);
+  // Прогресс: из Telegram записали — с сайта прочли
+  const saved = await call('PUT', '/api/save', { key: 'worms.skins.v1', value: JSON.stringify({ owned: ['classic', 'devil'] }) }, tgUser.token);
+  const read = await call('GET', '/api/save', null, ok.data.token);
+  const junk = await call('PUT', '/api/save', { key: 'worms.player.v1', value: '{}' }, ok.data.token);
+  check('прогресс на сервере: записано в Telegram — видно с сайта; чужие ключи — отказ',
+    saved.status === 200 && JSON.parse(read.data.items['worms.skins.v1']).owned.includes('devil') && junk.status === 400,
+    JSON.stringify(read.data?.items));
+  // Повторная выдача меняет пароль: старый больше не подходит
+  await hook({ message: { from: { id: ADMIN }, chat: { id: ADMIN, type: 'private' }, text: '/web 71 site.user' } });
+  const old = await call('POST', '/api/login', { login: 'site.user', password: pass });
+  check('повторная выдача — новый пароль, старый не подходит', old.status === 401);
+}
+
 server.close();
 fakeTg.close();
 db.close();

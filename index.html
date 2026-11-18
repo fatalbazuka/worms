@@ -86,6 +86,17 @@
     padding: 14px 26px; border-radius: 12px; background: linear-gradient(#3aa0e8, #1f6fb5);
     color: #fff; text-decoration: none; font-weight: 800;
   }
+  #gate form { display: flex; flex-direction: column; gap: 10px; width: min(320px, 90vw); margin-top: 8px; }
+  #gate input {
+    padding: 12px 14px; border-radius: 10px; border: 2px solid #2a3550; background: #141b30;
+    color: #fff; font: 700 16px 'Worms UI', system-ui, sans-serif;
+  }
+  #gate button {
+    padding: 14px; border: 0; border-radius: 12px; background: linear-gradient(#ffd166, #e09a2a);
+    color: #2a1c06; font: 800 17px 'Worms UI', system-ui, sans-serif; cursor: pointer;
+  }
+  #gate button:disabled { opacity: 0.6; }
+  #gate .gate-error { color: #ff9a9a; min-height: 1.4em; }
   #fatal {
     position: fixed; inset: 0; display: none;
     align-items: center; justify-content: center;
@@ -130,9 +141,15 @@
 <div id="fatal"></div>
 <!-- Вне Telegram (если сервер так настроен): игра только в боте -->
 <div id="gate">
-  <div class="gate-title">WORMS</div>
-  <div>Игра живёт в Telegram: бои, кабинет, рейтинг и турниры — там.</div>
+  <div class="gate-title">БАШНЯ</div>
+  <div>Игра живёт в Telegram. Если тебе выдали логин и пароль — входи прямо здесь, это тот же аккаунт.</div>
   <a href="#">Открыть в Telegram</a>
+  <form id="gate-login" autocomplete="on">
+    <input name="login" placeholder="логин" autocomplete="username" autocapitalize="off" spellcheck="false" required>
+    <input name="password" type="password" placeholder="пароль" autocomplete="current-password" required>
+    <button type="submit">Войти</button>
+    <div class="gate-error"></div>
+  </form>
 </div>
 <div id="diag"></div>
 

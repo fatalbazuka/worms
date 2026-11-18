@@ -3,7 +3,7 @@
  * Правила — в campaign/challenges.js.
  */
 import { CHALLENGE_BY_ID, recordStars } from '../campaign/challenges.js';
-import { inTelegram, cloudGet, cloudSet } from './telegram.js';
+import { cloudReady, cloudLoad, cloudSave } from './cloud.js';
 
 const STORE_KEY = 'worms.challenges.v1';
 
@@ -24,7 +24,7 @@ function load() {
 function save(best) {
   const raw = JSON.stringify(best);
   try { localStorage.setItem(STORE_KEY, raw); } catch { /* инкогнито */ }
-  if (inTelegram()) cloudSet(STORE_KEY, raw);
+  cloudSave(STORE_KEY, raw);
   return best;
 }
 
@@ -39,11 +39,12 @@ export function saveChallenge(id, stars) {
 
 /** Облачная копия: лучшее из двух. */
 export async function syncChallengesCloud() {
-  if (!inTelegram()) return;
-  let cloud = null;
-  try { cloud = clean(JSON.parse((await cloudGet(STORE_KEY)) ?? 'null')); } catch { cloud = null; }
-  if (!cloud) return;
+  if (!cloudReady()) return;
   const best = load();
-  for (const [id, n] of Object.entries(cloud)) best[id] = Math.max(best[id] ?? 0, n);
+  for (const raw of await cloudLoad(STORE_KEY)) {
+    let cloud = null;
+    try { cloud = clean(JSON.parse(raw)); } catch { continue; }
+    for (const [id, n] of Object.entries(cloud)) best[id] = Math.max(best[id] ?? 0, n);
+  }
   save(best);
 }

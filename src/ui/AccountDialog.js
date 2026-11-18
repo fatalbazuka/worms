@@ -1,5 +1,5 @@
 import {
-  loggedIn, syncMe, fetchHistory, donateInvoice, telegramLogin, ApiError,
+  loggedIn, syncMe, fetchHistory, donateInvoice, telegramLogin, ApiError, forgetLogin,
 } from '../net/server.js';
 import { player } from '../platform/player.js';
 import { leagueLabel } from '../platform/league.js';
@@ -127,8 +127,14 @@ function profileView(box, { onTop, onTours, history }) {
     row2.append(el('button', { class: 'acc-btn', type: 'button', onclick: () => addToHomeScreen() }, '📲 На рабочий стол'));
   }
   let donating = false;
-  row2.append(el('button', { class: 'acc-btn', type: 'button',
-    onclick: () => { if (!donating) { donating = true; donateView(box, err); } } }, '⭐ Поддержать игру'));
+  // Звёзды платятся только в Telegram; с сайта по логину — кнопка «Выйти»
+  if (inTelegram()) {
+    row2.append(el('button', { class: 'acc-btn', type: 'button',
+      onclick: () => { if (!donating) { donating = true; donateView(box, err); } } }, '⭐ Поддержать игру'));
+  } else {
+    row2.append(el('button', { class: 'acc-btn', type: 'button',
+      onclick: () => { forgetLogin(); location.reload(); } }, 'Выйти'));
+  }
   box.append(err, row, row2);
 }
 

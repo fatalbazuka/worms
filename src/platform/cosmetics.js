@@ -3,7 +3,7 @@
  * Правила и каталог — core/cosmetics.js, монеты — platform/daily.js.
  */
 import { normalizeCos, mergeCos, buyCos, equipCos } from '../core/cosmetics.js';
-import { inTelegram, cloudGet, cloudSet } from './telegram.js';
+import { cloudReady, cloudLoad, cloudSave } from './cloud.js';
 import { coins, payCoins } from './daily.js';
 
 const STORE_KEY = 'worms.cosmetics.v1';
@@ -15,7 +15,7 @@ function load() {
 function save(st) {
   const raw = JSON.stringify(st);
   try { localStorage.setItem(STORE_KEY, raw); } catch { /* инкогнито */ }
-  if (inTelegram()) cloudSet(STORE_KEY, raw);
+  cloudSave(STORE_KEY, raw);
   return st;
 }
 
@@ -40,9 +40,10 @@ export function equipCosmetic(kind, id) {
 }
 
 export async function syncCosmeticsCloud() {
-  if (!inTelegram()) return;
-  let cloud = null;
-  try { cloud = JSON.parse((await cloudGet(STORE_KEY)) ?? 'null'); } catch { cloud = null; }
-  if (!cloud) return;
-  save(mergeCos(load(), cloud));
+  if (!cloudReady()) return;
+  let st = load();
+  for (const raw of await cloudLoad(STORE_KEY)) {
+    try { st = mergeCos(st, JSON.parse(raw)); } catch { /* битая копия — мимо */ }
+  }
+  save(st);
 }

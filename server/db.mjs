@@ -163,6 +163,17 @@ const MIGRATIONS = [
     primary key (day, player_id)
   );
   `,
+  // 7: прогресс игры на сервере (скины, монеты, задания, кампания,
+  // украшения) — чтобы с сайта по логину был тот же аккаунт, что в Telegram
+  `
+  create table save_kv (
+    player_id  text not null references player (id) on delete cascade,
+    key        text not null,
+    value      text not null,
+    updated_at integer not null,
+    primary key (player_id, key)
+  );
+  `,
 ];
 
 export function openDb(path) {
