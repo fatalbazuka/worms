@@ -11,6 +11,8 @@ import {
 } from '../core/skins.js';
 import { inTelegram, cloudGet, cloudSet } from './telegram.js';
 import { MISSIONS, loadProgress } from '../campaign/missions.js';
+import { ASCENT } from '../campaign/ascent.js';
+import { ascentDone } from './ascent.js';
 
 const STORE_KEY = 'worms.skins.v1';
 
@@ -77,7 +79,10 @@ export function allSkinsOwned() {
  * @returns {number} сколько коробок выдано сейчас
  */
 export function syncCampaignBoxes() {
-  const res = claimBoxes(load(), [...loadProgress()], MISSIONS.map((m) => m.id));
+  // И за «Подъём»: первый бой, дальше через один и последний
+  const old = claimBoxes(load(), [...loadProgress()], MISSIONS.map((m) => m.id));
+  const up = claimBoxes(old.state, [...ascentDone()], ASCENT.map((m) => m.id));
+  const res = { state: up.state, gained: old.gained + up.gained };
   if (res.gained) save(res.state);
   return res.gained;
 }

@@ -407,6 +407,72 @@ const vo = await page.evaluate(async () => {
 check('голоса смайликов загружены, победа сказана голосом',
   vo.n === 10 && (vo.last === 'win' || vo.ctx !== 'running' || vo.muted), JSON.stringify(vo));
 
+// --- кампания «Подъём»: все бои собираются, Великан ходит и падает ---
+const upIds = await page.evaluate(async () => (await import('/src/campaign/ascent.js')).ASCENT.map((m) => m.id));
+const upBroken = [];
+for (const id of upIds) {
+  await page.evaluate(async (id) => {
+    const { ascentMatch } = await import('/src/core/match.js');
+    const g = window.__WORMS__.scene.getScene('Game');
+    g.registry.set('match', ascentMatch(id));
+    g.registry.set('seed', ascentMatch(id).seed);
+    g.scene.restart();
+  }, id);
+  await gameReady();
+  const ok = await page.evaluate(async (id) => {
+    const { ASCENT_BY_ID } = await import('/src/campaign/ascent.js');
+    const { CFG } = await import('/src/config.js');
+    const m = ASCENT_BY_ID[id];
+    const s = window.__WORMS__.scene.getScene('Game');
+    const want = Object.values(m.monsters ?? {}).reduce((a, n) => a + n, 0) + (m.boss ? 1 : 0);
+    return s.shape.id === 'tower' && s.turn.currentTeam === 0 && s.monsters.length === want
+      && s.worms.every((w) => w.grounded && w.y < CFG.DROWN_Y - 60)
+      && s.monsters.every((x) => x.y < CFG.DROWN_Y - 60);
+  }, id);
+  if (!ok) upBroken.push(id);
+}
+check('«Подъём»: все 15 боёв собираются, монстры на этажах', upBroken.length === 0, upBroken.join(','));
+
+await page.evaluate(async () => {
+  localStorage.removeItem('worms.ascent.v1');
+  const { ascentMatch } = await import('/src/core/match.js');
+  const g = window.__WORMS__.scene.getScene('Game');
+  g.registry.set('match', ascentMatch('up-5'));
+  g.registry.set('seed', ascentMatch('up-5').seed);
+  g.scene.restart();
+});
+await gameReady();
+await page.waitForFunction(() => window.__WORMS__.scene.getScene('Game').canPlayerAct(), null, { timeout: 40000 });
+const t0 = await page.evaluate(() => {
+  const s = window.__WORMS__.scene.getScene('Game');
+  s.hud.setHelp(false);
+  s.turn.endTurn();
+  return s.turn.turnNumber;
+});
+let rock = false;
+for (let i = 0; i < 80; i++) {
+  await page.waitForTimeout(200);
+  const st = await page.evaluate(() => {
+    const s = window.__WORMS__.scene.getScene('Game');
+    return { n: s.turn.turnNumber, rock: s.projectiles.some((p) => p.weapon.id === 'rock') };
+  });
+  rock ||= st.rock;
+  if (st.n > t0) break;
+}
+check('ход монстров: после хода игрока Великан кидает камень', rock);
+await page.evaluate(() => {
+  const s = window.__WORMS__.scene.getScene('Game');
+  s.monsters.find((m) => m.kind === 'boss').damage(9999);
+  s.turn.endTurn();
+});
+const bossWin = await page.waitForFunction(() => window.__WORMS__.scene.getScene('Game').overButtons?.menu, null, { timeout: 20000 })
+  .then(() => page.evaluate(() => ({
+    done: JSON.parse(localStorage.getItem('worms.ascent.v1') ?? '[]'),
+    next: Boolean(window.__WORMS__.scene.getScene('Game').overButtons?.next),
+  }))).catch(() => null);
+check('Великан повален — победа, бой пройден, есть «Дальше»',
+  bossWin?.done?.includes('up-5') && bossWin.next, JSON.stringify(bossWin));
+
 // --- выбор прицела в меню: прежние кнопки вместо рогатки ---
 await page.goto(`${BASE}${BASE.includes('?') ? '&' : '?'}aim=buttons`, { waitUntil: 'domcontentloaded' });
 await menuReady();

@@ -21,7 +21,7 @@
 
 export const REMIND_HOUR = 19;
 const EVENTS_PER_DAY = 300;           // больше от одного игрока за сутки не пишем
-const MODES = new Set(['quick', 'campaign', 'challenge', 'online', 'fallback', 'hotseat']);
+const MODES = new Set(['quick', 'campaign', 'ascent', 'challenge', 'online', 'fallback', 'hotseat']);
 
 /** Шаги воронки и их подписи в отчёте — по порядку, как их проходит новичок. */
 export const STEPS = {
@@ -138,7 +138,7 @@ export function createAnalytics({ db, now = () => Date.now(), tz = 'Europe/Mosco
       .map(([id, label]) => `${label} ${q.stepsOf.get(id, weekFrom, weekTo).n}`).join(' · ');
     const todaySteps = Object.fromEntries(q.steps.all(today).map((r) => [r.step, r.n]));
     const names = {
-      quick: 'с ботом', campaign: 'кампания', challenge: 'испытания', online: 'по сети',
+      quick: 'с ботом', campaign: 'классика', ascent: 'подъём', challenge: 'испытания', online: 'по сети',
       fallback: 'бот вместо соперника', hotseat: 'вдвоём',
     };
     const modes = t.rows.length

@@ -3,9 +3,11 @@ import { CFG } from '../config.js';
 import { MISSIONS, loadProgress, isUnlocked } from '../campaign/missions.js';
 import { objectiveText } from '../campaign/objectives.js';
 import {
-  quickMatch, campaignMatch, onlineMatch, towerMatch, fallbackMatch, challengeMatch, QUICK_OPTIONS,
+  quickMatch, campaignMatch, onlineMatch, towerMatch, fallbackMatch, challengeMatch, ascentMatch, QUICK_OPTIONS,
 } from '../core/match.js';
 import { CHALLENGES, challengeOpen, totalStars, STAR_COINS } from '../campaign/challenges.js';
+import { ASCENT, CHAPTERS, ascentOpen } from '../campaign/ascent.js';
+import { ascentDone } from '../platform/ascent.js';
 import { challengeStars } from '../platform/challenges.js';
 import { onboardStage } from '../platform/onboard.js';
 import { SHAPES } from '../core/shapes.js';
@@ -106,6 +108,10 @@ export default class MenuScene extends Phaser.Scene {
     if (this.registry.get('returnTo') === 'challenges') {
       this.registry.set('returnTo', null);
       this.time.delayedCall(30, () => this.showChallenges());
+    }
+    if (this.registry.get('returnTo') === 'ascent') {
+      this.registry.set('returnTo', null);
+      this.time.delayedCall(30, () => this.showAscent());
     }
     const back = this.registry.get('returnTour');
     const params = new URLSearchParams(globalThis.location?.search ?? '');
@@ -918,20 +924,92 @@ export default class MenuScene extends Phaser.Scene {
     this._clear();
     this._title('Режимы');
     const cx = this.W / 2;
-    const y0 = 186, step = this.portrait ? 106 : 92;
-    const big = { w: Math.min(this.W - 64, 620), h: this.portrait ? 92 : 80, titleSize: 28, hintSize: 18 };
+    const y0 = 176, step = this.portrait ? 104 : 84;
+    const big = { w: Math.min(this.W - 64, 620), h: this.portrait ? 92 : 74, titleSize: 28, hintSize: 18 };
     const stars = totalStars(challengeStars());
-    this._button('tower', cx, y0, 'Башня', 'высокая арена и трос · выбрать соперника',
-      () => this.showTower(), { ...big, variant: 'primary' });
-    this._button('challenges', cx, y0 + step, 'Испытания', `задачи на три звезды · собрано ★ ${stars} из ${CHALLENGES.length * 3}`,
+    const done = ascentDone().size;
+    this._button('ascent', cx, y0, 'Кампания «Подъём»', `15 боёв на башне, монстры и Великан · пройдено ${done} из ${ASCENT.length}`,
+      () => this.showAscent(), { ...big, variant: 'primary' });
+    this._button('tower', cx, y0 + step, 'Башня', 'высокая арена и трос · выбрать соперника',
+      () => this.showTower(), big);
+    this._button('challenges', cx, y0 + step * 2, 'Испытания', `задачи на три звезды · собрано ★ ${stars} из ${CHALLENGES.length * 3}`,
       () => this.showChallenges(), big);
-    this._button('online', cx, y0 + step * 2, 'Онлайн', 'бой с человеком на башне · рейтинг',
+    this._button('online', cx, y0 + step * 3, 'Онлайн', 'бой с человеком на башне · рейтинг',
       () => this.showOnline(), big);
-    this._button('campaign', cx, y0 + step * 3, 'Кампания', 'миссии с условиями · телефон горизонтально',
+    this._button('campaign', cx, y0 + step * 4, 'Классика', 'старые миссии на широких картах · горизонтально',
       () => this.showCampaign(), big);
-    this._button('quick', cx, y0 + step * 4, 'Свои правила', 'обычная карта, бот или вдвоём · горизонтально',
+    this._button('quick', cx, y0 + step * 5, 'Свои правила', 'обычная карта, бот или вдвоём · горизонтально',
       () => this.showQuick(), big);
     this._back();
+  }
+
+  // ------------------------------------------------------ кампания «Подъём»
+
+  /** Три главы: прогресс в каждой; закрытая — пока не пройдена предыдущая. */
+  showAscent() {
+    this.section = this.showAscent;
+    this._clear();
+    const done = ascentDone();
+    this._title('Подъём', `пройдено ${done.size} из ${ASCENT.length} · коробки со скинами по пути`);
+    const cx = this.W / 2;
+    const w = Math.min(this.W - 64, 620), h = this.portrait ? 120 : 96;
+    const step = h + 18;
+    CHAPTERS.forEach((ch, i) => {
+      const list = ASCENT.filter((m) => m.chapter === ch.id);
+      const first = ASCENT.indexOf(list[0]);
+      const open = ascentOpen(first, done);
+      const n = list.filter((m) => done.has(m.id)).length;
+      this._button(`chapter-${ch.id}`, cx, 196 + h / 2 + i * step, `${i + 1}. ${ch.title}`,
+        open ? `${n} из ${list.length}${n === list.length ? ' · пройдено' : ''}` : 'откроется после предыдущей главы',
+        () => this.showAscentChapter(ch), {
+          w, h, enabled: open, variant: open && n < list.length ? 'primary' : 'normal', titleSize: 30, hintSize: 20,
+        });
+    });
+    this._back(() => this.showModes());
+  }
+
+  showAscentChapter(ch) {
+    this.section = () => this.showAscentChapter(ch);
+    this._clear();
+    const done = ascentDone();
+    const list = ASCENT.filter((m) => m.chapter === ch.id);
+    this._title(ch.title, `${list.filter((m) => done.has(m.id)).length} из ${list.length}`);
+    const cx = this.W / 2;
+    const w = Math.min(this.W - 64, 620), h = this.portrait ? 96 : 76, gap = 12;
+    list.forEach((m, k) => {
+      const i = ASCENT.indexOf(m);
+      const open = ascentOpen(i, done);
+      const won = done.has(m.id);
+      const tag = m.boss && !/Великан/.test(m.title) ? ' · Великан' : '';
+      this._button(`up-${m.id}`, cx, 186 + h / 2 + k * (h + gap), `${i + 1}. ${m.title}${tag}`,
+        won ? '✓ пройдено' : open ? 'открыто' : 'откроется после предыдущего боя',
+        () => this.showAscentBrief(m), {
+          w, h, enabled: open, variant: open && !won ? 'primary' : 'normal', titleSize: 26, hintSize: 17,
+        });
+    });
+    this._back(() => this.showAscent());
+  }
+
+  showAscentBrief(m) {
+    this.section = () => this.showAscentBrief(m);
+    this._clear();
+    this._title(m.title, ascentDone().has(m.id) ? 'пройдено' : '');
+    const cx = this.W / 2;
+    const w = Math.min(640, this.W - 56);
+    const mons = m.monsters ?? {};
+    const parts = [];
+    if (m.boss) parts.push('Великан');
+    if (mons.slime) parts.push(`слизней: ${mons.slime}`);
+    if (mons.cactus) parts.push(`кактусов: ${mons.cactus}`);
+    const sides = m.teams.length > 1
+      ? `${m.teams[0].worms} против ${m.teams[1].worms}`
+      : `${m.teams[0].worms} бойца против Великана`;
+    const t = this.add.text(cx, 176, [m.brief, '', sides, parts.join(' · ')].join('\n'), font(this.fs(16), 700))
+      .setOrigin(0.5, 0).setAlign('center').setWordWrapWidth(w - 40).setLineSpacing(6);
+    this.items.push(t);
+    this._button('start', cx, 176 + t.height + 90, 'В бой', '', () => this.start(ascentMatch(m.id)),
+      this.portrait ? { variant: 'primary', w: 360, h: 88, titleSize: 30 } : { variant: 'primary', w: 300, h: 66 });
+    this._back(() => this.showAscentChapter(CHAPTERS.find((c) => c.id === m.chapter)));
   }
 
   // ----------------------------------------------------------- испытания

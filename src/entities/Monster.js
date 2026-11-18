@@ -26,8 +26,8 @@ import { Weapon } from '../weapons/Weapon.js';
 
 const KINDS = {
   slime: { hp: 30, w: 30, h: 22, image: 'mon_slime', size: 38, name: 'Слизень' },
-  cactus: { hp: 40, w: 26, h: 36, image: 'mon_cactus', size: 44, name: 'Кактус' },
-  boss: { hp: 400, w: 84, h: 96, image: 'skin_rage', size: 120, name: 'Великан' },
+  cactus: { hp: 40, w: 30, h: 46, image: 'emoji_cactus', size: 60, name: 'Кактус' },
+  boss: { hp: 400, w: 96, h: 100, image: 'emoji_ogre', size: 132, name: 'Великан' },
 };
 
 const SLIME_STEP = 95;          // сколько проползает за ход монстров, px
@@ -44,7 +44,7 @@ export const ROCK = new Weapon({
 });
 
 export class Monster {
-  constructor(scene, kind, x, y) {
+  constructor(scene, kind, x, y, hp = null) {
     this.scene = scene;
     this.terrain = scene.terrain;
     this.kind = kind;
@@ -53,8 +53,8 @@ export class Monster {
     this.x = x;
     this.y = y;             // ноги
     this.vx = 0; this.vy = 0;
-    this.hp = k.hp;
-    this.maxHp = k.hp;
+    this.hp = hp ?? k.hp;
+    this.maxHp = this.hp;
     this.alive = true;
     this.facing = -1;
     this.busy = false;      // ещё делает свой ход
@@ -75,11 +75,6 @@ export class Monster {
     this.baseScale = this.view.scaleX;
     scene.rig.world(this.view.setDepth(DEPTH.WORM));
 
-    if (kind === 'boss') {
-      this.view.setTint(0xff9a9a);
-      this.crown = scene.rig.world(scene.add.text(x, y - k.h - 8, '👑', { fontSize: '34px' })
-        .setOrigin(0.5, 1).setDepth(DEPTH.WORM + 1));
-    }
     // Полоска здоровья у тех, кого надо добивать в несколько попаданий
     if (k.hp >= 40) {
       this.barBg = scene.rig.world(scene.add.rectangle(x, y - k.h - 6, 52, 6, 0x101420, 0.85)
@@ -137,16 +132,18 @@ export class Monster {
     }
     // Камень навесом: угол 55°, скорость — чтобы долететь до цели без учёта
     // земли и ветра. Мажет ровно настолько, насколько мешают этажи
-    const dx = t.x - this.x, dy = (t.centerY) - (this.top + 10);
+    const dx = t.x - this.x - Math.sign(t.x - this.x) * (this.def.w / 2 + 14);
+    const dy = t.centerY - (this.top - 14);
     const ang = (55 * Math.PI) / 180;
     const g = CFG.GRAVITY;
     const cos = Math.cos(ang), tan = Math.tan(ang);
-    const dist = Math.abs(dx);
+    const dist = Math.max(20, Math.abs(dx));
     const denom = 2 * cos * cos * (dist * tan + dy);
     const v = denom > 0 ? Math.min(1100, Math.sqrt((g * dist * dist) / denom)) : 700;
     const dir = dx >= 0 ? 1 : -1;
     this.facing = dir;
-    const p = new Projectile(this.scene, this.x + dir * 30, this.top + 10,
+    // Камень вылетает из-за плеча, снаружи самого Великана
+    const p = new Projectile(this.scene, this.x + dir * (this.def.w / 2 + 14), this.top - 14,
       dir * v * cos, -v * Math.sin(ang), ROCK, null);
     this.scene.projectiles.push(p);
     this.view.setScale(this.baseScale * 1.08);
@@ -160,11 +157,7 @@ export class Monster {
     this.hp = Math.max(0, this.hp - amount);
     this.scene.fx.damageNumber(this.x, this.centerY - 10, amount);
     this.view.setTintFill?.(0xffffff);
-    this.scene.time.delayedCall(90, () => {
-      if (!this.alive) return;
-      this.view.clearTint?.();
-      if (this.kind === 'boss') this.view.setTint(0xff9a9a);
-    });
+    this.scene.time.delayedCall(90, () => { if (this.alive) this.view.clearTint?.(); });
     if (this.hp <= 0) this.die();
   }
 
@@ -263,7 +256,6 @@ export class Monster {
     if (!this.view?.active) return;
     this.view.setPosition(Math.round(this.x), Math.round(this.y));
     if (this.view.setFlipX) this.view.setFlipX(this.facing > 0);
-    this.crown?.setPosition(this.x, this.top - 4);
     if (this.bar) {
       this.barBg.setPosition(this.x, this.top - 10);
       this.bar.setPosition(this.x - 25, this.top - 10);
@@ -273,7 +265,6 @@ export class Monster {
 
   destroyView() {
     this.view?.destroy();
-    this.crown?.destroy();
     this.barBg?.destroy();
     this.bar?.destroy();
   }

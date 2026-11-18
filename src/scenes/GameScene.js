@@ -10,6 +10,7 @@ import { Crate } from '../entities/Crate.js';
 import { Mine } from '../entities/Mine.js';
 import { Spring } from '../entities/Spring.js';
 import { Props } from '../entities/Props.js';
+import { Monster } from '../entities/Monster.js';
 import { Hud, TOP_H } from '../ui/Hud.js';
 import { Fx } from '../ui/Fx.js';
 import { AimController } from '../ui/AimController.js';
@@ -25,7 +26,9 @@ import {
   startRoom, forgetStartRoom, shareRoom, haptic, inviteLink, offerHomeScreenOnce, setBattle,
   refLink, shareLink,
 } from '../platform/telegram.js';
-import { HOTSEAT, towerMatch, challengeMatch } from '../core/match.js';
+import { HOTSEAT, towerMatch, challengeMatch, ascentMatch } from '../core/match.js';
+import { ASCENT } from '../campaign/ascent.js';
+import { markAscentDone } from '../platform/ascent.js';
 import { markWon } from '../platform/onboard.js';
 import { Bot } from '../ai/Bot.js';
 import { markDone, MISSION_BY_ID } from '../campaign/missions.js';
@@ -100,6 +103,7 @@ export default class GameScene extends Phaser.Scene {
     this.crates = [];
     this.mines = [];
     this.springs = [];
+    this.monsters = [];
     this.followTarget = null;
     this.moveInput = {
       left: false, right: false, jumpQueued: false,
@@ -137,10 +141,11 @@ export default class GameScene extends Phaser.Scene {
     this.offscreen = new OffscreenMarkers(this);
 
     this._spawnWorms();
+    this._spawnMonsters();
     // Эмодзи на башне: фон и ломкие предметы на этажах — от зерна, у всех одни
     if (this.terrain.tops) {
       this.props = new Props(this, this.seed, this.variant?.id ?? 'classic')
-        .build(this.worms.map((w) => ({ x: w.x, y: w.y })));
+        .build([...this.worms, ...this.monsters].map((w) => ({ x: w.x, y: w.y })));
     }
     this._setupKeyboard();
     this._setupBots();
@@ -910,6 +915,8 @@ export default class GameScene extends Phaser.Scene {
       this.mines = this.mines.filter((m) => m.alive);
     }
     this.props?.update(dt);
+    for (const m of this.monsters) m.update(dt);
+    if (this.monsters.some((m) => !m.alive)) this.monsters = this.monsters.filter((m) => m.alive);
     for (const sp of this.springs) sp.update(dt);
     if (this.springs.some((sp) => !sp.alive)) {
       this.springs = this.springs.filter((sp) => sp.alive);
@@ -1363,6 +1370,16 @@ export default class GameScene extends Phaser.Scene {
       if (c.alive && Math.hypot(c.x - x, c.y - c.h / 2 - y) <= cfg.damageRadius) c.destroy();
     }
 
+    // Монстрам достаётся так же, как бойцам; Великана не отбрасывает
+    for (const m of [...this.monsters]) {
+      if (!m.alive) continue;
+      const d = Math.max(0, Math.hypot(m.x - x, m.centerY - y) - m.def.w / 4);
+      if (d > cfg.damageRadius) continue;
+      const dmg = Math.round(cfg.damage * (1 - d / cfg.damageRadius));
+      if (m.kind !== 'boss' && cfg.knockback > 0) m.vy = -Math.min(320, cfg.knockback * 0.6);
+      m.damage(dmg);
+    }
+
     // Эмодзи-предметы на этажах ломаются, бочки взрываются следом
     this.props?.hit(x, y, cfg.damageRadius * 0.9, true);
 
@@ -1430,6 +1447,69 @@ export default class GameScene extends Phaser.Scene {
     this.springs.push(new Spring(this, x, y, owner));
   }
 
+  // ------------------------------------------------------------ монстры
+
+  addMonster(kind, x, y, hp = null) {
+    const m = new Monster(this, kind, x, y, hp);
+    this.monsters.push(m);
+    return m;
+  }
+
+  /**
+   * Монстры из описания партии (кампания «Подъём»): match.monsters —
+   * сколько каких, match.boss — Великан на вершине. Места — от зерна,
+   * подальше от бойцов и друг от друга.
+   */
+  _spawnMonsters() {
+    const want = this.match.monsters ?? {};
+    if (!this.terrain.tops || (!this.match.boss && !Object.keys(want).length)) return;
+    const rng = subRng(this.seed >>> 0, 0xb055);
+    const spots = this.terrain.standSpots(10, 40);
+    for (let i = spots.length - 1; i > 0; i--) {
+      const j = rng.int(0, i);
+      [spots[i], spots[j]] = [spots[j], spots[i]];
+    }
+    const taken = this.worms.map((w) => ({ x: w.x, y: w.y, r: 150 }));
+    const free = (p, r) => taken.every((q) => Math.hypot(q.x - p.x, q.y - p.y) >= Math.max(r, q.r));
+    if (this.match.boss) {
+      // Великан — на самом верхнем месте, где хватает простора над головой
+      const roomy = spots.filter((p) => !this.terrain.solidInRect(p.x - 46, p.y - 104, p.x + 46, p.y - 6)
+        && free(p, 260));
+      const top = (roomy.length ? roomy : spots).reduce((a, b) => (b.y < a.y ? b : a));
+      this.addMonster('boss', top.x, top.y, this.match.bossHp ?? null);
+      taken.push({ x: top.x, y: top.y, r: 160 });
+    }
+    for (const [kind, n] of Object.entries(want)) {
+      let placed = 0;
+      for (const p of spots) {
+        if (placed >= n) break;
+        if (!free(p, 90)) continue;
+        this.addMonster(kind, p.x, p.y);
+        taken.push({ x: p.x, y: p.y, r: 90 });
+        placed++;
+      }
+    }
+  }
+
+  /**
+   * Ход монстров (зовёт TurnManager, когда ход бойца затих). Слизни
+   * ползут, Великан кидает камень. @returns {boolean} есть ли чего ждать
+   */
+  runMonsters() {
+    if (this.net) return false;
+    let any = false;
+    for (const m of [...this.monsters]) if (m.alive && m.act()) any = true;
+    return any;
+  }
+
+  monstersBusy() {
+    return this.monsters.some((m) => m.alive && m.busy);
+  }
+
+  onMonsterDied(m) {
+    if (m.kind === 'boss') haptic('win');
+  }
+
   /** Ход отыгран и очередь передана — отдаём второму игроку итог. */
   onTurnResolved(actedTeam) {
     this.net?.sendState(actedTeam);
@@ -1475,6 +1555,12 @@ export default class GameScene extends Phaser.Scene {
 
   /** null — играем дальше; иначе индекс победившей команды или -1 (ничья). */
   checkVictory() {
+    // Бой с Великаном: повалил — победа, выбили своих — поражение
+    if (this.match.boss) {
+      const mine = this.myTeamIndex;
+      if (!this.teamAlive(mine)) return mine === 0 ? 1 : 0;
+      return this.monsters.some((m) => m.kind === 'boss' && m.alive) ? null : mine;
+    }
     // Задача миссии решает раньше обычного «кого выбили»
     const outcome = this.missionOutcome();
     if (outcome === 'win') return this.myTeamIndex;
@@ -1521,6 +1607,10 @@ export default class GameScene extends Phaser.Scene {
     if (this.match.mode === 'campaign' && winner === mine) {
       markDone(this.match.missionId);
       // За первую, каждую вторую и последнюю миссию — коробка со скином
+      box = syncCampaignBoxes();
+    }
+    if (this.match.mode === 'ascent' && winner === mine) {
+      markAscentDone(this.match.ascentId);
       box = syncCampaignBoxes();
     }
     // Партия доиграна: запись сессии больше не нужна
@@ -1684,6 +1774,11 @@ export default class GameScene extends Phaser.Scene {
       const c = CHALLENGES[i + 1];
       if (c) return { label: 'Дальше', match: challengeMatch(c.id) };
     }
+    if (this.match.mode === 'ascent') {
+      const i = ASCENT.findIndex((m) => m.id === this.match.ascentId);
+      const m = ASCENT[i + 1];
+      if (m) return { label: 'Дальше', match: ascentMatch(m.id) };
+    }
     return null;
   }
 
@@ -1759,6 +1854,7 @@ export default class GameScene extends Phaser.Scene {
     forgetStartRoom();
     // Из испытания — обратно к списку испытаний
     if (this.match.mode === 'challenge' && !this.match.tutorial) this.registry.set('returnTo', 'challenges');
+    if (this.match.mode === 'ascent') this.registry.set('returnTo', 'ascent');
     if (new URLSearchParams(location.search).has('room')) {
       const url = new URL(location.href);
       url.searchParams.delete('room');
@@ -1776,6 +1872,7 @@ export default class GameScene extends Phaser.Scene {
     this.mouseFire = false;
     this.mines = [];
     this.springs = [];
+    this.monsters = [];
     this.props = null;
     this.aim?.destroy();
     this.crates = [];

@@ -8,6 +8,7 @@ import { applyUiClass } from './platform/device.js';
 import { loggedIn, telegramLogin, syncMe, track, fetchShop } from './net/server.js';
 import { syncSkinsCloud, applyServerOwned } from './platform/skins.js';
 import { syncDailyCloud } from './platform/daily.js';
+import { syncAscentCloud } from './platform/ascent.js';
 import { syncChallengesCloud } from './platform/challenges.js';
 import { dailyState } from './platform/daily.js';
 import { dayKey, prevDay } from './core/daily.js';
@@ -50,7 +51,7 @@ fitViewToScreen(window.innerWidth, window.innerHeight, screenInsets());
 // метрики при создании, и текст, созданный на запасном шрифте, так и
 // останется криво расположенным. Профиль из облака Telegram — тоже до
 // старта: имя и рейтинг читаются синхронно, второго шанса подменить их нет.
-await Promise.all([loadUiFont(), loadCloudProfile(), syncSkinsCloud(), syncDailyCloud(), syncChallengesCloud()]);
+await Promise.all([loadUiFont(), loadCloudProfile(), syncSkinsCloud(), syncDailyCloud(), syncChallengesCloud(), syncAscentCloud()]);
 
 // Аккаунт. Профиль помнит, что вход был, а токена уже нет (вышли в другой
 // вкладке, почистили хранилище) — значит, мы аноним. Иначе — освежаем

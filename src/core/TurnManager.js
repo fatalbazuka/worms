@@ -98,6 +98,7 @@ export class TurnManager {
     this.currentTeam = team;
     this.activeWorm = worm;
     this.turnNumber++;
+    this.monstersActed = false;
     this.timeLeft = this.scene.turnTime ?? CFG.TURN_TIME;
     this.state = STATE.AIM;
     this.retreating = false;
@@ -293,6 +294,11 @@ export class TurnManager {
         if ((quiet && this.resolveTimer >= CFG.RESOLVE_SETTLE)
           || this.resolveTimer >= CFG.RESOLVE_TIMEOUT) {
           if (this._holding(dt)) break;   // очередь передаст тот, кто ходил
+          // Ход монстров: раз после каждого хода бойца, пока все затихли
+          if (!this.monstersActed) {
+            this.monstersActed = true;
+            if (scene.runMonsters?.()) { this.resolveTimer = 0; break; }
+          }
           const acted = this.currentTeam;
           this.next();
           // Снимок уходит уже после передачи очереди: в нём и итог хода,
