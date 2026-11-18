@@ -407,6 +407,21 @@ for (const id of ['bazooka', 'grenade', 'cluster', 'mole', 'banana', 'holy', 'mo
     s.addSpring(w.x, w.y - 2, null);
     const y0 = w.y; let minY = y0;
     for (let i = 0; i < 60; i++) { s.springs[0]?.update(1 / 60); w.update(1 / 60); minY = Math.min(minY, w.y); }
+    // Батут-оружие: боец летит по прицелу, под ногами пружина с тем же броском
+    const other = s.worms.find((o) => o !== w && o.alive);
+    const n0 = s.springs.length;
+    const wx = w.x;
+    WEAPONS_BY_ID.spring.fire(s, w.x, w.y, 400, -700, w);
+    const pad = s.springs[n0];
+    const launched = { vx: w.vx, vy: w.vy };
+    for (let i = 0; i < 20; i++) w.update(1 / 60);
+    pad._launch(other);
+    const second = { vx: other.vx, vy: other.vy, uses: pad.uses };
+    const springFire = {
+      flew: launched.vx > 0 && launched.vy < 0 && w.x > wx + 20,
+      pad: Boolean(pad?.launch) && pad.x === wx,
+      same: second.vx === pad.launch.vx && second.vy === pad.launch.vy && second.uses === 0,
+    };
     // Укрытия впечатаны в землю: твердь там, где предмет, взрыв её выгрызает
     const st = s.props.stamped[0];
     const solidIn = () => {
@@ -419,7 +434,7 @@ for (const id of ['bazooka', 'grenade', 'cluster', 'mole', 'banana', 'holy', 'mo
     const before = solidIn();
     s.explode(st.x, st.y - st.size * 0.35, { radius: 22, damageRadius: 30, damage: 0, knockback: 0, shake: 0 });
     return {
-      weight, sticky: { stuck, exploded: !ps.alive }, rise: y0 - minY,
+      weight, sticky: { stuck, exploded: !ps.alive }, rise: y0 - minY, springFire,
       stamped: s.props.stamped.length, before, after: solidIn(), name: st.name,
     };
   });
@@ -427,6 +442,8 @@ for (const id of ['bazooka', 'grenade', 'cluster', 'mole', 'banana', 'holy', 'mo
     r.weight.pierced && r.weight.exploded && r.weight.below, JSON.stringify(r.weight));
   check('липучка: прилипает к поверхности и взрывается по фитилю', r.sticky.stuck && r.sticky.exploded);
   check('батут: подбрасывает вставшего на него бойца', r.rise > 60, `${Math.round(r.rise)} px`);
+  check('батут-оружие: боец летит по прицелу, пружина один раз бросает следующего так же',
+    r.springFire.flew && r.springFire.pad && r.springFire.same, JSON.stringify(r.springFire));
   check('укрытия впечатаны в землю, взрыв выгрызает из них кусок',
     r.stamped >= 3 && r.before > 20 && r.after < r.before * 0.7, `${r.name}: ${r.before} → ${r.after} (всего ${r.stamped})`);
   await tp.close();

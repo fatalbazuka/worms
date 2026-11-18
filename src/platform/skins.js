@@ -8,8 +8,12 @@
  */
 import {
   SKINS, SKIN_BY_ID, DEFAULT_SKIN, BOX_SKINS, normalize, claimBoxes, openBox, equip, mergeSkins, applyOwned,
+  addSkin, skinPrice,
 } from '../core/skins.js';
 import { cloudReady, cloudLoad, cloudSave } from './cloud.js';
+// Кошелёк — в daily.js (он сам импортирует отсюда коробки: цикл безопасен,
+// функции вызываются только по ходу игры, не при загрузке модулей)
+import { grantCoins, payCoins } from './daily.js';
 import { MISSIONS, loadProgress } from '../campaign/missions.js';
 import { ASCENT } from '../campaign/ascent.js';
 import { ascentDone } from './ascent.js';
@@ -58,11 +62,27 @@ export function equippedSkin() {
 
 export function equipSkin(id) { return save(equip(load(), id)); }
 
-/** Открыть коробку. @returns {{skin: string|null, full: boolean}} */
+/**
+ * Открыть коробку. Повтор — монеты назад в кошелёк.
+ * @returns {{skin: string|null, dup: boolean, refund: number}}
+ */
 export function openSkinBox() {
   const res = openBox(load());
   save(res.state);
-  return { skin: res.skin, full: res.full };
+  if (res.refund) grantCoins(res.refund);
+  return { skin: res.skin, dup: res.dup, refund: res.refund };
+}
+
+/**
+ * Купить скин за монеты.
+ * @returns {'ok'|'poor'|'owned'}
+ */
+export function buySkin(id) {
+  const st = load();
+  if (st.owned.includes(id)) return 'owned';
+  if (!payCoins(skinPrice(id))) return 'poor';
+  save(equip(addSkin(load(), id), id));
+  return 'ok';
 }
 
 /** Добавить коробок (серия дней, покупка за монеты). */

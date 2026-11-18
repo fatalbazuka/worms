@@ -916,12 +916,16 @@ export class Hud {
     // Строка подсказки: сначала про рогатку, потом про трос
     if (this.hintText) {
       const sling = !!scene.slingHint;
+      // Батут ведёт себя не как снаряд — подсказка, пока он в руках
+      const spring = scene.slingAim && scene.turn.weapon?.id === 'spring';
       const show = !this.helpVisible && scene.canPlayerAct()
-        && (sling || (scene.hookHint && scene.hooksLeft > 0));
+        && (spring || sling || (scene.hookHint && scene.hooksLeft > 0));
       if (show) {
-        this.hintText.setText(sling
-          ? 'тяни жёлтый рычаг от цели и отпусти'
-          : 'коснись светящейся точки — трос подтянет туда');
+        this.hintText.setText(spring
+          ? 'батут: тяни рычаг — полетишь сам по дуге, пружина останется'
+          : sling
+            ? 'тяни жёлтый рычаг от цели и отпусти'
+            : 'коснись светящейся точки — трос подтянет туда');
       }
       this.hintText.setVisible(!!show);
     }

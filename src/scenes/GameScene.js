@@ -33,7 +33,8 @@ import { ASCENT } from '../campaign/ascent.js';
 import { markAscentDone } from '../platform/ascent.js';
 import { markWon } from '../platform/onboard.js';
 import { Bot } from '../ai/Bot.js';
-import { markDone, MISSION_BY_ID } from '../campaign/missions.js';
+import { markDone, MISSION_BY_ID, loadProgress } from '../campaign/missions.js';
+import { ASCENT_BY_ID } from '../campaign/ascent.js';
 import { checkObjective, snapshot, objectiveText } from '../campaign/objectives.js';
 import { player, eloDelta, recordResult } from '../platform/player.js';
 import { reportResult, serverAvailable, track, trackStep, submitDailyTower } from '../net/server.js';
@@ -44,7 +45,7 @@ import { equippedSkin, syncCampaignBoxes } from '../platform/skins.js';
 import { myCosmetics } from '../platform/cosmetics.js';
 import { DEFAULTS as DEFAULT_COS } from '../core/cosmetics.js';
 import { recordBattle } from '../platform/daily.js';
-import { TASK_BY_ID } from '../core/daily.js';
+import { TASK_BY_ID, FIRST_CLEAR_COINS } from '../core/daily.js';
 import { EMOTE_BY_ID, EMOTE_COOLDOWN } from '../core/emotes.js';
 import { CHALLENGES, CHALLENGE_BY_ID, starsFor } from '../campaign/challenges.js';
 import { saveChallenge } from '../platform/challenges.js';
@@ -1549,8 +1550,8 @@ export default class GameScene extends Phaser.Scene {
     this.mines.push(new Mine(this, x, y, weapon, owner));
   }
 
-  addSpring(x, y, owner) {
-    this.springs.push(new Spring(this, x, y, owner));
+  addSpring(x, y, owner, launch = null) {
+    this.springs.push(new Spring(this, x, y, owner, launch));
   }
 
   // ------------------------------------------------------------ монстры
@@ -1724,15 +1725,21 @@ export default class GameScene extends Phaser.Scene {
     const color = winner >= 0 ? TEAM_COLORS[winner] : 0xffffff;
 
     let box = 0;
+    // Первое прохождение — монеты сверх обычных за бой
+    let firstCoins = 0;
     if (this.match.mode === 'campaign' && winner === mine) {
+      if (!loadProgress().has(this.match.missionId)) firstCoins = FIRST_CLEAR_COINS.mission;
       markDone(this.match.missionId);
       // За первую, каждую вторую и последнюю миссию — коробка со скином
       box = syncCampaignBoxes();
     }
     if (this.match.mode === 'ascent' && winner === mine) {
-      markAscentDone(this.match.ascentId);
+      if (markAscentDone(this.match.ascentId)) {
+        firstCoins = ASCENT_BY_ID[this.match.ascentId]?.boss ? FIRST_CLEAR_COINS.boss : FIRST_CLEAR_COINS.ascent;
+      }
       box = syncCampaignBoxes();
     }
+    grantCoins(firstCoins);
     // Партия доиграна: запись сессии больше не нужна
     this.net?.forget();
     this.fx.sound(winner === mine ? 'victory' : 'defeat');
@@ -1827,10 +1834,11 @@ export default class GameScene extends Phaser.Scene {
 
     // Монеты за бой и выполненные этим боем задания — над заголовком
     const daily = this._recordDaily(winner >= 0 && winner === mine);
-    if (daily && (daily.coins || daily.done.length)) {
+    const earned = (daily?.coins ?? 0) + firstCoins;
+    if (earned || daily?.done.length) {
       const parts = [];
-      if (daily.coins) parts.push(`+${daily.coins} монет`);
-      if (daily.done.length) {
+      if (earned) parts.push(`+${earned} монет${firstCoins ? ' (первое прохождение)' : ''}`);
+      if (daily?.done.length) {
         parts.push(daily.done.length === 1
           ? `задание выполнено: ${TASK_BY_ID[daily.done[0]].text.toLowerCase()}`
           : `выполнено заданий: ${daily.done.length}`);

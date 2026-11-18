@@ -1,5 +1,6 @@
 import { Projectile } from '../entities/Projectile.js';
 import { CFG } from '../config.js';
+import { SPRING_LAUNCH } from '../entities/Spring.js';
 
 /**
  * Базовый класс оружия.
@@ -199,11 +200,17 @@ export class MineWeapon extends Weapon {
  * запрыгнуть на него самому.
  */
 export class SpringWeapon extends Weapon {
+  /**
+   * Батут запускает самого бойца: куда натянул рогатку, туда и летит.
+   * Под ногами остаётся пружина — один раз бросит следующего, кто на неё
+   * встанет, по той же дуге. Всё из одного вектора выстрела, поэтому по
+   * сети у обоих одинаково.
+   */
   fire(scene, x, y, vx, vy, owner) {
-    const dir = owner ? owner.facing : (vx >= 0 ? 1 : -1);
-    const px = owner ? owner.x + dir * 34 : x;
-    const py = owner ? owner.y - 4 : y;
-    scene.addSpring(px, py, owner);
+    const lvx = vx * SPRING_LAUNCH, lvy = vy * SPRING_LAUNCH;
+    if (!owner) { scene.addSpring(x, y, null, { vx: lvx, vy: lvy }); return []; }
+    scene.addSpring(owner.x, owner.y, owner, { vx: lvx, vy: lvy });
+    owner.launch(lvx, lvy);
     return [];
   }
 }

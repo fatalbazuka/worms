@@ -178,7 +178,10 @@ export function captureState(scene) {
       })),
     springs: (scene.springs ?? [])
       .filter((sp) => sp.alive)
-      .map((sp) => ({ x: Math.round(sp.x), y: Math.round(sp.y), uses: sp.uses })),
+      .map((sp) => ({
+        x: Math.round(sp.x), y: Math.round(sp.y), uses: sp.uses,
+        launch: sp.launch ? { vx: Math.round(sp.launch.vx), vy: Math.round(sp.launch.vy) } : null,
+      })),
   };
 }
 
@@ -242,7 +245,11 @@ export function applyState(scene, state) {
 
   // Батуты — так же: ставят и ломают по ходу партии
   for (const sp of scene.springs ?? []) sp.destroy();
-  scene.springs = (state.springs ?? []).map((sp) => new Spring(scene, sp.x, sp.y, null, sp.uses));
+  scene.springs = (state.springs ?? []).map((sp) => {
+    const spring = new Spring(scene, sp.x, sp.y, null, sp.launch ?? null);
+    if (Number.isFinite(sp.uses)) spring.uses = sp.uses;
+    return spring;
+  });
 
   scene.replaying = false;
   scene.explosionLog = [];

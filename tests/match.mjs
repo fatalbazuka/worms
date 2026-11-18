@@ -109,7 +109,7 @@ check('один в лобби никого не находит', findMatch(p('a'
 
 // --- скины и коробки: правила без браузера ---
 {
-  const { BOX_SKINS, emptyState, normalize, rewardMissions, claimBoxes, openBox, equip } = await import('../src/core/skins.js');
+  const { BOX_SKINS, RARITY, SKIN_BY_ID, emptyState, normalize, rewardMissions, claimBoxes, openBox, equip, skinPrice } = await import('../src/core/skins.js');
   const missions = Array.from({ length: 12 }, (_, i) => `m${i}`);
   const rewards = rewardMissions(missions);
   // Кампания даёт коробки за первую миссию, через одну и за последнюю;
@@ -123,22 +123,20 @@ check('один в лобби никого не находит', findMatch(p('a'
   const again = claimBoxes(r.state, ['m0', 'm1'], missions);
   check('дважды за одну миссию коробку не дают', again.gained === 0 && again.state.boxes === 1);
 
-  // Коробок хватает на всё: открываем подряд — повторов нет, собраны все,
-  // кроме скинов только за звёзды (радуга)
-  st = { ...emptyState(), boxes: BOX_SKINS.length - 1 };
-  const got = [];
-  for (let i = 0; i < 40; i++) {
-    const o = openBox(st, () => 0.999);
-    st = o.state;
-    if (o.skin) got.push(o.skin);
-  }
-  check('коробки не дают повторов и собирают все скины',
-    new Set(got).size === got.length && st.owned.length === BOX_SKINS.length && st.boxes === 0 && !got.includes('rainbow'),
-    `${got.join(',')} · коробок осталось ${st.boxes}`);
+  // Гача: новый скин — в коллекцию; повтор — коробка тратится, монеты назад
+  st = { ...emptyState(), boxes: 2 };
+  const first = openBox(st, () => 0.1);
+  const dup = openBox(first.state, () => 0.1);
+  const rar = RARITY[SKIN_BY_ID[first.skin].rarity];
+  check('коробка: новый скин в коллекцию, повтор — монеты назад по редкости',
+    !first.dup && first.state.owned.includes(first.skin) && dup.dup && dup.skin === first.skin
+      && dup.refund === rar.dup && dup.state.boxes === 0 && dup.state.owned.length === first.state.owned.length,
+    `${first.skin} → ${dup.skin} +${dup.refund}`);
   check('пустую коробку открыть нельзя', openBox(emptyState()).skin === null);
-  const fullSt = { ...st, boxes: 2 };
-  const none = openBox(fullSt);
-  check('когда собрано всё, коробка не тратится', none.full && none.state.boxes === 2);
+  check('цена скина по редкости: обычный дешевле редкого, редкий — эпического, легендарный дороже всех',
+    skinPrice('cool') < skinPrice('ninja') && skinPrice('ninja') < skinPrice('king') && skinPrice('king') < skinPrice('rainbow')
+      && skinPrice('classic') === 0, ['cool', 'ninja', 'king', 'rainbow'].map(skinPrice).join());
+  st = { ...emptyState(), owned: ['classic', 'devil'] };
   check('надеть можно только свой скин',
     equip(emptyState(), 'devil').equipped === 'classic' && equip(st, 'devil').equipped === 'devil');
   const bad = normalize({ owned: ['devil', 'нет такого'], equipped: 'clown', boxes: -5, claimed: 'x' });
@@ -211,10 +209,9 @@ check('один в лобби никого не находит', findMatch(p('a'
 {
   const K = await import('../src/core/skins.js');
   const D = await import('../src/core/daily.js');
-  const { SKIN_IDS, SKIN_STARS } = await import('../server/shop.mjs');
-  check('сервер и игра знают одни и те же скины и цену скина',
-    SKIN_IDS.join() === K.SKINS.filter((x) => x.id !== K.DEFAULT_SKIN).map((x) => x.id).join()
-      && K.SKIN_STARS === SKIN_STARS, SKIN_IDS.join());
+  const { SKIN_IDS } = await import('../server/shop.mjs');
+  check('сервер и игра знают одни и те же скины',
+    SKIN_IDS.join() === K.SKINS.filter((x) => x.id !== K.DEFAULT_SKIN).map((x) => x.id).join(), SKIN_IDS.join());
 
   const phone = { owned: ['classic', 'ice'], equipped: 'ice', boxes: 1, claimed: ['m0'], paidSeen: 0 };
   const cloud = { owned: ['classic', 'devil'], equipped: 'devil', boxes: 3, claimed: ['m2'], paidSeen: 5 };
@@ -297,7 +294,7 @@ check('один в лобби никого не находит', findMatch(p('a'
       && net.rope === 'classic' && net.trail === 'fire' && net.grave === 'ghost');
 }
 
-// --- редкость скинов: редкие выпадают реже, «только за звёзды» — не выпадают ---
+// --- гача: редкость выпадает по шансам, видным игроку ---
 {
   const K = await import('../src/core/skins.js');
   const counts = {};
@@ -308,9 +305,11 @@ check('один в лобби никого не находит', findMatch(p('a'
     const rar = K.SKIN_BY_ID[r.skin].rarity;
     counts[rar] = (counts[rar] ?? 0) + 1;
   }
-  const perSkin = (rar) => counts[rar] / K.BOX_SKINS.filter((s) => s.rarity === rar && s.id !== K.DEFAULT_SKIN).length;
-  check('коробка: обычный скин выпадает чаще редкого, редкий — чаще эпического',
-    perSkin('common') > perSkin('rare') * 1.4 && perSkin('rare') > perSkin('epic') * 1.8, JSON.stringify(counts));
+  const share = (rar) => (counts[rar] ?? 0) / 3000 * 100;
+  const near = (rar) => Math.abs(share(rar) - K.RARITY[rar].odds) <= Math.max(1, K.RARITY[rar].odds * 0.25);
+  check('коробка: доли редкостей совпадают с шансами на экране',
+    ['common', 'rare', 'epic', 'legendary'].every(near)
+      && K.RARITY_ORDER.reduce((a, k) => a + K.RARITY[k].odds, 0) === 100, JSON.stringify(counts));
   check('у каждого скина есть редкость', K.SKINS.every((s) => K.RARITY[s.rarity]));
 }
 

@@ -1,6 +1,7 @@
 import { CFG, DEPTH } from '../config.js';
 import { has } from '../core/assets.js';
 import { isDesktop } from '../platform/device.js';
+import { SPRING_LAUNCH } from '../entities/Spring.js';
 
 /**
  * Шкала силы как в Worms Armageddon: 16 «шариков» от бойца вдоль прицела,
@@ -607,6 +608,10 @@ export class AimController {
       this.gfx.fillStyle(0xffffff, 0.5).fillCircle(o.x - d.x * pull, o.y - d.y * pull, 7);
       const pr = this.scene.turn.weapon.projectile;
       if (pr?.fuse > 0 && pr.bounciness > 0) this._drawThrowArc(o, shot.vx, shot.vy, this.scene.turn.weapon);
+      // Батут бросает самого бойца: начало его дуги, без ветра
+      if (this.scene.turn.weapon.id === 'spring') {
+        this._drawThrowArc(o, shot.vx * SPRING_LAUNCH, shot.vy * SPRING_LAUNCH, { projectile: { windScale: 0 } });
+      }
     }
     const weapon = this.scene.turn.weapon;
     if (weapon.targeted) this._drawTarget(shot.vx, shot.vy, weapon);

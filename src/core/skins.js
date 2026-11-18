@@ -2,11 +2,15 @@
  * Скины бойца и коробки с ними — правила без хранилища и без сцены.
  *
  * Скин — это другой лист тех же шестнадцати кадров (tools/build_smiley.py):
- * меняется только внешность, на бой он не влияет. Коробка даёт случайный
- * скин из тех, которых у игрока ещё нет, — повторов не бывает, поэтому
- * каждая коробка радует. Коробки дают за первое прохождение миссий
- * кампании: за первую сразу, чтобы игрок увидел, как это работает, дальше
- * через одну и за последнюю.
+ * меняется только внешность, на бой он не влияет.
+ *
+ * Всё — за монеты, звёзд в магазине нет:
+ *   • скин можно купить напрямую — цена по редкости (PRICE);
+ *   • коробка — гача: сначала по шансам (BOX_ODDS, видны игроку) выпадает
+ *     редкость, потом любой скин этой редкости. Повтор не пропадает: за
+ *     него возвращаются монеты (DUP_COINS), тем больше, чем реже скин.
+ * Коробки ещё дают за кампанию: за первую миссию сразу, чтобы игрок
+ * увидел, как это работает, дальше через одну и за последнюю.
  *
  * Состояние: { owned: [id], equipped: id, boxes: N, claimed: [id миссий] }.
  * Все функции чистые — берут состояние, возвращают новое; где оно лежит,
@@ -16,14 +20,23 @@
 export const DEFAULT_SKIN = 'classic';
 
 /**
- * Редкость: чем реже, тем меньше шанс в коробке (weight). starsOnly — в
- * коробках не выпадает, только покупка за звёзды.
+ * Редкость: odds — шанс в коробке, %; price — цена напрямую, монет;
+ * dup — сколько монет вернётся, если из коробки выпал уже собранный.
  */
 export const RARITY = {
-  common: { name: 'обычный', weight: 60, color: '#c8d2e0' },
-  rare: { name: 'редкий', weight: 30, color: '#6fb7ff' },
-  epic: { name: 'эпический', weight: 10, color: '#c58bff' },
+  common: { name: 'обычный', odds: 70, price: 400, dup: 80, color: '#c8d2e0' },
+  rare: { name: 'редкий', odds: 24, price: 900, dup: 200, color: '#6fb7ff' },
+  epic: { name: 'эпический', odds: 5, price: 1800, dup: 450, color: '#c58bff' },
+  legendary: { name: 'легендарный', odds: 1, price: 3500, dup: 900, color: '#ffb347' },
 };
+export const RARITY_ORDER = ['common', 'rare', 'epic', 'legendary'];
+
+/** Цена скина за монеты (классический бесплатный — 0). */
+export function skinPrice(id) {
+  const s = SKIN_BY_ID[id];
+  if (!s || s.id === DEFAULT_SKIN) return 0;
+  return RARITY[s.rarity]?.price ?? 0;
+}
 
 export const SKINS = [
   { id: 'classic', name: 'Смайлик', sheet: 'smiley', rarity: 'common' },
@@ -42,16 +55,13 @@ export const SKINS = [
   { id: 'robot', name: 'Робот', sheet: 'skin_robot', rarity: 'rare' },
   { id: 'astro', name: 'Космонавт', sheet: 'skin_astro', rarity: 'epic' },
   { id: 'king', name: 'Король', sheet: 'skin_king', rarity: 'epic' },
-  { id: 'rainbow', name: 'Радуга', sheet: 'skin_rainbow', rarity: 'epic', starsOnly: true },
+  { id: 'rainbow', name: 'Радуга', sheet: 'skin_rainbow', rarity: 'legendary' },
 ];
 
-/** Что может выпасть из коробки: всё, кроме скинов только за звёзды. */
-export const BOX_SKINS = SKINS.filter((s) => !s.starsOnly);
+/** Что может выпасть из коробки: все, кроме стартового. */
+export const BOX_SKINS = SKINS.filter((s) => s.id !== DEFAULT_SKIN);
 
 export const SKIN_BY_ID = Object.fromEntries(SKINS.map((s) => [s.id, s]));
-
-/** Цена скина напрямую за звёзды. Та же — SKIN_STARS в server/shop.mjs. */
-export const SKIN_STARS = 60;
 
 export function emptyState() {
   // paidSeen — сколько коробок с сервера (куплено + подарено) уже положено
@@ -138,22 +148,30 @@ export function claimBoxes(state, doneIds, missionIds) {
  * все, коробка не тратится (full: true) — она дождётся новых скинов.
  */
 export function openBox(state, rnd = Math.random) {
-  if (state.boxes <= 0) return { state, skin: null, full: false };
-  const pool = BOX_SKINS.filter((s) => !state.owned.includes(s.id));
-  if (!pool.length) return { state, skin: null, full: true };
-  // Редкие выпадают реже: шанс по весу редкости среди тех, которых ещё нет
-  const weight = (s) => RARITY[s.rarity]?.weight ?? RARITY.common.weight;
-  let r = rnd() * pool.reduce((a, s) => a + weight(s), 0);
-  let skin = pool[pool.length - 1];
-  for (const s of pool) {
-    r -= weight(s);
-    if (r < 0) { skin = s; break; }
+  if (state.boxes <= 0) return { state, skin: null, dup: false, refund: 0 };
+  // Редкость — по шансам; если такой редкости скинов нет, берём обычную
+  let r = rnd() * RARITY_ORDER.reduce((a, k) => a + RARITY[k].odds, 0);
+  let rarity = 'common';
+  for (const k of RARITY_ORDER) {
+    r -= RARITY[k].odds;
+    if (r < 0) { rarity = k; break; }
   }
+  const same = BOX_SKINS.filter((s) => s.rarity === rarity);
+  const pool = same.length ? same : BOX_SKINS;
+  const skin = pool[Math.min(Math.floor(rnd() * pool.length), pool.length - 1)];
+  const dup = state.owned.includes(skin.id);
   return {
-    state: { ...state, boxes: state.boxes - 1, owned: [...state.owned, skin.id] },
+    state: { ...state, boxes: state.boxes - 1, owned: dup ? state.owned : [...state.owned, skin.id] },
     skin: skin.id,
-    full: false,
+    dup,
+    refund: dup ? RARITY[skin.rarity].dup : 0,
   };
+}
+
+/** Купить скин напрямую (монеты списывает вызывающий). */
+export function addSkin(state, id) {
+  if (!SKIN_BY_ID[id] || state.owned.includes(id)) return state;
+  return { ...state, owned: [...state.owned, id] };
 }
 
 /** Надеть скин — только свой. */
