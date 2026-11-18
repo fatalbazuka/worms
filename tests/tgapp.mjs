@@ -269,7 +269,7 @@ check('башня дня в Telegram: попытка в таблице, мест
 {
   // Прогресс из Telegram уходит на сервер с задержкой — даём ему доехать
   await A.waitForTimeout(2000);
-  const tgBoxes = await A.evaluate(() => JSON.parse(localStorage.getItem('worms.skins.v1') ?? '{}').boxes ?? 0);
+  const tgOwned = await A.evaluate(() => (JSON.parse(localStorage.getItem('worms.skins.v1') ?? '{}').owned ?? []).sort().join());
   db.prepare('update player set name_key = ?, pass_hash = ? where id = ?').run('admin.site', hashPassword('pw-12345'), `tg${ADMIN}`);
   const W = await browsers[1].newPage({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true });
   W.on('pageerror', (e) => errors.push(`[сайт] pageerror: ${e.message}`));
@@ -286,12 +286,12 @@ check('башня дня в Telegram: попытка в таблице, мест
   await W.waitForFunction(() => window.__WORMS__?.scene.isActive('Menu'), null, { timeout: 40000 });
   const web = await W.evaluate(async () => {
     const { player } = await import('/src/platform/player.js');
-    return { id: player().id, boxes: JSON.parse(localStorage.getItem('worms.skins.v1') ?? '{}').boxes ?? 0,
+    return { id: player().id, owned: (JSON.parse(localStorage.getItem('worms.skins.v1') ?? '{}').owned ?? []).sort().join(),
       gate: getComputedStyle(document.getElementById('gate')).display };
   });
   check('сайт: форма входа, неверный пароль — ошибка, верный — тот же аккаунт и прогресс из Telegram',
-    gate && /неверный/.test(wrongMsg) && web.id === `tg${ADMIN}` && web.gate === 'none' && web.boxes === tgBoxes && tgBoxes > 0,
-    JSON.stringify({ wrongMsg, ...web, tgBoxes }));
+    gate && /неверный/.test(wrongMsg) && web.id === `tg${ADMIN}` && web.gate === 'none' && web.owned === tgOwned && tgOwned.includes(shop.id),
+    JSON.stringify({ wrongMsg, ...web, tgOwned }));
   await W.close();
 }
 

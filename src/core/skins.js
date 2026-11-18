@@ -24,10 +24,10 @@ export const DEFAULT_SKIN = 'classic';
  * dup — сколько монет вернётся, если из коробки выпал уже собранный.
  */
 export const RARITY = {
-  common: { name: 'обычный', odds: 70, price: 400, dup: 80, color: '#c8d2e0' },
-  rare: { name: 'редкий', odds: 24, price: 900, dup: 200, color: '#6fb7ff' },
-  epic: { name: 'эпический', odds: 5, price: 1800, dup: 450, color: '#c58bff' },
-  legendary: { name: 'легендарный', odds: 1, price: 3500, dup: 900, color: '#ffb347' },
+  common: { name: 'обычный', odds: 70, price: 800, dup: 160, color: '#c8d2e0' },
+  rare: { name: 'редкий', odds: 24, price: 1800, dup: 400, color: '#6fb7ff' },
+  epic: { name: 'эпический', odds: 5, price: 3600, dup: 900, color: '#c58bff' },
+  legendary: { name: 'легендарный', odds: 1, price: 7000, dup: 1800, color: '#ffb347' },
 };
 export const RARITY_ORDER = ['common', 'rare', 'epic', 'legendary'];
 
