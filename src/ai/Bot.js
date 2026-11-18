@@ -187,6 +187,17 @@ export class Bot {
    *            moveTo?:number}|null}
    */
   decide(worm, { allowMove = false } = {}) {
+    // Вода подходит к ногам — сперва наверх, стрелять потом
+    const flood = this.scene.rules?.flood;
+    if (flood && !this.noHook && this.scene.hooksLeft > 0 && this.scene.canHook?.()
+      && worm.y > CFG.WATER_Y - flood.step * 2 - 40) {
+      // Из-под плиты прямо вверх не уйти — лучи пускаем по всему кругу
+      let up = null;
+      for (const h of this.hookSpots(worm, true)) {
+        if (h.end.y < worm.y - 30 && (!up || h.end.y < up.end.y)) up = h;
+      }
+      if (up) return { hookTo: up.anchor };
+    }
     const here = this.bestShot(worm);
     if (!allowMove || (here && here.score < 30)) return this.withError(here);
 
@@ -235,10 +246,10 @@ export class Bot {
    * другу конечные точки сливаются — считать выстрел дважды с одного места
    * незачем. Не больше восьми: каждая точка — это полный перебор выстрелов.
    */
-  hookSpots(worm) {
+  hookSpots(worm, wide = false) {
     const scene = this.scene;
     const out = [];
-    for (let k = 0; k < 20 && out.length < 8; k++) {
+    for (let k = 0; k < (wide ? 32 : 20) && out.length < (wide ? 12 : 8); k++) {
       // -90° (вверх), затем веером в обе стороны до горизонта и чуть ниже
       const off = Math.ceil(k / 2) * (Math.PI / 16) * (k % 2 ? 1 : -1);
       const a = -Math.PI / 2 + off;

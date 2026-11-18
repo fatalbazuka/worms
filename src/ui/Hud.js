@@ -148,7 +148,7 @@ export class Hud {
     this.timerCx = Math.round(W / 2);
     this.timerCy = Math.round(TOP_H / 2) - 1;
     this.timerText = this.fix(s.add.text(this.timerCx, this.timerCy, '30',
-      font(21, 800)).setOrigin(0.5));
+      font(24, 800)).setOrigin(0.5));
 
     this.teamBars = [];
     const gap = 46;
@@ -156,20 +156,20 @@ export class Hud {
     for (let t = 0; t < CFG.TEAMS; t++) {
       const right = t % 2 === 1;
       const x = right ? this.timerCx + gap : this.timerCx - gap - barW;
-      this.fix(s.add.text(right ? x : x + barW, 8, TEAM_NAMES[t],
-        font(13, 800, hex(TEAM_COLORS[t]))).setOrigin(right ? 0 : 1, 0));
-      const cnt = this.fix(s.add.text(right ? x + barW : x, 8, '',
-        font(12, 700, UI.textDim)).setOrigin(right ? 1 : 0, 0));
-      this.fix(this._barImage(x, 36, barW, 12));
-      const bar = this.fix(s.add.rectangle(right ? x + 2 : x + barW - 2, 36,
-        barW - 4, 8, TEAM_COLORS[t]).setOrigin(right ? 0 : 1, 0.5), DEPTH.HUD + 1);
+      this.fix(s.add.text(right ? x : x + barW, 4, TEAM_NAMES[t],
+        font(17, 800, hex(TEAM_COLORS[t]))).setOrigin(right ? 0 : 1, 0));
+      const cnt = this.fix(s.add.text(right ? x + barW : x, 5, '',
+        font(15, 700, UI.textDim)).setOrigin(right ? 1 : 0, 0));
+      this.fix(this._barImage(x, 40, barW, 14));
+      const bar = this.fix(s.add.rectangle(right ? x + 2 : x + barW - 2, 40,
+        barW - 4, 10, TEAM_COLORS[t]).setOrigin(right ? 0 : 1, 0.5), DEPTH.HUD + 1);
       this.teamBars.push({ bar, cnt, width: barW - 4 });
     }
 
     // Ветер — слева: подпись, число и шкала под ними
     this.windHalf = 46;
-    this.fix(s.add.text(16 + pad, 7, 'ВЕТЕР', font(11, 700, UI.textDim)));
-    this.windText = this.fix(s.add.text(16 + pad + this.windHalf * 2, 3, '0', font(16, 800)).setOrigin(1, 0));
+    this.fix(s.add.text(16 + pad, 6, 'ВЕТЕР', font(14, 700, UI.textDim)));
+    this.windText = this.fix(s.add.text(16 + pad + this.windHalf * 2, 2, '0', font(19, 800)).setOrigin(1, 0));
     this.windGfx = this.fix(s.add.graphics());
     this.windCx = 16 + pad + this.windHalf;
     this.windCy = 40;
@@ -220,8 +220,8 @@ export class Hud {
       plate,
       icon: this.fix(s.add.image(bx + 42, by + bh / 2, 'icon_bazooka')
         .setOrigin(0.5).setScale(1.3), DEPTH.HUD + 1),
-      name: this.fix(s.add.text(bx + 78, by + 15, '', font(20, 800, '#2a1c06')), DEPTH.HUD + 1),
-      ammo: this.fix(s.add.text(bx + 78, by + 43, '', font(15, 700, '#5a4413')), DEPTH.HUD + 1),
+      name: this.fix(s.add.text(bx + 78, by + (this.compact ? 11 : 15), '', font(this.compact ? 23 : 20, 800, '#2a1c06')), DEPTH.HUD + 1),
+      ammo: this.fix(s.add.text(bx + 78, by + (this.compact ? 42 : 43), '', font(this.compact ? 18 : 15, 700, '#5a4413')), DEPTH.HUD + 1),
       hint: this.fix(s.add.text(bx + bw - 12, by + 10, 'арсенал',
         font(12, 700, '#5a4413')).setOrigin(1, 0), DEPTH.HUD + 1),
       x: bx, y: by, w: bw, h: bh,
@@ -300,7 +300,7 @@ export class Hud {
     const pw = B * 2 + gap, ph = 52, py = rowLow - ph - 12;
     ensureButton(s, `ui-hooks-${pw}x${ph}`, pw, ph, 'normal');
     this.hookPlate = this.fix(s.add.image(lx + pw / 2, py + ph / 2, `ui-hooks-${pw}x${ph}`));
-    this.fix(s.add.text(lx + 16, py + ph / 2, 'ТРОС', font(16, 800)).setOrigin(0, 0.5), DEPTH.HUD + 1);
+    this.fix(s.add.text(lx + 16, py + ph / 2, 'ТРОС', font(20, 800)).setOrigin(0, 0.5), DEPTH.HUD + 1);
     this.hookGfx = this.fix(s.add.graphics(), DEPTH.HUD + 1);
     this.hookX = lx + pw - 14;
     this.hookY = py + ph / 2;
@@ -576,7 +576,8 @@ export class Hud {
       'маленькие кнопки внизу — подсказка, звук, меню, полный экран',
       ...(s.match?.mode === 'online' ? ['звенья цепи — позвать второго по ссылке'] : []),
     ];
-    const w = Math.min(W - 24, this.desktop ? 620 : 560), h = lines.length * 27 + 96;
+    const lh = this.compact ? 34 : 27;
+    const w = Math.min(W - 24, this.desktop ? 620 : this.compact ? 680 : 560), h = lines.length * lh + 96;
     const x = Math.round((W - w) / 2), y = Math.round((H - h) / 2);
 
     ensureButton(s, 'ui-help', w, h, 'normal');
@@ -591,10 +592,12 @@ export class Hud {
     ];
     lines.forEach((line, i) => {
       this.helpPanel.push(this.fix(
-        s.add.text(x + 30, y + 56 + i * 27, `·  ${line}`, font(14, 700)), DEPTH.HUD + 21,
+        s.add.text(x + 26, y + 56 + i * lh, `·  ${line}`, font(this.compact ? 17 : 14, 700)), DEPTH.HUD + 21,
       ));
     });
-    this.setHelp(true);
+    // Там, где жесты показывает сама игра (рогатка, трос), памятка с текстом
+    // при входе не нужна — она остаётся под кнопкой «?»
+    this.setHelp(!this.compact);
 
     // Подсказка закрывается любым касанием — искать кнопку не нужно.
     // Обработчик именованный: при пересборке HUD его надо снять, иначе
@@ -781,8 +784,18 @@ export class Hud {
     }
     this._hooksShown = scene.hooksLeft;
     this.hookPlate.setAlpha(scene.hooksLeft > 0 ? 1 : 0.55);
-    this.hintText?.setVisible(!!scene.hookHint && !this.helpVisible
-      && scene.canPlayerAct() && scene.hooksLeft > 0);
+    // Строка подсказки: сначала про рогатку, потом про трос
+    if (this.hintText) {
+      const sling = !!scene.slingHint;
+      const show = !this.helpVisible && scene.canPlayerAct()
+        && (sling || (scene.hookHint && scene.hooksLeft > 0));
+      if (show) {
+        this.hintText.setText(sling
+          ? 'поставь палец на бойца, потяни назад и отпусти'
+          : 'коснись светящейся точки — трос подтянет туда');
+      }
+      this.hintText.setVisible(!!show);
+    }
   }
 
   _updateTeams(scene) {
@@ -794,7 +807,10 @@ export class Hud {
       const total = living.reduce((a, w) => a + w.health, 0);
       const size = Math.max(1, all.length);
       const b = this.teamBars[t];
-      b.bar.width = b.width * Phaser.Math.Clamp(total / (CFG.MAX_HEALTH * size), 0, 1);
+      // Полоса не прыгает к новому значению, а стекает к нему
+      const want = b.width * Phaser.Math.Clamp(total / (CFG.MAX_HEALTH * size), 0, 1);
+      b.shown = b.shown == null ? want : b.shown + (want - b.shown) * 0.12;
+      b.bar.width = Math.abs(want - b.shown) < 0.5 ? want : b.shown;
       b.cnt.setText(`${living.length}/${size}`);
     }
   }

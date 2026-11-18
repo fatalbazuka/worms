@@ -231,6 +231,37 @@ const VOICES = {
     tone(ctx, out, { type: 'sine', from: 175, to: 110, t: t + 0.42, dur: 0.6, peak: 0.22 });
   },
 
+  /** Трос пошёл: короткий свист разматывающейся верёвки, срез ползёт вверх. */
+  rope(ctx, out, t) {
+    hiss(ctx, out, { t, dur: 0.2, peak: 0.28, filter: 'bandpass', from: 500, to: 2800, q: 1.1 });
+    tone(ctx, out, { type: 'triangle', from: 300, to: 900, t, dur: 0.16, peak: 0.1 });
+  },
+
+  /** Крюк впился в стену: глухой удар и сухой щелчок. */
+  thunk(ctx, out, t) {
+    tone(ctx, out, { type: 'sine', from: 190, to: 70, t, dur: 0.12, peak: 0.42 });
+    hiss(ctx, out, { t, dur: 0.05, peak: 0.25, filter: 'bandpass', from: 1500, to: 700, q: 1 });
+  },
+
+  /** Натяжение рогатки: щелчок резинки, тем выше, чем сильнее натянул (opts.power 0…1). */
+  stretch(ctx, out, t, opts = {}) {
+    const f = 240 + clamp(Number(opts.power) || 0, 0, 1) * 620;
+    tone(ctx, out, { type: 'triangle', from: f, to: f * 1.04, t, dur: 0.045, peak: 0.09 });
+  },
+
+  /** Рогатка отпущена: резинка хлопнула и дрожит, затухая. */
+  twang(ctx, out, t) {
+    tone(ctx, out, { type: 'sawtooth', from: 360, to: 150, t, dur: 0.2, peak: 0.16 });
+    tone(ctx, out, { type: 'triangle', from: 720, to: 300, t, dur: 0.12, peak: 0.1 });
+  },
+
+  /** Боец выбит: тяжёлый удар и сползающая вниз нота — событие крупнее простого «ой». */
+  knockout(ctx, out, t) {
+    tone(ctx, out, { type: 'sine', from: 140, to: 45, t, dur: 0.45, peak: 0.6 });
+    tone(ctx, out, { type: 'square', from: 520, to: 130, t: t + 0.03, dur: 0.4, peak: 0.12 });
+    hiss(ctx, out, { t, dur: 0.12, peak: 0.3, filter: 'lowpass', from: 1400, to: 300 });
+  },
+
   /** Тик таймера в последние секунды: сухой высокий щелчок часов. */
   tick(ctx, out, t) {
     tone(ctx, out, { type: 'square', from: 1600, t, dur: 0.035, peak: 0.1 });

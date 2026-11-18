@@ -56,7 +56,9 @@ async function tapToMenu(tries = 12) {
   for (let i = 0; i < tries; i++) {
     if (await page.evaluate(() => window.__WORMS__?.scene.isActive('Menu'))) return true;
     const g = await view();
-    await page.mouse.click(Math.round(g.left + g.cw / 2), Math.round(g.top + g.ch / 2));
+    // На экране итога — кнопка «В меню»; пока её нет, ждём
+    const b = await page.evaluate(() => window.__WORMS__.scene.getScene('Game')?.overButtons?.menu ?? null);
+    if (b) await page.mouse.click(Math.round(g.left + (b.x * g.cw) / g.w), Math.round(g.top + (b.y * g.ch) / g.h));
     await page.waitForTimeout(500);
   }
   return page.evaluate(() => window.__WORMS__?.scene.isActive('Menu'));

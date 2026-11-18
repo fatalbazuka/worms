@@ -76,6 +76,22 @@ export class CameraRig {
   /** Фон: только небо. */
   bg(o) { this.worldCam.ignore(o); this.uiCam.ignore(o); return o; }
 
+  /**
+   * Короткий «наезд» на взрыв: мир на мгновение приближается и отпускает.
+   * Меняется только зум самой камеры, расчёты вида идут по прежнему
+   * масштабу — доли секунды картинка чуть крупнее, и только.
+   */
+  punch(amount = 0.03, ms = 170) {
+    const cam = this.worldCam;
+    const st = { k: 1 + amount };
+    this.punchTween?.stop();
+    this.punchTween = this.scene.tweens.add({
+      targets: st, k: 1, duration: ms, ease: 'Quad.easeOut',
+      onUpdate: () => cam.setZoom(this.zoom * st.k),
+      onComplete: () => cam.setZoom(this.zoom),
+    });
+  }
+
   /** Трясём только мир — интерфейс при взрывах теперь стоит на месте. */
   shake(duration, intensity) { this.worldCam.shake(duration, intensity); }
 

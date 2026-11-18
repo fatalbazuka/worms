@@ -90,6 +90,7 @@ export class AimController {
         && Math.hypot(pointer.x - sx, pointer.y - sy) <= CFG.SLING_GRAB;
       if (grab) {
         this.mode = 'aim';
+        this._lastStep = 0;
         this.startX = pointer.x;
         this.startY = pointer.y;
         this.dragX = 0; this.dragY = 0;
@@ -173,6 +174,7 @@ export class AimController {
             -CFG.AIM_ANGLE_LIMIT, CFG.AIM_ANGLE_LIMIT,
           );
         }
+        if (this.scene.sling) this.scene.fx.sound('twang');
         this.scene.fireActiveWorm(shot.vx, shot.vy);
       }
     }
@@ -269,12 +271,47 @@ export class AimController {
     else if (scene.sling && !this.desktop && !scene.charging) {
       // У рогатки прицела «в покое» нет: направления ещё никто не задал
       if (this.crosshair) this.crosshair.setVisible(false);
+      this._drawSlingHint();
       this._drawHookHints();
       this._drawHookPreview();
     } else {
       this._drawButtonAim(scene.charging ? scene.charge : 0);
       this._drawHookPreview();
     }
+  }
+
+  /**
+   * Подсказка рогатки: «палец» берёт бойца и тянет назад от ближайшего
+   * врага, шкала силы растёт в сторону выстрела, палец отпускает — и по
+   * кругу. Показывает жест целиком, без единого слова.
+   */
+  _drawSlingHint() {
+    const scene = this.scene;
+    const w = this.worm;
+    if (!scene.slingHint || !w || this.tap || w.zip || scene.turn.retreating) return;
+    const foes = scene.worms.filter((f) => f.alive && f.team !== w.team);
+    if (!foes.length) return;
+    const foe = foes.reduce((a, b) =>
+      (Math.hypot(b.x - w.x, b.y - w.y) < Math.hypot(a.x - w.x, a.y - w.y) ? b : a));
+    // Целимся чуть выше врага — так и надо стрелять навесом
+    let dx = foe.x - w.x, dy = foe.centerY - w.centerY - 90;
+    const d = Math.hypot(dx, dy) || 1;
+    dx /= d; dy /= d;
+    const t = (scene.time.now % 2000) / 2000;
+    const pull = t < 0.15 ? 0 : t < 0.7 ? (t - 0.15) / 0.55 : t < 0.85 ? 1 : 0;
+    const k = pull * pull * (3 - 2 * pull);
+    const reach = (CFG.SLING_MAX * 0.72 * k) / scene.rig.zoom;
+    const o = this.origin();
+    const fx = o.x - dx * reach, fy = o.y - dy * reach;
+    const g = this.gfx;
+    if (k > 0.02) {
+      g.lineStyle(3, 0xffffff, 0.35).lineBetween(o.x, o.y, fx, fy);
+      this._drawPower(o, { x: dx, y: dy }, k * 0.72);
+    }
+    // «Палец»: кружок с ободком; в момент отпускания вспыхивает
+    const released = t >= 0.85;
+    g.fillStyle(0xffffff, released ? 0.25 : 0.85).fillCircle(fx, fy, released ? 26 : 17);
+    g.lineStyle(3, 0x1a1408, released ? 0.2 : 0.7).strokeCircle(fx, fy, released ? 26 : 17);
   }
 
   /**
@@ -472,6 +509,14 @@ export class AimController {
     this.crosshair.setPosition(o.x + d.x * CFG.AIM_RAY_LEN, o.y + d.y * CFG.AIM_RAY_LEN);
     this._drawPower(o, d, shot.power / CFG.AIM_MAX_POWER);
     if (this.scene.sling) {
+      // Резинка «щёлкает» на каждом шаге шкалы — сила слышна и чувствуется
+      // в руке, глаз можно держать на цели
+      const stepN = Math.ceil((shot.power / CFG.AIM_MAX_POWER) * POWER_BLOBS.length);
+      if (stepN !== this._lastStep) {
+        this._lastStep = stepN;
+        this.scene.fx.sound('stretch', { power: shot.power / CFG.AIM_MAX_POWER });
+        if (stepN % 4 === 0) this.scene.haptic?.('select');
+      }
       // Резинка рогатки: от бойца назад, к пальцу
       const pull = Math.min(Math.hypot(this.dragX, this.dragY), CFG.SLING_MAX) / this.scene.rig.zoom;
       this.gfx.lineStyle(3, 0xffffff, 0.35)

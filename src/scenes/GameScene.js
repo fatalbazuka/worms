@@ -41,6 +41,7 @@ export default class GameScene extends Phaser.Scene {
     // Что за партия — решает меню. Прямой заход по адресу описания не даёт,
     // и тогда игра ведёт себя как раньше: обычный хотсит на одном устройстве.
     this.match = this.registry.get('match') ?? HOTSEAT;
+    this.overButtons = null;
     this.rules = this.match.rules ?? {};
     this.turnTime = this.rules.turnTime ?? CFG.TURN_TIME;
 
@@ -211,7 +212,7 @@ export default class GameScene extends Phaser.Scene {
     if (!this.isBotTurn()) this._countHookUse();
     w.startZip(a.x, a.y);
     w.setActiveMarker(false);
-    this.fx.sound('jump');
+    this.fx.sound('rope');
     if (!this.isBotTurn()) haptic('shot');
     this.setCameraManual(false);
     return true;
@@ -222,8 +223,21 @@ export default class GameScene extends Phaser.Scene {
    * точки, куда можно зацепиться, светятся, а под панелью висит строка.
    * Потом подсказка уходит сама — опытному она только мешает.
    */
-  get hookHint() {
+  /**
+   * Подсказка про рогатку: пока игрок не выстрелил дважды, у бойца ходит
+   * «палец» и показывает жест. Сначала учим стрелять, потом — тросу:
+   * две подсказки разом на первом ходу только путают.
+   */
+  get slingHint() {
     if (!this.sling) return false;
+    if (this._slingUses == null) {
+      try { this._slingUses = Number(localStorage.getItem('worms.slingUses')) || 0; } catch { this._slingUses = 0; }
+    }
+    return this._slingUses < 2;
+  }
+
+  get hookHint() {
+    if (!this.sling || this.slingHint) return false;
     if (this._hookUses == null) {
       try { this._hookUses = Number(localStorage.getItem('worms.hookUses')) || 0; } catch { this._hookUses = 0; }
     }
@@ -258,6 +272,9 @@ export default class GameScene extends Phaser.Scene {
   /** Начало хода: боту нужен чистый план, чужой ему не годится. */
   onTurnBegin() {
     for (const b of this.bots ?? []) b?.reset();
+    // Тот, чей ход, подпрыгивает на месте: глаз сразу находит своего
+    const active = this.turn.activeWorm;
+    if (active) active.squash = -0.9;
     // Твой ход — короткий сигнал в руку: телефон можно не держать перед глазами
     if (this.isLocalTeam(this.turn.currentTeam) && !this.botFor(this.turn.currentTeam)) haptic('turn');
   }
@@ -498,10 +515,36 @@ export default class GameScene extends Phaser.Scene {
     // Вода уходит заметно ниже мира: при отдалении под землёй не должно
     // зиять ничего, там продолжается вода.
     const deep = CFG.WORLD_H - CFG.WATER_Y + 900;
-    this.rig.world(this.add.rectangle(0, CFG.WATER_Y, CFG.WORLD_W, deep, biome.water, biome.waterAlpha)
+    // Шире мира: на узкой башне в горизонтальном экране по бокам от неё
+    // иначе была бы пустота вместо моря
+    const wide = CFG.WORLD_W + 4000;
+    this.waterBody = this.rig.world(this.add.rectangle(-2000, CFG.WATER_Y, wide, deep + 2000, biome.water, biome.waterAlpha)
       .setOrigin(0, 0).setDepth(DEPTH.WATER));
-    this.rig.world(this.add.rectangle(0, CFG.WATER_Y, CFG.WORLD_W, 3, 0xffffff, 0.25)
+    this.waterLine = this.rig.world(this.add.rectangle(-2000, CFG.WATER_Y, wide, 3, 0xffffff, 0.25)
       .setOrigin(0, 0).setDepth(DEPTH.WATER));
+    this.waterBase = CFG.WATER_Y;
+    this.floodLevel = 0;
+  }
+
+  /**
+   * Потоп: с хода rules.flood.after вода каждый ход поднимается на step.
+   * Без него бой на башне мог тянуться, пока двое прячутся по этажам;
+   * с ним партия сама сжимается к верху и кончается за несколько минут.
+   * Уровень — функция от номера хода, поэтому в сети он у обоих один.
+   */
+  applyFlood() {
+    const f = this.rules.flood;
+    if (!f || !this.waterBody) return;
+    const turn = this.turn?.turnNumber ?? 0;
+    const level = Math.max(0, turn - f.after) * f.step;
+    if (turn === f.after) this.fx.banner('Со следующего хода вода пойдёт вверх', '#9fd8ff', 1800);
+    if (level === this.floodLevel) return;
+    this.floodLevel = level;
+    CFG.WATER_Y = this.waterBase - level;
+    CFG.DROWN_Y = CFG.WATER_Y + 15;
+    this.tweens.add({ targets: [this.waterBody, this.waterLine], y: CFG.WATER_Y, duration: 900, ease: 'Sine.easeInOut' });
+    this.fx.banner('Вода поднимается!', '#9fd8ff', 1300, 'splash');
+    this.rig.shake(260, 0.004);
   }
 
   /**
@@ -682,7 +725,10 @@ export default class GameScene extends Phaser.Scene {
     // Физика идёт по dt самого Phaser, зажатому сверху: редкий тяжёлый кадр
     // не должен телепортировать тела сквозь землю, а замедление под нагрузкой
     // для физики безопаснее пропущенных столкновений.
-    const dt = Math.min(delta / 1000, CFG.MAX_DT);
+    let dt = Math.min(delta / 1000, CFG.MAX_DT);
+    // Замедление на добивании: мир на полсекунды вязнет, интерфейс и часы
+    // хода идут как шли
+    if (this._slow && performance.now() < this._slow.until) dt *= this._slow.k;
 
     // Таймер хода, набор силы и поворот прицела считаются по системным часам.
     // Дельта Phaser для этого не годится: он её сглаживает и под нагрузкой
@@ -722,6 +768,7 @@ export default class GameScene extends Phaser.Scene {
     }
 
     this._updateCamera(dt, realDt);
+    this.fx.updateWind(realDt);
     this.aim.update();
     this.turn.update(realDt);
     this.hud.update();
@@ -921,6 +968,7 @@ export default class GameScene extends Phaser.Scene {
   resetAim() {
     this.aimAngle = CFG.AIM_ANGLE_START;
     this.hooksLeft = this.hookPerTurn;
+    this.applyFlood();
     this.cancelCharge();
     this.mouseFire = false;
     this.remoteAim = false;
@@ -1088,7 +1136,13 @@ export default class GameScene extends Phaser.Scene {
       this.net?.sendShot(cmd);
     }
     this.fx.sound('shot');
-    if (!this.replaying && !this.isBotTurn()) haptic('shot');
+    if (!this.replaying && !this.isBotTurn()) {
+      haptic('shot');
+      if (this.sling) {
+        this._slingUses = (this._slingUses ?? 0) + 1;
+        try { localStorage.setItem('worms.slingUses', String(this._slingUses)); } catch { /* инкогнито */ }
+      }
+    }
     const shots = this.turn.weapon.fire(this, sx, sy, vx, vy, w);
     this.projectiles.push(...shots);
     this.turn.onFired();
@@ -1178,6 +1232,8 @@ export default class GameScene extends Phaser.Scene {
   }
 
   onWormDied(worm) {
+    // Добивание — главное событие хода: мир замирает на полсекунды
+    if (!this.replaying) this._slow = { until: performance.now() + 520, k: 0.28 };
     this.fx.explosion(worm.x, worm.centerY, 26);
     // Тоже по целым: у соперника гибель приходит снимком с целыми координатами
     this.terrain.destroyCircle(Math.round(worm.x), Math.round(worm.centerY), 22);
@@ -1259,6 +1315,7 @@ export default class GameScene extends Phaser.Scene {
     // Партия доиграна: запись сессии больше не нужна
     this.net?.forget();
     this.fx.sound(winner === mine ? 'victory' : 'defeat');
+    if (winner >= 0 && (winner === mine || !solo)) this.fx.confetti();
     haptic(winner === mine ? 'win' : 'lose');
     // Первая доигранная партия — момент предложить иконку на экран Домой.
     // Чуть позже итога, чтобы не перекрыть его; Telegram покажет своё окно.
@@ -1339,21 +1396,30 @@ export default class GameScene extends Phaser.Scene {
       return;
     }
 
-    this.time.delayedCall(600, () => {
-      this.input.once('pointerdown', () => (backToMenu ? this.toMenu() : this.scene.restart()));
+    // Две кнопки вместо «тап куда угодно»: случайное касание после взрыва
+    // раньше тут же уносило с экрана итога
+    title.setScale(0.3);
+    this.tweens.add({ targets: title, scale: 1, duration: 420, ease: 'Back.easeOut' });
+    sub.setText(`бой занял ходов: ${this.turn.turnNumber}`);
+    this.time.delayedCall(500, () => {
+      if (!this.gameOverUi) return;
+      this.gameOverUi.push(this._overButton(-140, 'Ещё раз', () => this.scene.restart(), 'again'));
+      this.gameOverUi.push(this._overButton(140, 'В меню', () => this.toMenu(), 'menu'));
     });
   }
 
   /** Кнопка на затемнении итога. */
-  _overButton(dx, label, onTap) {
-    const w = 220, h = 58;
-    const x = CFG.VIEW_W / 2 + dx, y = CFG.VIEW_H / 2 + 100;
+  _overButton(dx, label, onTap, key = null) {
+    const w = 250, h = 76;
+    const x = CFG.VIEW_W / 2 + dx, y = CFG.VIEW_H / 2 + 118;
+    // Центры кнопок наружу — тестам, чтобы не считать раскладку у себя
+    if (key) (this.overButtons ??= {})[key] = { x, y };
     ensureButton(this, `ui-over-${w}x${h}`, w, h, dx < 0 ? 'primary' : 'normal');
     const img = this.rig.ui(this.add.image(x, y, `ui-over-${w}x${h}`)
       .setScrollFactor(0).setDepth(DEPTH.HUD + 12));
     img.setInteractive({ useHandCursor: true });
     img.on('pointerup', onTap);
-    const text = this.rig.ui(this.add.text(x, y, label, font(20, 800))
+    const text = this.rig.ui(this.add.text(x, y, label, font(26, 800))
       .setOrigin(0.5).setScrollFactor(0).setDepth(DEPTH.HUD + 13));
     this.gameOverUi?.push(text);
     return img;

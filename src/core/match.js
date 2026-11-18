@@ -56,7 +56,12 @@ export function towerMatch(botLevel = null) {
         : { worms: 2, control: 'human' },
     ],
     // bounce и roll — граната на тесных этажах прыгает и катится вдвое слабее
-    rules: { turnTime: 25, hook: 3, crateChance: 0.3, bounce: 0.5, roll: 0.7 },
+    // flood — с 9-го хода вода каждый ход поднимается на 85 px: бой сам
+    // сжимается к верхним этажам и кончается за несколько минут
+    rules: {
+      turnTime: 25, hook: 3, crateChance: 0.3, bounce: 0.5, roll: 0.7,
+      flood: { after: 8, step: 85 },
+    },
   };
 }
 

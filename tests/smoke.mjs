@@ -674,8 +674,9 @@ await page.waitForFunction(
 );
 check('победа засчитана', true);
 
-await page.waitForTimeout(1000);
-await page.mouse.click(...px(view.w / 2, 300));
+await page.waitForTimeout(1200);
+const again = await page.evaluate(() => window.__WORMS__.scene.getScene('Game').overButtons.again);
+await page.mouse.click(...px(again.x, again.y));
 await ready();
 await page.waitForTimeout(1200);
 const restarted = await state();

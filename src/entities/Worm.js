@@ -91,6 +91,14 @@ export class Worm {
       this.view.setOrigin(0.5, m.originY);
       this.view.play('smiley_idle');
       this.anim = 'smiley_idle';
+      // Смайлики одинаковые, поэтому команду красим контуром: цветное
+      // свечение видно и на земле, и на стене, и в полёте. Нет WebGL —
+      // нет свечения, тогда остаётся кольцо у ног (ниже)
+      if (this.view.preFX) {
+        this.view.preFX.setPadding(10);
+        this.view.preFX.addGlow(color, 3.2, 0, false, 0.12, 9);
+        this.glow = true;
+      }
     } else if (this.sprited) {
       // Спрайты WA нарисованы «мордой влево», ноги — не по низу кадра,
       // поэтому точка привязки берётся из sprite-meta.
@@ -108,11 +116,16 @@ export class Worm {
     }
     s.rig.world(this.view.setDepth(DEPTH.WORM));
     if (this.eye) s.rig.world(this.eye);
+    if (this.smiley && !this.glow) {
+      this.ring = s.rig.world(s.add.ellipse(this.x, this.y, 34, 11)
+        .setStrokeStyle(3, color, 0.95).setDepth(DEPTH.WORM - 1));
+    }
 
     // Червяки в оригинале одинаковые, поэтому команду показываем цветом
     // числа здоровья и полоской под ним — как в самой игре.
     this.label = s.add.text(this.x, this.y - CFG.WORM_H - 20, `${this.health}`,
-      font(15, 800, hexColor(color))).setOrigin(0.5, 0.5).setDepth(DEPTH.WORM + 2);
+      font(this.smiley ? 19 : 15, 800, hexColor(color))).setOrigin(0.5, 0.5).setDepth(DEPTH.WORM + 2);
+    this.label.setStroke('#10131a', 4);
     s.rig.world(this.label);
 
     this.barBg = s.add.rectangle(this.x, this.y - CFG.WORM_H - 6, HP_BAR_W + 2, 5, 0x101420, 0.85)
@@ -285,6 +298,11 @@ export class Worm {
     this.vx = 0; this.vy = 0;
     this.fallStartY = this.y;           // рывок — не падение: урона нет
     this._clampToWorld();
+    // Впился в стену: пыль из-под крюка, глухой удар, отдача в руку
+    this.squash = 0.9;
+    this.scene.fx?.dust(this.x, this.centerY, 7);
+    this.scene.fx?.sound('thunk');
+    if (this.scene.isLocalTeam?.(this.team)) this.scene.haptic?.('hit');
     if (this.supported(this.x, this.y)) { this.grounded = true; this.hang = null; return; }
     this.hang = this._hangSide();
     this.grounded = false;
@@ -333,6 +351,8 @@ export class Worm {
       // Стену или потолок снесли — держаться не за что, падаем
       if (this.touching()) {
         this.vx = 0; this.vy = 0;
+        // Висящего вода тоже достаёт: поднялась выше — утонул
+        if (this.y > CFG.DROWN_Y) this._drown();
         this._syncView();
         return;
       }
@@ -413,6 +433,7 @@ export class Worm {
     if (this.hang) { this.scene.fx?.sound('jump'); this.letGo(); return; }
     if (!this.grounded) return;
     this.scene.fx?.sound('jump');
+    this.squash = -0.7;                  // вытянулся в прыжке
     this.grounded = false;
     this.fallStartY = this.y;
     this.vy = CFG.JUMP_VY;
@@ -512,6 +533,10 @@ export class Worm {
     this.vy = 0;
     this.vx *= 0.3;
     if (this.parachuting) { this.foldChute(); this.fallStartY = this.y; return; }
+    if (drop > 26) {
+      this.squash = Math.min(1, 0.4 + drop / 260);
+      this.scene.fx?.dust(this.x, this.y, drop > 90 ? 9 : 5);
+    }
     if (drop > CFG.FALL_SAFE) {
       const dmg = Math.min(CFG.FALL_DMG_MAX, (drop - CFG.FALL_SAFE) * CFG.FALL_DMG_PER_PX);
       this.damage(Math.round(dmg), 'падение');
@@ -536,6 +561,8 @@ export class Worm {
     // Пару секунд лицо помнит, что было больно; после падения — кружится голова
     this.hurtPose = cause === 'падение' ? 'worm_dizzy' : 'worm_hurt';
     this.hurtUntil = this.scene.time.now + 1300;
+    this.flashUntil = this.scene.time.now + 110;     // белая вспышка: «попали»
+    this.squash = 0.8;
     this.scene.fx.damageNumber(this.x, this.centerY - 10, amount);
     if (this.health <= 0) this.kill(cause);
   }
@@ -560,8 +587,9 @@ export class Worm {
     const s = this.scene;
     const gx = Math.round(this.x), gy = Math.round(this.y);
     if (this.smiley) this._ghost();
+    s.fx?.knockout(this.x, this.centerY);
     s.tweens.add({
-      targets: [this.view, this.label, this.bar, this.barBg, this.eye].filter(Boolean),
+      targets: [this.view, this.label, this.bar, this.barBg, this.eye, this.ring].filter(Boolean),
       alpha: 0,
       y: '+=6',
       duration: 400,
@@ -571,6 +599,7 @@ export class Worm {
         this.bar.destroy();
         this.barBg.destroy();
         if (this.eye) this.eye.destroy();
+        this.ring?.destroy();
         this.marker.destroy();
         this._placeGrave(gx, gy);
       },
@@ -623,6 +652,16 @@ export class Worm {
     else if (this.hang === 'right') { this.view.setPosition(rx + hw, ry - CFG.WORM_H / 2); this.view.setRotation(-Math.PI / 2); }
     else { this.view.setPosition(rx, ry); this.view.setRotation(0); }
     this._drawRope();
+    // Сплющивание и вытягивание: приземлился, получил, прыгнул. Затухает
+    // само за несколько кадров; знак минус — вытянут вверх
+    const base = this.smiley ? meta('smiley').scale : 1;
+    const sq = this.squash ?? 0;
+    this.view.setScale(base * (1 + 0.24 * sq), base * (1 - 0.24 * sq));
+    this.squash = Math.abs(sq) < 0.02 ? 0 : sq * 0.82;
+    if (this.view.setTintFill) {
+      if (this.scene.time.now < (this.flashUntil ?? 0)) this.view.setTintFill(0xffffff);
+      else if (this.view.isTinted) this.view.clearTint();
+    }
 
     // Спрайты нарисованы мордой влево, поэтому отражаем при движении вправо
     if (this.view.setFlipX) this.view.setFlipX(this.sprited ? this.facing > 0 : this.facing < 0);
@@ -636,6 +675,7 @@ export class Worm {
     }
 
     if (this.eye) this.eye.setPosition(rx + this.facing * 6, ry - CFG.WORM_H + 9);
+    if (this.ring) this.ring.setPosition(rx, ry).setVisible(this.grounded && !this.zip);
     // Купол: под ним боец целиком — покачиваем; над головой — просто держим
     let lift = 0;
     if (this.chute) {
