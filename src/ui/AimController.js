@@ -33,6 +33,10 @@ const BLOB_STEP = 4.6;     // шаг между шариками: соседни
  *    натяжения — сила, отпустил — выстрел. Палец при этом не закрывает то,
  *    куда летит снаряд. Натяжение меряется в экранных пикселях.
  *
+ *    Главный способ — рычаг над прыжком (Hud._buildSlingPad): тянешь его,
+ *    натягивается рогатка у бойца. В бойца попадать не надо, и мазок по
+ *    рычагу камерой не считается: рычаг ни для чего другого не нужен.
+ *
  * Крюк (там же): касание мимо бойца без движения — трос в эту сторону.
  * Пока палец прижат, виден пунктир до точки зацепа; повёл пальцем — это
  * уже протяжка камеры, крюк отменён.
@@ -83,6 +87,22 @@ export class AimController {
     const p = this.scene.rig.worldPoint(pointer);
 
     if (this.scene.slingAim) {
+      // Рычаг: касание в нём — всегда натяжение, без угадывания по скорости
+      if (this.scene.hud.padHit?.(pointer)) {
+        if (canAim && !w.zip && !this.scene.turn.retreating) {
+          this.mode = 'aim';
+          this.pad = true;
+          this._lastStep = 0;
+          this.startX = pointer.x;
+          this.startY = pointer.y;
+          this.dragX = 0; this.dragY = 0;
+          this.armed = true;
+          this.downAt = performance.now() - CFG.SLING_MIN_HOLD;
+          this.wasOut = false;
+          this.scene.haptic?.('tap');
+        }
+        return;
+      }
       // Рогатка: хват и натяжение — в экранных пикселях, зум не мешает
       const rig = this.scene.rig;
       const sx = (o.x - rig.viewLeft) * rig.zoom, sy = (o.y - rig.viewTop) * rig.zoom;
@@ -148,6 +168,15 @@ export class AimController {
     }
     if (this.scene.rig.pinching) { this.cancel(); return; }
 
+    if (this.scene.slingAim && this.pad) {
+      // Рычаг короче рогатки: его ход растягиваем до полной силы рогатки
+      const dx = pointer.x - this.startX, dy = pointer.y - this.startY;
+      this.scene.hud.padPull = { dx, dy };
+      const k = CFG.SLING_MAX / CFG.SLING_PAD_MAX;
+      this.dragX = dx * k; this.dragY = dy * k;
+      if (Math.hypot(this.dragX, this.dragY) > CFG.SLING_MIN) this.wasOut = true;
+      return;
+    }
     if (this.scene.slingAim) {
       this.dragX = pointer.x - this.startX;
       this.dragY = pointer.y - this.startY;
@@ -185,6 +214,7 @@ export class AimController {
     }
     this.tap = null;
     if (this.mode === 'charge') this.scene.mouseFire = false;
+    if (this.pad) { this.pad = false; this.scene.hud.padPull = null; }
     if (this.mode === 'aim') {
       const shot = this.computeShot();
       // Отпустил до того, как стало ясно, что это натяжение, или всё касание
@@ -251,6 +281,7 @@ export class AimController {
 
   cancel() {
     if (this.mode === 'charge') this.scene.mouseFire = false;
+    if (this.pad) { this.pad = false; this.scene.hud.padPull = null; }
     this.tap = null;
     this.mode = null;
     this.dragX = 0; this.dragY = 0;
@@ -323,6 +354,7 @@ export class AimController {
   _drawSlingHint() {
     const scene = this.scene;
     const w = this.worm;
+    this.padHint = null;
     if (!scene.slingHint || !w || this.tap || w.zip || scene.turn.retreating) return;
     const foes = scene.worms.filter((f) => f.alive && f.team !== w.team);
     if (!foes.length) return;
@@ -338,6 +370,9 @@ export class AimController {
     const reach = (CFG.SLING_MAX * 0.72 * k) / scene.rig.zoom;
     const o = this.origin();
     const fx = o.x - dx * reach, fy = o.y - dy * reach;
+    // Рычаг на экране тянется так же — видно, за что браться
+    const padReach = CFG.SLING_PAD_MAX * 0.72 * k;
+    this.padHint = { dx: -dx * padReach, dy: -dy * padReach };
     const g = this.gfx;
     if (k > 0.02) {
       g.lineStyle(3, 0xffffff, 0.35).lineBetween(o.x, o.y, fx, fy);

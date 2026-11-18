@@ -350,6 +350,32 @@ await gesture([['move', -60, 20], ['move', -140, 50], ['up', -140, 50]]);
 await page.waitForTimeout(200);
 check('спокойное натяжение — выстрел', await turnState() !== 'aim');
 
+// --- рычаг рогатки: в бойца попадать не надо, быстрый оттяг тоже стреляет ---
+const padGesture = (steps) => page.evaluate(async (steps) => {
+  const { CFG } = await import('/src/config.js');
+  const s = window.__WORMS__.scene.getScene('Game');
+  const a = s.aim, pad = s.hud.slingPad;
+  const sx = pad.x + CFG.FRAME.left, sy = pad.y + CFG.FRAME.top;
+  const p = (dx, dy, down) => ({ x: sx + dx, y: sy + dy, isDown: down, id: 1, downTime: 2 });
+  for (const [kind, dx, dy] of steps) {
+    if (kind === 'down') a.onDown(p(dx, dy, true));
+    if (kind === 'move') a.onMove(p(dx, dy, true));
+    if (kind === 'up') a.onUp(p(dx, dy, false));
+  }
+}, steps);
+const shotTurn = await page.evaluate(() => window.__WORMS__.scene.getScene('Game').turn.turnNumber);
+await page.waitForFunction((n) => {
+  const s = window.__WORMS__.scene.getScene('Game');
+  return s.turn.turnNumber > n && s.canPlayerAct() && s.turn.currentTeam === 0;
+}, shotTurn, { timeout: 90000 });
+await padGesture([['down', 0, 0], ['move', 30, 40], ['move', 5, 4], ['up', 5, 4]]);
+await page.waitForTimeout(200);
+const padCancel = await turnState();
+await padGesture([['down', 0, 0], ['move', 50, 30], ['move', 100, 60], ['up', 100, 60]]);
+await page.waitForTimeout(200);
+check('рычаг: оттянул и вернул в центр — отмена, быстрый оттяг — выстрел',
+  padCancel === 'aim' && await turnState() !== 'aim', padCancel);
+
 // --- испытания: все собираются, звёзды и монеты за победу ---
 const challengeIds = await page.evaluate(async () => (await import('/src/campaign/challenges.js')).CHALLENGES.map((c) => c.id));
 const broken = [];
