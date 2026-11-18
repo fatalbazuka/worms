@@ -450,6 +450,17 @@ export class Worm {
     this.vx = dir * CFG.JUMP_VX;
   }
 
+  /** Бросок батутом: скорость задаётся целиком, падение считается от старта. */
+  launch(vx, vy) {
+    if (!this.alive) return;
+    this.applyImpulse(0, 0);
+    this.fallStartY = this.y;
+    this.vx = vx;
+    this.vy = vy;
+    this.squash = -0.9;
+    if (vx) this.facing = vx > 0 ? 1 : -1;
+  }
+
   /** Импульс от взрыва. */
   applyImpulse(ix, iy) {
     if (!this.alive) return;

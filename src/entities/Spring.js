@@ -2,31 +2,37 @@ import { CFG, DEPTH } from '../config.js';
 import { has, fitScale } from '../core/assets.js';
 
 /**
- * Батут: пружина на полу. Кто на неё встанет или упадёт — летит вверх.
+ * Батут: пружина на полу. Кто на неё встанет или упадёт — летит.
  *
- * Свой поставил — лифт на этаж выше; поставил у чужого — ловушка, которая
- * подбросит его под удар или с этажа. Живёт, как мина, между ходами (в
- * списке сцены, не снарядов), но не взрывается: взрыв рядом её ломает, и
- * после USES прыжков она изнашивается.
+ * Оружие «Батут» запускает самого бойца по прицелу рогатки и оставляет
+ * пружину под ногами (launch — тот же вектор): она один раз бросит
+ * следующего по той же дуге и исчезнет. Пружина без вектора (старые
+ * сохранения, испытания) бросает просто вверх, USES раз. Живёт, как мина,
+ * между ходами (в списке сцены, не снарядов), но не взрывается.
  *
  * Всё решает только положение бойца, поэтому у обоих игроков по сети
  * батут срабатывает одинаково: подбрасывание идёт из той же физики шага.
  */
 export const SPRING_VY = -880;     // скорость вверх: примерно два этажа башни
+/** Скорость бойца от рогатки: полная натяжка — чуть дальше двух этажей. */
+export const SPRING_LAUNCH = 0.8;
 const USES = 4;
 const HALF = 18;                   // полуширина площадки
 
 export class Spring {
-  constructor(scene, x, y, owner = null, uses = USES) {
+  constructor(scene, x, y, owner = null, launch = null) {
     this.scene = scene;
     this.terrain = scene.terrain;
     this.owner = owner;
     this.x = x;
     this.y = y;
     this.vy = 0;
-    this.uses = uses;
+    this.launch = launch;           // {vx, vy} — куда бросает; null — вверх
+    this.uses = launch ? 1 : USES;
     this.alive = true;
     this.cool = new Map();          // боец → сек, пока батут его не трогает
+    // Хозяин только что с неё взлетел — сразу не подхватывает
+    if (owner) this.cool.set(owner, 1);
 
     if (has(scene, 'shot_spring')) {
       this.view = scene.add.image(x, y, 'shot_spring').setOrigin(0.5, 1)
@@ -35,6 +41,11 @@ export class Spring {
       this.view = scene.add.rectangle(x, y, HALF * 2, 10, 0xec4848).setOrigin(0.5, 1);
     }
     this.baseScaleY = this.view.scaleY;
+    // Наклон площадки — в сторону броска: видно, куда она кинет
+    if (launch) {
+      const tilt = Math.atan2(launch.vx, -launch.vy);
+      this.view.setRotation(Math.max(-0.7, Math.min(0.7, tilt)));
+    }
     scene.rig.world(this.view.setDepth(DEPTH.WORM - 1));
   }
 
@@ -66,11 +77,15 @@ export class Spring {
   }
 
   _launch(w) {
-    w.applyImpulse(0, 0);
-    w.vx *= 0.5;
-    w.vy = SPRING_VY;
-    w.fallStartY = w.y;
-    w.squash = -0.9;
+    if (this.launch) {
+      w.launch(this.launch.vx, this.launch.vy);
+    } else {
+      w.applyImpulse(0, 0);
+      w.vx *= 0.5;
+      w.vy = SPRING_VY;
+      w.fallStartY = w.y;
+      w.squash = -0.9;
+    }
     this.cool.set(w, 0.6);
     this.uses -= 1;
     this.scene.fx?.sound('jump');

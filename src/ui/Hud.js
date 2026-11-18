@@ -301,6 +301,7 @@ export class Hud {
     const jumpCy = buttons ? Math.round(fireCy - dj) : H - 24 - JR;
     this._holdRound(jumpCx, jumpCy, JR, 'jump', 'jumpQueued');
     this.serviceEnd = lx2 + B;
+    if (!buttons) this._buildSlingPad(W, jumpCy - JR);
 
     // Тросы — как патроны: плашка над стрелками, по кружку на каждый
     // оставшийся в этом ходу. Стоит у большого пальца, а не в углу панели:
@@ -337,6 +338,54 @@ export class Hud {
         aimDown: { x: lx3 + B / 2, y: rowLow + B / 2 },
       });
     }
+  }
+
+  /**
+   * Рычаг рогатки над прыжком. Стоит правее середины, чтобы тянуть было
+   * куда в любую сторону: вправо — на полную силу, вниз — через кнопки.
+   * В uiRects его нет: касание ловит AimController (padHit).
+   */
+  _buildSlingPad(W, top) {
+    const R = CFG.SLING_PAD_R;
+    const x = Math.round(W - CFG.SLING_PAD_MAX - 30);
+    const y = Math.round(top - 26 - R);
+    this.slingPad = { x, y, r: R };
+    this.padPull = null;       // {dx, dy} — палец тянет, экранные пиксели
+    this.padGfx = this.fix(this.scene.add.graphics(), DEPTH.HUD);
+  }
+
+  /** Попал ли палец в рычаг (с запасом вокруг). */
+  padHit(pointer) {
+    const p = this.slingPad;
+    if (!p) return false;
+    const px = pointer.x - CFG.FRAME.left, py = pointer.y - CFG.FRAME.top;
+    return Math.hypot(px - p.x, py - p.y) <= p.r + CFG.SLING_PAD_SLOP;
+  }
+
+  _drawSlingPad(scene) {
+    const g = this.padGfx, p = this.slingPad;
+    g.clear();
+    const w = scene.turn.activeWorm;
+    const ready = scene.canPlayerAct() && w && !w.zip && !scene.turn.retreating;
+    // Палец на рычаге — показываем его; иначе подсказка тянет сама
+    let pull = this.padPull;
+    if (!pull && ready && scene.aim?.padHint) pull = scene.aim.padHint;
+    g.fillStyle(0x10131a, ready ? 0.5 : 0.25).fillCircle(p.x, p.y, p.r);
+    g.lineStyle(3, 0xffffff, ready ? 0.55 : 0.2).strokeCircle(p.x, p.y, p.r);
+    // Две «рогульки» рогатки по краям круга — чтобы было ясно, что это
+    g.lineStyle(4, 0xffd166, ready ? 0.8 : 0.3);
+    g.lineBetween(p.x - 20, p.y - p.r + 6, p.x - 14, p.y - p.r + 18);
+    g.lineBetween(p.x + 20, p.y - p.r + 6, p.x + 14, p.y - p.r + 18);
+    let kx = p.x, ky = p.y;
+    if (pull) {
+      const len = Math.hypot(pull.dx, pull.dy) || 1;
+      const k = Math.min(len, CFG.SLING_PAD_MAX) / len;
+      kx = p.x + pull.dx * k; ky = p.y + pull.dy * k;
+      g.lineStyle(4, 0xffffff, 0.6).lineBetween(p.x - 14, p.y - p.r + 18, kx, ky);
+      g.lineBetween(p.x + 14, p.y - p.r + 18, kx, ky);
+    }
+    g.fillStyle(0xffd166, ready ? 1 : 0.4).fillCircle(kx, ky, 22);
+    g.lineStyle(3, 0x1a1410, ready ? 0.9 : 0.3).strokeCircle(kx, ky, 22);
   }
 
   /**
@@ -622,8 +671,9 @@ export class Hud {
       'стрелки — шаг, круглая кнопка — прыжок или отцепиться',
       'тяни фон — камера · рогатка — в меню, «Прицел»',
     ] : this.compact ? [
-      'тяни от бойца НАЗАД и отпусти — выстрел, как из рогатки',
-      'чем дальше тянешь, тем сильнее; вернул палец — отмена',
+      'жёлтый рычаг справа: тяни ОТ цели и отпусти — выстрел',
+      'чем дальше тянешь, тем сильнее; вернул в центр — отмена',
+      'можно тянуть и прямо с бойца',
       'коснись стены или потолка — крюк подтянет бойца туда',
       'стрелки — шаг, круглая кнопка — прыжок или отцепиться',
       'тяни фон — камера, два пальца — масштаб',
@@ -801,6 +851,7 @@ export class Hud {
       this.subText.setText(`${TEAM_NAMES[team]} · ${scene.terrain.biome.name}${shape} · ${turn.weapon.name}${hooks}`);
     }
     if (this.hookGfx) this._updateHooks(scene);
+    if (this.padGfx) this._drawSlingPad(scene);
 
     this._updateTimer(turn);
     this._updateWind(scene.wind);
@@ -865,12 +916,16 @@ export class Hud {
     // Строка подсказки: сначала про рогатку, потом про трос
     if (this.hintText) {
       const sling = !!scene.slingHint;
+      // Батут ведёт себя не как снаряд — подсказка, пока он в руках
+      const spring = scene.slingAim && scene.turn.weapon?.id === 'spring';
       const show = !this.helpVisible && scene.canPlayerAct()
-        && (sling || (scene.hookHint && scene.hooksLeft > 0));
+        && (spring || sling || (scene.hookHint && scene.hooksLeft > 0));
       if (show) {
-        this.hintText.setText(sling
-          ? 'поставь палец на бойца, потяни назад и отпусти'
-          : 'коснись светящейся точки — трос подтянет туда');
+        this.hintText.setText(spring
+          ? 'батут: тяни рычаг — полетишь сам по дуге, пружина останется'
+          : sling
+            ? 'тяни жёлтый рычаг от цели и отпусти'
+            : 'коснись светящейся точки — трос подтянет туда');
       }
       this.hintText.setVisible(!!show);
     }

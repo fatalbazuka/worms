@@ -9,7 +9,8 @@
  *     BATTLE_COIN_LIMIT боёв в сутки, иначе монеты фармились бы о ботов;
  *   • первый вход за день — бонус серии; каждый седьмой день подряд —
  *     коробка со скином, монеты после седьмого дня держатся на максимуме;
- *   • коробку можно купить за BOX_PRICE монет;
+ *   • коробку можно купить за BOX_PRICE монет, скин — по цене редкости;
+ *   • первое прохождение миссии и боя «Подъёма» — FIRST_CLEAR_COINS;
  *   • заморозка серии: пропустил один день — серия не сгорает, если есть
  *     заморозка. Одна приходит бесплатно каждую неделю, ещё — за
  *     FREEZE_PRICE монет; больше FREEZE_MAX держать нельзя.
@@ -19,7 +20,9 @@
  * местному времени игрока.
  */
 
-export const BOX_PRICE = 300;
+export const BOX_PRICE = 600;
+/** Монеты за первое прохождение: миссия кампании, бой «Подъёма», босс главы. */
+export const FIRST_CLEAR_COINS = { mission: 100, ascent: 100, boss: 300 };
 export const BATTLE_COINS = { win: 25, loss: 10 };
 export const BATTLE_COIN_LIMIT = 10;
 export const TASKS_PER_DAY = 3;
@@ -27,7 +30,7 @@ export const TASKS_PER_DAY = 3;
 /** Награда за серию: день 1…7, дальше — седьмая. Каждый 7-й день — коробка. */
 export const STREAK_COINS = [20, 30, 40, 50, 60, 80, 120];
 export const STREAK_BOX_DAY = 7;
-export const FREEZE_PRICE = 200;
+export const FREEZE_PRICE = 400;
 export const FREEZE_MAX = 3;
 
 /**

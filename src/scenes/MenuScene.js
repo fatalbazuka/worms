@@ -17,7 +17,7 @@ import { isCasualRoom, isTowerRoom } from '../net/rooms.js';
 import { Lobby } from '../net/lobby.js';
 import { pendingSession, forgetSession } from '../net/session.js';
 import {
-  syncMe, fetchTop, myRank, loggedIn, onAccountChange, track, fetchShop, buyShopItem,
+  syncMe, fetchTop, myRank, loggedIn, onAccountChange, track,
   trackStep, prepareChallenge, fetchDailyTower,
 } from '../net/server.js';
 import { openAccountDialog } from '../ui/AccountDialog.js';
@@ -27,15 +27,15 @@ import { makeTransport } from '../net/connect.js';
 import { player } from '../platform/player.js';
 import {
   inviteLink as tgInviteLink, shareRoom, shareMessage, canOfferHomeScreen, addToHomeScreen, onHomeScreenChange,
-  haptic, inTelegram, botLink, openInvoice, refLink, shareLink,
+  haptic, inTelegram, botLink, refLink, shareLink,
 } from '../platform/telegram.js';
 import { leagueOf, nextLeague, leagueProgress, toNextLeague, leagueLabel } from '../platform/league.js';
 import { BOT_LEVELS } from '../ai/Bot.js';
 import { isDesktop, setUiMode, aimScheme, setAimScheme } from '../platform/device.js';
 import { sfx } from '../audio/Sfx.js';
-import { SKINS, SKIN_BY_ID, SKIN_STARS, BOX_SKINS, RARITY, rewardMissions } from '../core/skins.js';
+import { SKINS, SKIN_BY_ID, BOX_SKINS, RARITY, RARITY_ORDER, skinPrice, rewardMissions } from '../core/skins.js';
 import {
-  skinState, equippedSkin, equipSkin, openSkinBox, syncCampaignBoxes, applyServerOwned,
+  skinState, equippedSkin, equipSkin, openSkinBox, syncCampaignBoxes, buySkin,
 } from '../platform/skins.js';
 import {
   TASK_BY_ID, BOX_PRICE, STREAK_COINS, STREAK_BOX_DAY, streakReady, dayKey, claimStreak,
@@ -814,42 +814,40 @@ export default class MenuScene extends Phaser.Scene {
 
     // --- коробки ---
     const full = BOX_SKINS.every((s) => st.owned.includes(s.id));
+    const coins = dailyState().coins;
     const boxY = 186;
     if (this.textures.exists('shot_crate_weapon')) {
       this.items.push(this.add.image(cx - 190, boxY, 'shot_crate_weapon')
         .setScale(fitScale(this, 'shot_crate_weapon', 72)).setAlpha(st.boxes > 0 ? 1 : 0.4));
     }
     this.items.push(this.add.text(cx - 140, boxY - 24, `Коробок: ${st.boxes}`, font(24, 800)).setOrigin(0, 0));
-    this.items.push(this.add.text(cx - 140, boxY + 8,
-      full ? 'все скины собраны' : st.boxes > 0 ? 'внутри — случайный скин' : 'за кампанию, серию и монеты',
-      font(17, 700, UI.textDim)).setOrigin(0, 0).setWordWrapWidth(220));
-    if (st.boxes > 0 || full) {
+    this.items.push(this.add.text(cx - 140, boxY + 8, `монет: ${coins}`,
+      font(17, 700, UI.accent)).setOrigin(0, 0));
+    if (st.boxes > 0) {
       this._button('open-box', cx + 190, boxY, 'Открыть', '', () => this._openBox(),
-        { w: 170, h: 64, variant: 'primary', enabled: st.boxes > 0 && !full, titleSize: 24 });
+        { w: 170, h: 64, variant: 'primary', titleSize: 24 });
     } else {
-      // Коробок нет — можно купить за монеты
-      this._button('buy-box', cx + 190, boxY, `Купить · ${BOX_PRICE}`, '', () => this._buyBox(),
-        { w: 190, h: 64, enabled: dailyState().coins >= BOX_PRICE, titleSize: 22 });
+      this._button('buy-box', cx + 190, boxY, `Коробка · ${BOX_PRICE}`, '', () => this._buyBox(),
+        { w: 190, h: 64, enabled: coins >= BOX_PRICE && !full, titleSize: 21 });
     }
-
-    // Что ещё можно получить: скины, которых нет, минус неоткрытые коробки.
-    // Коробку, в которой заведомо ничего не будет, не продаём
-    const left = BOX_SKINS.filter((s) => !st.owned.includes(s.id)).length - st.boxes;
-    const can = inTelegram() && loggedIn();
+    // Шансы коробки — на виду: игрок знает, на что тратит
+    const odds = RARITY_ORDER.map((k) => `${RARITY[k].name} ${RARITY[k].odds}%`).join(' · ');
+    this.items.push(this.add.text(cx, boxY + 50, `в коробке: ${odds}\nповтор — монеты назад`,
+      font(15, 700, UI.textDim)).setOrigin(0.5, 0).setAlign('center').setWordWrapWidth(W - 40));
 
     // --- сетка скинов ---
     const cols = this.portrait ? 4 : 8;
     const cw = Math.min(170, Math.floor((W - 40) / cols));
     const ch = cw + 34;
     const x0 = cx - (cols * cw) / 2 + cw / 2;
-    const y0 = 270 + ch / 2;
+    const y0 = 300 + ch / 2;
     SKINS.forEach((skin, i) => {
       const x = x0 + (i % cols) * cw, y = y0 + Math.floor(i / cols) * (ch + 10);
       const owned = st.owned.includes(skin.id);
       const on = st.equipped === skin.id;
       const key = `menu-skin-${cw - 10}x${ch}-${on ? 'active' : 'normal'}`;
       ensureButton(this, key, cw - 10, ch, on ? 'active' : 'normal');
-      const plate = this.add.image(x, y, key).setAlpha(owned ? 1 : 0.5);
+      const plate = this.add.image(x, y, key).setAlpha(owned ? 1 : 0.6);
       this.items.push(plate);
       const sheet = this.textures.exists(skin.sheet) ? skin.sheet : 'smiley';
       const face = this.add.sprite(x, y + cw * 0.22, sheet, 0).setOrigin(0.5, 0.92)
@@ -857,76 +855,67 @@ export default class MenuScene extends Phaser.Scene {
       if (owned) face.play(`${sheet}_idle`);
       else face.setTintFill(0x10141f).setAlpha(0.85);
       this.items.push(face);
-      // Закрытый скин можно купить сразу — тап по силуэту открывает счёт
-      const buy = !owned && can;
+      const rar = RARITY[skin.rarity] ?? RARITY.common;
+      // Закрытый: цена в монетах цветом редкости; тап — окно покупки
       this.items.push(this.add.text(x, y + ch / 2 - 16,
-        owned ? (on ? 'надет' : skin.name) : buy ? `${SKIN_STARS} ⭐` : '???',
-        font(17, 800, on ? '#2a1c06' : owned ? RARITY[skin.rarity]?.color ?? UI.text : buy ? UI.accent : UI.textDim)).setOrigin(0.5));
-      if (owned) {
-        plate.setInteractive({ useHandCursor: true });
-        plate.on('pointerup', () => { haptic('select'); equipSkin(skin.id); this.showSkins(); });
-      } else if (buy) {
-        plate.setInteractive({ useHandCursor: true });
-        plate.on('pointerup', () => { haptic('select'); this._buy(`skin-${skin.id}`); });
-      }
-      this.buttons[`skin-${skin.id}`] = { x, y: y + this.oy, w: cw - 10, h: ch, enabled: owned || buy };
+        owned ? (on ? 'надет' : skin.name) : `${skinPrice(skin.id)} 🪙`,
+        font(17, 800, on ? '#2a1c06' : rar.color)).setOrigin(0.5));
+      plate.setInteractive({ useHandCursor: true });
+      if (owned) plate.on('pointerup', () => { haptic('select'); equipSkin(skin.id); this.showSkins(); });
+      else plate.on('pointerup', () => { haptic('select'); this._skinOffer(skin); });
+      this.buttons[`skin-${skin.id}`] = { x, y: y + this.oy, w: cw - 10, h: ch, enabled: true };
     });
 
-    // --- магазин: коробки за звёзды ---
+    // --- магазин: коробка за монеты ---
     const rows = Math.ceil(SKINS.length / cols);
     const sy = y0 + rows * (ch + 10) - ch / 2 + 26;
     this.items.push(this.add.text(cx, sy, 'Магазин', font(26, 800, UI.accent)).setOrigin(0.5, 0));
     trackStep('shop_open');
-    const bw = Math.min(300, (W - 60) / 2);
-    const shopRow = [['box1', 'Коробка', '25 ⭐', 1], ['box5', '5 коробок', '99 ⭐', 5]];
-    shopRow.forEach(([id, label, price, n], i) => {
-      this._button(`shop-${id}`, cx + (i ? 1 : -1) * (bw / 2 + 8), sy + 96, label, price,
-        () => this._buy(id), { w: bw, h: 88, titleSize: 25, hintSize: 20, enabled: can && left >= n });
-    });
-    this.items.push(this.add.text(cx, sy + 152, !can
-      ? 'покупки за звёзды работают в Telegram'
-      : left <= 0 ? 'все скины уже твои или ждут в коробках'
-        : `в коробке — скин, которого у тебя ещё нет; закрытый скин — тап, ${SKIN_STARS} ⭐`,
-      font(17, 700, UI.textDim)).setOrigin(0.5, 0).setAlign('center').setWordWrapWidth(W - 48));
+    this._button('shop-box', cx, sy + 92, `Коробка-сюрприз · ${BOX_PRICE} 🪙`,
+      full ? 'все скины уже собраны' : coins >= BOX_PRICE ? 'случайный скин по шансам выше' : `не хватает ${BOX_PRICE - coins}`,
+      () => this._buyBox(), { w: Math.min(W - 48, 520), h: 88, titleSize: 24, hintSize: 16, enabled: coins >= BOX_PRICE && !full });
+    this.items.push(this.add.text(cx, sy + 148,
+      'монеты — за бои, задания дня, серию дней и первое прохождение кампании',
+      font(16, 700, UI.textDim)).setOrigin(0.5, 0).setAlign('center').setWordWrapWidth(W - 48));
     this._back();
   }
 
   /**
-   * Покупка за звёзды: счёт выписывает сервер, оплату показывает Telegram.
-   * После «оплачено» ждём, пока сервер запишет платёж (он узнаёт о нём от
-   * бота чуть позже), и кладём покупку в профиль.
+   * Окно покупки закрытого скина: кто это, какой редкости, сколько стоит.
+   * Силуэт остаётся силуэтом — сюрприз у коробки не отнимаем.
    */
-  async _buy(item) {
-    trackStep('buy_click');
-    const toast = (msg, color = '#ff9a9a') => {
-      const t = this.add.text(this.W / 2, 150, msg, font(22, 800, color)).setOrigin(0.5).setDepth(60);
-      this.items.push(t);
-      this.tweens.add({ targets: t, alpha: 0, delay: 1800, duration: 400 });
-    };
-    let link;
-    try { link = await buyShopItem(item); } catch (e) { toast(e.message || 'не вышло'); return; }
-    const status = await openInvoice(link);
-    if (status !== 'paid') {
-      if (status !== 'cancelled') toast('оплата не прошла');
-      return;
-    }
+  _skinOffer(skin) {
+    const W = this.W, H = this.H, cx = W / 2, cy = this.topY(H * 0.45);
+    const price = skinPrice(skin.id);
+    const coins = dailyState().coins;
+    const rar = RARITY[skin.rarity] ?? RARITY.common;
+    const before = this.items.length;
+    const shade = this.add.rectangle(0, this.topY(0), W, H, 0x05070c, 0.8).setOrigin(0, 0).setInteractive();
+    shade.on('pointerup', () => this.showSkins());
+    this.items.push(shade);
+    const sheet = this.textures.exists(skin.sheet) ? skin.sheet : 'smiley';
+    // Силуэт светлее затемнения, с ободком цвета редкости — видно форму, но не лицо
+    this.items.push(this.add.circle(cx, cy - 110, 120, Phaser.Display.Color.HexStringToColor(rar.color).color, 0.12));
+    this.items.push(this.add.sprite(cx, cy - 20, sheet, 0).setOrigin(0.5, 0.92).setScale(2.2).setFlipX(true)
+      .setTintFill(0x3a4766).setAlpha(0.95));
+    this.items.push(this.add.text(cx, cy - 250, skin.name, font(40, 800, UI.text)).setOrigin(0.5));
+    this.items.push(this.add.text(cx, cy - 205, rar.name, font(24, 800, rar.color)).setOrigin(0.5));
+    this.items.push(this.add.text(cx, cy + 30, `у тебя ${coins} 🪙`, font(20, 700, UI.textDim)).setOrigin(0.5));
+    this._button('skin-buy', cx, cy + 110, `Купить · ${price} 🪙`, coins >= price ? '' : `не хватает ${price - coins}`,
+      () => this._buySkin(skin), { w: 320, h: 84, variant: 'primary', titleSize: 26, hintSize: 16, enabled: coins >= price });
+    this._button('skin-cancel', cx, cy + 210, 'Отмена', '', () => this.showSkins(), { w: 220, h: 64, titleSize: 22 });
+    for (const o of this.items.slice(before)) o.setDepth(50);
+  }
+
+  _buySkin(skin) {
+    const res = buySkin(skin.id);
+    if (res !== 'ok') { haptic('warn'); this.showSkins(); return; }
     haptic('win');
-    const before = skinState().boxes;
-    const skin = /^skin-(\w+)$/.exec(item)?.[1];
-    for (let i = 0; i < 8; i++) {
-      const shop = await fetchShop();
-      const got = shop?.owned ? applyServerOwned(shop.owned) : null;
-      if (got && (got.boxes || got.skins.length)) break;
-      await new Promise((r) => setTimeout(r, 1500));
-    }
-    if (this.section !== this.showSkins) return;
-    if (skin && skinState().owned.includes(skin)) equipSkin(skin);
+    sfx.play('pickup');
     this.showSkins();
-    if (skin) {
-      if (skinState().owned.includes(skin)) toast(`Готово! «${SKIN_BY_ID[skin]?.name}» уже на тебе`, '#8ef0a0');
-      else toast('Оплата прошла — скин появится через минуту', '#ffd166');
-    } else if (skinState().boxes > before) toast('Готово! Коробки уже здесь', '#8ef0a0');
-    else toast('Оплата прошла — коробки появятся через минуту', '#ffd166');
+    const t = this.add.text(this.W / 2, 150, `«${skin.name}» твой и уже надет`, font(22, 800, '#8ef0a0')).setOrigin(0.5).setDepth(60);
+    this.items.push(t);
+    this.tweens.add({ targets: t, alpha: 0, delay: 1600, duration: 400 });
   }
 
   /**
@@ -980,7 +969,8 @@ export default class MenuScene extends Phaser.Scene {
       hero.play(`${sheet}_win`);
       this.tweens.add({ targets: hero, scale: 3, duration: 520, ease: 'Back.easeOut' });
       const rar = RARITY[skin.rarity] ?? RARITY.common;
-      add(this.add.text(cx, cy - 200, `Новый скин · ${rar.name}!`, font(26, 800, rar.color)).setOrigin(0.5));
+      add(this.add.text(cx, cy - 200, res.dup ? `Повтор · ${rar.name} · +${res.refund} монет` : `Новый скин · ${rar.name}!`,
+        font(26, 800, rar.color)).setOrigin(0.5));
       const name = add(this.add.text(cx, cy + 120, skin.name, font(48, 800, UI.accent)).setOrigin(0.5).setScale(0.3));
       this.tweens.add({ targets: name, scale: 1, duration: 420, delay: 180, ease: 'Back.easeOut' });
 
@@ -1435,7 +1425,7 @@ export default class MenuScene extends Phaser.Scene {
     if (this.topFrom === 'tab') this._tabs('top');
     else this._back(() => this.showOnline());
 
-    fetchTop(20, kind).then((rows) => {
+    fetchTop(10, kind).then((rows) => {
       if (this.section !== this.showTop || this.topKind !== kind) return;
       this.topRows = rows;
       note.destroy();
@@ -1446,33 +1436,94 @@ export default class MenuScene extends Phaser.Scene {
     });
   }
 
+  /**
+   * Топ-10 лестницей: тройка — на пьедестале в своих скинах (первый в
+   * короне и радуется), дальше ступени вниз — место, моделька, ник, лига
+   * и рейтинг. В портрете пьедестал над лестницей, в ландшафте — рядом.
+   */
   _renderTop(rows, kind = 'rating') {
-    const cx = this.W / 2;
+    const W = this.W, cx = W / 2;
     const me = player();
-    const x0 = cx - 300, top = 200, step = 32;
-    const maxRows = Math.max(3, Math.floor((this.bottomY(70) - top) / step));
+    const top = 196;
+    const bottom = this.bottomY(this.topFrom === 'tab' ? (this.portrait ? 170 : 140) : 110);
     if (!rows.length) {
-      this.items.push(this.add.text(cx, top, kind === 'tourney'
+      this.items.push(this.add.text(cx, top + 20, kind === 'tourney'
         ? 'пока ни одного чемпиона — турниры впереди' : 'пока пусто — сыграй первый бой по сети на рейтинг',
       font(this.fs(14), 700, UI.textDim)).setOrigin(0.5, 0));
       return;
     }
-    rows.slice(0, maxRows).forEach((r, i) => {
-      const y = top + i * step;
+    const score = (r) => (kind === 'tourney' ? `🏆 ${r.tourney_wins}` : `${r.rating}`);
+    const sheetOf = (r) => {
+      const sheet = SKIN_BY_ID[r.skin]?.sheet;
+      return sheet && this.textures.exists(sheet) ? sheet : 'smiley';
+    };
+    const short = (name, n) => (name.length > n ? `${name.slice(0, n - 1)}…` : name);
+    const add = (o) => { this.items.push(o); return o; };
+
+    // Где пьедестал и где лестница
+    const podW = this.portrait ? W : W * 0.46;
+    const podCx = this.portrait ? cx : podW / 2 + 10;
+    const podBottom = this.portrait ? top + Math.min(380, (bottom - top) * 0.47) : bottom - 10;
+    const lx0 = this.portrait ? 24 : podW + 20;
+    const lx1 = W - 24;
+    const ly0 = this.portrait ? podBottom + 18 : top;
+
+    // --- пьедестал ---
+    const bw = Math.min(200, (podW - 60) / 3);
+    const heights = [Math.min(170, (podBottom - top) * 0.45), 0, 0];
+    heights[1] = heights[0] * 0.82; heights[2] = heights[0] * 0.68;
+    const spots = [[podCx, heights[0]], [podCx - bw - 10, heights[1]], [podCx + bw + 10, heights[2]]];
+    const medal = [0xffc93c, 0xc9d4e6, 0xd98c4a];
+    const g = add(this.add.graphics());
+    rows.slice(0, 3).forEach((r, i) => {
+      const [x, h] = spots[i];
       const mine = r.id === me.id;
-      const color = mine ? UI.accent : UI.text;
-      this.items.push(this.add.text(x0, y, `${i + 1}.`, font(this.fs(15), 800, UI.textDim)).setOrigin(0, 0));
-      this.items.push(this.add.text(x0 + 40, y, r.name, font(this.fs(15), 800, color)).setOrigin(0, 0));
-      this.items.push(this.add.text(x0 + 330, y, leagueLabel(r.rating),
-        font(this.fs(13), 700, leagueOf(r.rating).text)).setOrigin(0, 0));
-      this.items.push(this.add.text(x0 + 600, y, kind === 'tourney' ? `🏆 ${r.tourney_wins}` : `${r.wins}–${r.losses}`,
-        font(this.fs(13), 700, kind === 'tourney' ? UI.accent : UI.textDim)).setOrigin(1, 0));
+      const y = podBottom - h;
+      g.fillStyle(0x1a2338, 1).fillRoundedRect(x - bw / 2, y, bw, h, 14);
+      g.fillStyle(medal[i], 1).fillRoundedRect(x - bw / 2, y, bw, 10, { tl: 14, tr: 14, bl: 0, br: 0 });
+      g.lineStyle(mine ? 4 : 2, mine ? 0xffd166 : 0xffffff, mine ? 1 : 0.12).strokeRoundedRect(x - bw / 2, y, bw, h, 14);
+      add(this.add.text(x, y + 16, `${i + 1}`, font(this.fs(i ? 26 : 32), 800, `#${medal[i].toString(16).padStart(6, '0')}`)).setOrigin(0.5, 0));
+      add(this.add.text(x, y + h - 52, short(r.name, 11), font(this.fs(13), 800, mine ? UI.accent : UI.text)).setOrigin(0.5, 0));
+      add(this.add.text(x, y + h - 28, score(r), font(this.fs(12), 700, kind === 'tourney' ? UI.accent : leagueOf(r.rating).text)).setOrigin(0.5, 0));
+      // Моделька на ступени: первый радуется, остальные стоят
+      const sheet = sheetOf(r);
+      const k = (bw * (i ? 0.68 : 0.8)) / 100;
+      const hero = add(this.add.sprite(x, y + 4, sheet, 0).setOrigin(0.5, 0.92).setScale(k).setFlipX(i !== 2));
+      hero.play(i === 0 ? `${sheet}_win` : `${sheet}_idle`);
+      if (i === 0) {
+        const crown = add(this.add.text(x, y - 100 * k * 0.86, '👑', { fontSize: `${Math.round(40 * k)}px` }).setOrigin(0.5, 1));
+        this.tweens.add({ targets: crown, y: crown.y - 8, yoyo: true, repeat: -1, duration: 900, ease: 'Sine.easeInOut' });
+      }
     });
+
+    // --- лестница 4–10: каждая ступень чуть ниже и правее ---
+    const rest = rows.slice(3, 10);
+    const rowH = Math.min(86, (bottom - ly0) / Math.max(1, rest.length));
+    const shift = Math.min(14, (lx1 - lx0) * 0.02);
+    rest.forEach((r, i) => {
+      const place = i + 4;
+      const mine = r.id === me.id;
+      const y = ly0 + i * rowH;
+      const x0 = lx0 + i * shift;
+      const w = lx1 - x0;
+      const h = rowH - 8;
+      g.fillStyle(mine ? 0x2a2a1a : 0x161d2e, 1).fillRoundedRect(x0, y, w, h, 12);
+      g.lineStyle(mine ? 3 : 2, mine ? 0xffd166 : 0xffffff, mine ? 1 : 0.08).strokeRoundedRect(x0, y, w, h, 12);
+      add(this.add.text(x0 + 30, y + h / 2, `${place}`, font(this.fs(16), 800, UI.textDim)).setOrigin(0.5));
+      const sheet = sheetOf(r);
+      add(this.add.sprite(x0 + 82, y + h - 2, sheet, 0).setOrigin(0.5, 0.92).setScale((h * 0.95) / 100).setFlipX(true))
+        .play(`${sheet}_idle`);
+      add(this.add.text(x0 + 128, y + h / 2 - 2, short(r.name, 16), font(this.fs(14), 800, mine ? UI.accent : UI.text)).setOrigin(0, 1));
+      add(this.add.text(x0 + 128, y + h / 2 + 2, leagueLabel(r.rating), font(this.fs(11), 700, leagueOf(r.rating).text)).setOrigin(0, 0));
+      add(this.add.text(lx1 - 18, y + h / 2, score(r), font(this.fs(15), 800, kind === 'tourney' ? UI.accent : UI.text)).setOrigin(1, 0.5));
+    });
+
     const rank = myRank(rows);
     const foot = rank ? `ты на ${rank} месте` : !loggedIn() ? 'открой игру в Telegram, чтобы попасть в таблицу'
-      : kind === 'tourney' ? 'выиграй турнир — и ты здесь' : 'тебя пока нет в таблице — доиграй бой по сети';
-    this.items.push(this.add.text(cx, this.bottomY(74), foot, font(this.fs(12), 700, UI.textDim)).setOrigin(0.5, 1));
+      : kind === 'tourney' ? 'выиграй турнир — и ты здесь' : 'тебя пока нет в десятке — побеждай в боях по сети';
+    add(this.add.text(cx, bottom + 8, foot, font(this.fs(12), 700, UI.textDim)).setOrigin(0.5, 0));
   }
+
 
   /** Личный кабинет. */
   openAccount() {
