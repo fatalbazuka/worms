@@ -1,4 +1,5 @@
 import { MISSION_BY_ID } from '../campaign/missions.js';
+import { isTowerRoom } from '../net/rooms.js';
 
 /**
  * Описание партии: что именно строить сцене.
@@ -87,7 +88,9 @@ export function campaignMatch(missionId) {
 }
 
 /** Сетевая партия: обе стороны — люди, состав как в обычной быстрой игре. */
-export function onlineMatch() {
+export function onlineMatch(room = null) {
+  // Комната башни — та же сетевая партия, но с её картой и правилами
+  if (isTowerRoom(room)) return { ...towerMatch(null), mode: 'online' };
   return { ...HOTSEAT, mode: 'online' };
 }
 

@@ -66,8 +66,9 @@ export default class BootScene extends Phaser.Scene {
     }
 
     // Ссылка-приглашение ведёт прямо в партию, минуя меню: открыл — играешь
-    const online = Boolean(startRoom());
-    if (online) this.registry.set('match', onlineMatch());
+    const room = startRoom();
+    const online = Boolean(room);
+    if (online) this.registry.set('match', onlineMatch(room));
     this.scene.start(online ? 'Game' : 'Menu');
   }
 }

@@ -288,8 +288,7 @@ for (const { id, sizes: expected } of CAMPAIGN) {
 }
 
 // --- быстрая игра против бота ---
-await menuTap('back');
-await menuTap('modes');
+await menuTap('back');     // из кампании — на экран режимов
 await menuTap('quick');
 await menuTap('sniper');
 await gameReady();
