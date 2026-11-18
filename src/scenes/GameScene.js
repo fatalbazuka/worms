@@ -1414,8 +1414,10 @@ export default class GameScene extends Phaser.Scene {
     const x = CFG.VIEW_W / 2 + dx, y = CFG.VIEW_H / 2 + 118;
     // Центры кнопок наружу — тестам, чтобы не считать раскладку у себя
     if (key) (this.overButtons ??= {})[key] = { x, y };
-    ensureButton(this, `ui-over-${w}x${h}`, w, h, dx < 0 ? 'primary' : 'normal');
-    const img = this.rig.ui(this.add.image(x, y, `ui-over-${w}x${h}`)
+    // Главная кнопка — красная, вторая — спокойная: у каждой своя текстура
+    const variant = dx < 0 ? 'primary' : 'normal';
+    ensureButton(this, `ui-over-${w}x${h}-${variant}`, w, h, variant);
+    const img = this.rig.ui(this.add.image(x, y, `ui-over-${w}x${h}-${variant}`)
       .setScrollFactor(0).setDepth(DEPTH.HUD + 12));
     img.setInteractive({ useHandCursor: true });
     img.on('pointerup', onTap);
