@@ -13,6 +13,7 @@ COPY index.html env.js manifest.webmanifest ./
 COPY src ./src
 COPY vendor ./vendor
 COPY assets ./assets
+COPY admin ./admin
 # Исходные рипы спрайтов игре не нужны (их и так режет .dockerignore)
 RUN rm -rf ./assets/raw \
  && chmod +x /docker-entrypoint.d/40-worms-env.sh \

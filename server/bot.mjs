@@ -28,7 +28,7 @@ export function webhookSecret(token, explicit = '') {
   return createHash('sha256').update(`worms-webhook:${token}`).digest('hex').slice(0, 48);
 }
 
-export function createBot({ db, api, players, tournaments, analytics = null, adminIds = new Set(), publicUrl = '',
+export function createBot({ db, api, players, tournaments, analytics = null, admin: adminPanel = null, adminIds = new Set(), publicUrl = '',
   tz = 'Europe/Moscow', now = () => Date.now(), log = console }) {
   const q = {
     payAdd: db.prepare(`insert or ignore into payment (charge_id, player_id, tg_id, amount, purpose, ref, created_at)
@@ -249,7 +249,13 @@ export function createBot({ db, api, players, tournaments, analytics = null, adm
     if (!admin) return send(chat, 'Не знаю такой команды. /help — что я умею.', playButton());
 
     switch (cmd) {
-      case '/admin': return send(chat, ADMIN_HELP);
+      case '/admin': {
+        // Одноразовая ссылка в админку на 10 минут; без адреса сайта — только справка
+        if (!adminPanel || !publicUrl) return send(chat, ADMIN_HELP);
+        const link = `${publicUrl.replace(/\/$/, '')}/admin/?key=${adminPanel.newKey(me.id)}`;
+        return send(chat, `🔑 Админка — ссылка одноразовая, живёт 10 минут:\n${link}\n\n${ADMIN_HELP}`,
+          { inline_keyboard: [[{ text: '🔑 Открыть админку', url: link }]] });
+      }
       case '/newtour': {
         const size = Number(args[0]);
         let startsAt = null;

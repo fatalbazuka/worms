@@ -172,5 +172,42 @@ export function createAnalytics({ db, now = () => Date.now(), tz = 'Europe/Mosco
   function markReminded(playerId) { q.reminded.run(dayOf(), playerId); }
   function setRemind(playerId, on) { q.mute.run(on ? 1 : 0, playerId); }
 
-  return { record, report, remindDue, markReminded, setRemind, dayOf };
+  /**
+   * То же, что report, но данными — для графиков админки: по дням за days
+   * дней (игроки, новички, бои по режимам), возврат через 1/3/7 дней и
+   * воронка новичков за неделю.
+   */
+  function stats(days = 14) {
+    const today = dayOf();
+    const series = [];
+    for (let i = days - 1; i >= 0; i--) {
+      const d = shiftDay(today, -i);
+      const rows = q.battles.all(d);
+      series.push({
+        day: d,
+        active: q.active.get(d).n,
+        fresh: q.newPlayers.all(dayStart(d), dayStart(shiftDay(d, 1))).length,
+        battles: rows.reduce((a, r) => a + r.n, 0),
+        modes: Object.fromEntries(rows.map((r) => [r.mode ?? '?', r.n])),
+      });
+    }
+    const backOn = (n) => {
+      const d = shiftDay(today, -n);
+      const fresh = q.newPlayers.all(dayStart(d), dayStart(shiftDay(d, 1)));
+      return { all: fresh.length, back: fresh.filter((p) => q.seenOn.get(p.id, today)).length };
+    };
+    const from = dayStart(shiftDay(today, -6)), to = dayStart(shiftDay(today, 1));
+    return {
+      today,
+      series,
+      week: q.activeRange.get(shiftDay(today, -6), today).n,
+      retention: { d1: backOn(1), d3: backOn(3), d7: backOn(7) },
+      funnel: {
+        fresh: q.newPlayers.all(from, to).length,
+        steps: Object.entries(STEPS).map(([id, label]) => ({ id, label, n: q.stepsOf.get(id, from, to).n })),
+      },
+    };
+  }
+
+  return { record, report, stats, remindDue, markReminded, setRemind, dayOf };
 }

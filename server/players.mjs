@@ -18,13 +18,18 @@ export function createPlayers({ db, now = () => Date.now(), adminIds = new Set()
     insert: db.prepare(`insert into player (id, name, name_key, pass_hash, tg_id, rating, photo, created_at, seen_at)
                         values (?, ?, null, null, ?, ?, ?, ?, ?)`),
     update: db.prepare('update player set name = ?, photo = coalesce(?, photo), seen_at = ? where id = ?'),
-    rank: db.prepare('select count(*) + 1 as rank from player where wins + losses > 0 and rating > ?'),
+    rank: db.prepare('select count(*) + 1 as rank from player where wins + losses > 0 and banned_at is null and rating > ?'),
     // skin — надетый скин из прогресса на сервере (save_kv): топ показывает
     // игроков в их модельках. Битая копия — null, а не ошибка всего топа
     top: db.prepare(`select id, name, photo, rating, wins, losses, tourney_wins, ${SKIN_SQL} as skin from player
-                     where wins + losses > 0 order by rating desc, wins desc, created_at asc limit ?`),
+                     where wins + losses > 0 and banned_at is null order by rating desc, wins desc, created_at asc limit ?`),
     topTourney: db.prepare(`select id, name, photo, rating, wins, losses, tourney_wins, ${SKIN_SQL} as skin from player
-                            where tourney_wins > 0 order by tourney_wins desc, rating desc limit ?`),
+                            where tourney_wins > 0 and banned_at is null order by tourney_wins desc, rating desc limit ?`),
+    // Админка: поиск по нику, Telegram ID или id; без запроса — последние зашедшие
+    search: db.prepare(`select id, name, tg_id, rating, wins, losses, tourney_wins, created_at, seen_at, banned_at
+                        from player where (? = '' or name like ? or cast(tg_id as text) = ? or id = ?)
+                        order by seen_at desc limit ?`),
+    ban: db.prepare('update player set banned_at = ? where id = ?'),
     duels: db.prepare(`select * from match where (p1 = ? or p2 = ?) and status in ('confirmed', 'disputed')
                        order by settled_at desc limit ?`),
   };
@@ -88,6 +93,11 @@ export function createPlayers({ db, now = () => Date.now(), adminIds = new Set()
     byId: (id) => q.byId.get(id),
     byTg: (tgId) => q.byTg.get(Number(tgId)),
     upsertTg, markApp, byLogin, setLogin, view, isAdmin, duelHistory,
+    search: (text, limit = 50) => {
+      const t = String(text ?? '').trim().slice(0, 60);
+      return q.search.all(t, `%${t}%`, t, t, Math.max(1, Math.min(200, limit))).map((r) => ({ ...r }));
+    },
+    setBan: (id, on) => q.ban.run(on ? now() : null, id),
     top: (n) => q.top.all(n).map((r) => ({ ...r })),
     topTourney: (n) => q.topTourney.all(n).map((r) => ({ ...r })),
   };

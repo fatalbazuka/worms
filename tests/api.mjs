@@ -404,6 +404,83 @@ check('«твой ход» бот не пишет', !calls('sendMessage').some((
     top.status === 200 && ra?.skin === 'ninja' && rb?.skin === 'classic', JSON.stringify({ ra: ra?.skin, rb: rb?.skin }));
 }
 
+// --- админка: вход по ссылке из бота, сводка, игрок, подарок, бан, рассылка, копия базы ---
+{
+  const victim = await login(91, 'Игрок91');
+  db.prepare('update player set wins = 3, rating = 3500 where id = ?').run(victim.player.id);
+  // Не админу /admin ссылки не даёт, админу — даёт одноразовую
+  await hook({ message: { from: { id: 91 }, chat: { id: 91, type: 'private' }, text: '/admin' } });
+  const noLink = calls('sendMessage').at(-1)?.params.text ?? '';
+  await hook({ message: { from: { id: ADMIN }, chat: { id: ADMIN, type: 'private' }, text: '/admin' } });
+  const linkMsg = calls('sendMessage').at(-1)?.params.text ?? '';
+  const key = /admin\/\?key=([\w-]+)/.exec(linkMsg)?.[1];
+  const enter = await call('POST', '/api/admin/enter', { key });
+  const reuse = await call('POST', '/api/admin/enter', { key });
+  const T = enter.data.token;
+  const notAdmin = await call('GET', '/api/admin/overview', null, victim.token);
+  check('админка: ссылка из /admin только админу, одноразовая; не админа не пускает',
+    !/key=/.test(noLink) && Boolean(key) && enter.status === 200 && reuse.status === 401 && notAdmin.status === 403,
+    `${enter.status} ${reuse.status} ${notAdmin.status}`);
+  const ov = await call('GET', '/api/admin/overview', null, T);
+  check('админка: сводка — 14 дней, возврат, воронка, всего игроков',
+    ov.status === 200 && ov.data.series.length === 14 && ov.data.retention.d1 && ov.data.funnel.steps.length > 0 && ov.data.totals.players > 0,
+    JSON.stringify(ov.data?.totals));
+  const found = await call('GET', '/api/admin/players?q=91', null, T);
+  const card = await call('GET', `/api/admin/player?id=${victim.player.id}`, null, T);
+  check('админка: поиск по Telegram ID и карточка игрока без хэша пароля',
+    found.data.players.some((p) => p.id === victim.player.id) && card.data.player.id === victim.player.id
+      && !('pass_hash' in card.data.player) && Array.isArray(card.data.duels),
+    JSON.stringify(found.data.players.map((p) => p.id)));
+  // Подарок: монеты, коробка, скин — придут в owned, игроку — сообщение в бот
+  const before = (await call('GET', '/api/shop', null, victim.token)).data.owned;
+  const gift = await call('POST', '/api/admin/gift', { id: victim.player.id, coins: 500, boxes: 2, skin: 'king', notify: true }, T);
+  const after = (await call('GET', '/api/shop', null, victim.token)).data.owned;
+  const giftMsg = calls('sendMessage').at(-1)?.params;
+  const bad = await call('POST', '/api/admin/gift', { id: victim.player.id, skin: 'нет-такого' }, T);
+  check('админка: подарок монет, коробок и скина ложится в owned, игроку пишет бот; пустой — отказ',
+    gift.status === 200 && after.coins === before.coins + 500 && after.boxes === before.boxes + 2 && after.skins.includes('king')
+      && giftMsg?.chat_id === 91 && /подарок/.test(giftMsg?.text ?? '') && bad.status === 400,
+    JSON.stringify({ before, after }));
+  // Бан: игра не пускает, из топа пропадает; админа забанить нельзя; разбан возвращает
+  const topBefore = (await call('GET', '/api/top?limit=50')).data.players.some((p) => p.id === victim.player.id);
+  await call('POST', '/api/admin/ban', { id: victim.player.id, ban: true }, T);
+  const blocked = await call('GET', '/api/me', null, victim.token);
+  const topBanned = (await call('GET', '/api/top?limit=50')).data.players.some((p) => p.id === victim.player.id);
+  const relogin = await call('POST', '/api/telegram', { initData: await signed({ id: 91, first_name: 'Игрок91' }) });
+  const selfBan = await call('POST', '/api/admin/ban', { id: `tg${ADMIN}`, ban: true }, T);
+  await call('POST', '/api/admin/ban', { id: victim.player.id, ban: false }, T);
+  const back = await call('GET', '/api/me', null, victim.token);
+  check('админка: бан — вход закрыт и в топе нет; админа не банят; разбан возвращает',
+    topBefore && blocked.status === 403 && !topBanned && relogin.status === 403 && selfBan.status === 409 && back.status === 200,
+    `${blocked.status} ${relogin.status} ${selfBan.status} ${back.status}`);
+  // Турнир из админки
+  const tour = await call('POST', '/api/admin/tours', { name: 'Админский', size: 8 }, T);
+  const tours = await call('GET', '/api/admin/tours', null, T);
+  const cancel = await call('POST', '/api/admin/tours/cancel', { id: tour.data.tournament?.id }, T);
+  check('админка: турнир создаётся и отменяется',
+    tour.status === 200 && tours.data.items.some((t) => t.name === 'Админский') && cancel.status === 200, `${tour.status} ${cancel.status}`);
+  // Рассылка: сначала превью, потом отправка всем с Telegram, кроме отписавшихся
+  const sentBefore = calls('sendMessage').length;
+  const prev = await call('POST', '/api/admin/broadcast', { text: 'Турнир в 20:00!' }, T);
+  const noSend = calls('sendMessage').length === sentBefore;
+  const go = await call('POST', '/api/admin/broadcast', { text: 'Турнир в 20:00!', confirm: true }, T);
+  let status = null;
+  for (let i = 0; i < 100 && !status?.items?.[0]?.done_at; i++) {
+    await new Promise((r) => setTimeout(r, 50));
+    status = (await call('GET', '/api/admin/broadcast', null, T)).data;
+  }
+  const delivered = calls('sendMessage').slice(sentBefore).filter((c) => c.params.text === 'Турнир в 20:00!').length;
+  check('админка: рассылка — превью ничего не шлёт, отправка доходит до всех',
+    prev.data.preview && prev.data.audience > 0 && noSend && go.status === 200 && delivered === go.data.total
+      && status.items[0].sent === go.data.total, `превью ${prev.data.audience}, ушло ${delivered} из ${go.data.total}`);
+  // Копия базы — файл SQLite
+  const res = await fetch(`${base}/api/admin/backup`, { headers: { authorization: `Bearer ${T}` } });
+  const buf = Buffer.from(await res.arrayBuffer());
+  const noAuth = await fetch(`${base}/api/admin/backup`);
+  check('админка: копия базы скачивается файлом SQLite, без входа — нет',
+    res.status === 200 && buf.subarray(0, 15).toString() === 'SQLite format 3' && noAuth.status === 401, `${res.status} ${buf.length} байт`);
+}
+
 server.close();
 fakeTg.close();
 db.close();
