@@ -1541,7 +1541,10 @@ export default class GameScene extends Phaser.Scene {
       [spots[i], spots[j]] = [spots[j], spots[i]];
     }
     const taken = this.worms.map((w) => ({ x: w.x, y: w.y, r: 150 }));
-    const free = (p, r) => taken.every((q) => Math.hypot(q.x - p.x, q.y - p.y) >= Math.max(r, q.r));
+    // k — насколько строго держать дистанцию; на тесных башнях (вулкан)
+    // её постепенно ослабляем, чтобы все монстры нашли место
+    let k = 1;
+    const free = (p, r) => taken.every((q) => Math.hypot(q.x - p.x, q.y - p.y) >= Math.max(r, q.r) * k);
     if (this.match.boss) {
       // Великан — на самом верхнем месте, где хватает простора над головой
       const roomy = spots.filter((p) => !this.terrain.solidInRect(p.x - 46, p.y - 104, p.x + 46, p.y - 6)
@@ -1553,12 +1556,14 @@ export default class GameScene extends Phaser.Scene {
     }
     for (const [kind, n] of Object.entries(want)) {
       let placed = 0;
-      for (const p of spots) {
-        if (placed >= n) break;
-        if (!free(p, 90)) continue;
-        this.addMonster(kind, p.x, p.y);
-        taken.push({ x: p.x, y: p.y, r: 90 });
-        placed++;
+      for (k = 1; k >= 0.4 && placed < n; k -= 0.2) {
+        for (const p of spots) {
+          if (placed >= n) break;
+          if (!free(p, 90)) continue;
+          this.addMonster(kind, p.x, p.y);
+          taken.push({ x: p.x, y: p.y, r: 90 });
+          placed++;
+        }
       }
     }
   }

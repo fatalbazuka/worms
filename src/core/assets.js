@@ -52,7 +52,9 @@ for (const id of HANDS) IMAGES[`hand_${id}`] = `assets/items/hand_${id}.png`;
 for (const id of SHOTS) IMAGES[`shot_${id}`] = `assets/items/shot_${id}.png`;
 // Монстры «Подъёма» (tools/build_tower_sheet.py): слизень, кактус, тролль-Великан в трёх позах
 for (const id of ['mon_slime', 'mon_cactus', 'mon_boss', 'mon_boss_throw', 'mon_boss_down',
-  'mon_yeti', 'mon_yeti_throw', 'mon_yeti_down', 'mon_golem', 'mon_golem_throw', 'mon_golem_down']) {
+  'mon_yeti', 'mon_yeti_throw', 'mon_yeti_down', 'mon_golem', 'mon_golem_throw', 'mon_golem_down',
+  // эффекты аффиксов (лист affixes_sheet.png)
+  'fx_vent1', 'fx_vent2', 'fx_geyser', 'fx_icicles', 'fx_shatter', 'fx_bolt', 'fx_impact', 'fx_vortex']) {
   IMAGES[id] = `assets/items/${id}.png`;
 }
 
