@@ -109,12 +109,13 @@ check('один в лобби никого не находит', findMatch(p('a'
 
 // --- скины и коробки: правила без браузера ---
 {
-  const { SKINS, emptyState, normalize, rewardMissions, claimBoxes, openBox, equip } = await import('../src/core/skins.js');
+  const { BOX_SKINS, emptyState, normalize, rewardMissions, claimBoxes, openBox, equip } = await import('../src/core/skins.js');
   const missions = Array.from({ length: 12 }, (_, i) => `m${i}`);
   const rewards = rewardMissions(missions);
-  check('коробок за кампанию ровно столько, сколько скинов можно получить',
-    rewards.length === SKINS.length - 1 && rewards[0] === 'm0' && rewards.at(-1) === 'm11',
-    rewards.join(','));
+  // Кампания даёт коробки за первую миссию, через одну и за последнюю;
+  // остальные скины — из купленных и подаренных коробок
+  check('коробки за кампанию: первая миссия, через одну и последняя',
+    rewards.join(',') === 'm0,m2,m4,m6,m8,m10,m11', rewards.join(','));
 
   let st = emptyState();
   let r = claimBoxes(st, ['m0', 'm1'], missions);
@@ -122,16 +123,17 @@ check('один в лобби никого не находит', findMatch(p('a'
   const again = claimBoxes(r.state, ['m0', 'm1'], missions);
   check('дважды за одну миссию коробку не дают', again.gained === 0 && again.state.boxes === 1);
 
-  // Вся кампания пройдена: открываем всё подряд — повторов нет, собраны все
-  st = claimBoxes(emptyState(), missions, missions).state;
+  // Коробок хватает на всё: открываем подряд — повторов нет, собраны все,
+  // кроме скинов только за звёзды (радуга)
+  st = { ...emptyState(), boxes: BOX_SKINS.length - 1 };
   const got = [];
-  for (let i = 0; i < 20; i++) {
+  for (let i = 0; i < 40; i++) {
     const o = openBox(st, () => 0.999);
     st = o.state;
     if (o.skin) got.push(o.skin);
   }
   check('коробки не дают повторов и собирают все скины',
-    new Set(got).size === got.length && st.owned.length === SKINS.length && st.boxes === 0,
+    new Set(got).size === got.length && st.owned.length === BOX_SKINS.length && st.boxes === 0 && !got.includes('rainbow'),
     `${got.join(',')} · коробок осталось ${st.boxes}`);
   check('пустую коробку открыть нельзя', openBox(emptyState()).skin === null);
   const fullSt = { ...st, boxes: 2 };

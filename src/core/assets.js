@@ -28,6 +28,8 @@ export const IMAGES = {
   icon_mole: 'assets/icon_mole.png',
   icon_banana: 'assets/icon_banana.png',
   icon_holy: 'assets/icon_holy.png',
+  // Нарисованные фоны мест (tools/build_location_art.py): bg_<вид башни>
+  ...Object.fromEntries(['classic', 'ice', 'lava', 'space', 'wind'].map((id) => [`bg_${id}`, `assets/bg/${id}.jpg`])),
   icon_dynamite: 'assets/icon_dynamite.png',
   icon_mine: 'assets/icon_mine.png',
   icon_airstrike: 'assets/icon_airstrike.png',

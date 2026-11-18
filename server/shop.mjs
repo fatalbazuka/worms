@@ -19,6 +19,8 @@
 export const SKIN_NAMES = {
   ice: 'Ледышка', alien: 'Пришелец', toxic: 'Токсик', pumpkin: 'Тыква',
   rage: 'Злюка', devil: 'Чертёнок', clown: 'Клоун',
+  cool: 'Крутой', nerd: 'Ботаник', sleepy: 'Соня', ninja: 'Ниндзя', pirate: 'Пират',
+  robot: 'Робот', astro: 'Космонавт', king: 'Король', rainbow: 'Радуга',
 };
 export const SKIN_IDS = Object.keys(SKIN_NAMES);
 

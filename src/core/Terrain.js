@@ -1,5 +1,6 @@
 import { CFG } from '../config.js';
 import { makeNoise1D } from './rng.js';
+import { planDetails, paintDetails } from './terrainDetails.js';
 
 /** Ширина одного чанка видимой текстуры (см. this.chunks). */
 const CHUNK_W = 640;
@@ -185,6 +186,8 @@ export class Terrain {
     // небольшим: визуальная кромка не должна заметно расходиться с той,
     // по которой считается физика, иначе игрок мажет.
     const over = grass ? Math.round(grass.height * (b.grassOver ?? 0.2)) : 0;
+    // Детали места (камешки, трещины, кристаллы) — раскладка один раз
+    if (this.look && this._details === undefined) this._details = planDetails(this, this.look, this.decorSeed ?? 0);
 
     for (let i = 0; i < this.chunks.length; i++) {
       const chunk = this.chunks[i];
@@ -212,6 +215,11 @@ export class Terrain {
       ctx.globalCompositeOperation = 'destination-in';
       ctx.drawImage(this.maskCanvas, 0, 0);
       ctx.globalCompositeOperation = 'source-over';
+
+      // Объём и контур — в стиле персонажей: снизу у плит тень, по краю
+      // земли тёмная обводка. Только картинка: физика по маске не меняется
+      paintDetails(ctx, this._details, x0, x1);
+      this._shade(chunk);
 
       // --- верхний слой (трава / песок / снег) ---
       // Рисуется ПОСЛЕ обрезки, вертикальными срезами по одному пикселю:
@@ -298,6 +306,58 @@ export class Terrain {
     }
   }
 
+  /**
+   * Полоса маски у края: пиксели земли, у которых в (dx, dy) уже пусто
+   * (или, если outside, — пустота рядом с землёй). Холст размером с чанк.
+   */
+  _edgeBand(chunk, offsets, outside = false) {
+    const c = this._tmp ??= document.createElement('canvas');
+    c.width = chunk.w; c.height = this.height;
+    const t = c.getContext('2d');
+    t.setTransform(1, 0, 0, 1, -chunk.x0, 0);
+    if (outside) {
+      // Расширенная маска минус сама маска — кольцо снаружи
+      for (const [dx, dy] of offsets) t.drawImage(this.maskCanvas, dx, dy);
+      t.globalCompositeOperation = 'destination-out';
+      t.drawImage(this.maskCanvas, 0, 0);
+    } else {
+      t.drawImage(this.maskCanvas, 0, 0);
+      t.globalCompositeOperation = 'destination-out';
+      for (const [dx, dy] of offsets) t.drawImage(this.maskCanvas, dx, dy);
+    }
+    t.globalCompositeOperation = 'source-over';
+    t.setTransform(1, 0, 0, 1, 0, 0);
+    return c;
+  }
+
+  /** Залить полосу цветом и положить на чанк. */
+  _paintBand(chunk, band, color, alpha) {
+    const t = band.getContext('2d');
+    t.globalCompositeOperation = 'source-in';
+    t.fillStyle = color;
+    t.fillRect(0, 0, band.width, band.height);
+    t.globalCompositeOperation = 'source-over';
+    const ctx = chunk.ctx;
+    ctx.save();
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.globalAlpha = alpha;
+    ctx.drawImage(band, 0, 0);
+    ctx.restore();
+  }
+
+  _shade(chunk) {
+    const outline = this.biome.outline ?? '#1a1410';
+    // Тень у нижнего края: мягкая широкая и плотная узкая
+    this._paintBand(chunk, this._edgeBand(chunk, [[0, -16]]), '#000', 0.22);
+    this._paintBand(chunk, this._edgeBand(chunk, [[0, -6]]), '#000', 0.25);
+    // Светлый край слева и справа — лёгкий блик на гранях
+    this._paintBand(chunk, this._edgeBand(chunk, [[5, 0]]), '#fff', 0.08);
+    // Обводка снаружи, 3 px
+    const ring = [];
+    for (let a = 0; a < 16; a++) ring.push([Math.round(Math.cos((a / 16) * 6.283) * 3), Math.round(Math.sin((a / 16) * 6.283) * 3)]);
+    this._paintBand(chunk, this._edgeBand(chunk, ring, true), outline, 0.9);
+  }
+
   // ------------------------------------------------------------- разрушение
 
   /**
@@ -312,12 +372,21 @@ export class Terrain {
       const ctx = chunk.ctx;
       ctx.setTransform(1, 0, 0, 1, -chunk.x0, 0);
 
-      // 1. Опалённая кромка: source-atop красит только по уже существующей земле
+      // 1. Опалённая кромка: source-atop красит только по уже существующей
+      // земле; поверх — тёмная обводка по краю воронки, как у всей земли
       ctx.globalCompositeOperation = 'source-atop';
+      ctx.globalAlpha = 0.6;
       ctx.fillStyle = this.biome.scorch;
       ctx.beginPath();
       ctx.arc(cx, cy, scorchR, 0, Math.PI * 2);
       ctx.fill();
+      ctx.globalAlpha = 0.9;
+      ctx.strokeStyle = this.biome.outline ?? '#1a1410';
+      ctx.lineWidth = 4;
+      ctx.beginPath();
+      ctx.arc(cx, cy, radius + 1.5, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.globalAlpha = 1;
 
       // 2. Сама воронка
       ctx.globalCompositeOperation = 'destination-out';

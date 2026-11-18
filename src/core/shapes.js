@@ -406,7 +406,8 @@ export const SHAPE_BY_ID = Object.fromEntries(SHAPES.map((s) => [s.id, s]));
  *   liquid         — 'lava': жидкость внизу — лава.
  */
 export const TOWER_VARIANTS = [
-  { id: 'classic', name: 'Башня', weight: 2, biome: null, rules: {}, intro: null },
+  // biomes — из чего выбирать землю, если своей нет: у подножия только зелень
+  { id: 'classic', name: 'Башня', weight: 2, biome: null, biomes: ['jungle', 'forest'], rules: {}, intro: null },
   {
     id: 'ice', name: 'Ледяная башня', weight: 1, biome: 'snow', layout: 'shelves',
     rules: { groundFriction: 0.9, landKeep: 0.85 },

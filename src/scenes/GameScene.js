@@ -157,10 +157,10 @@ export default class GameScene extends Phaser.Scene {
     this._spawnMonsters();
     // Эмодзи на башне: фон и ломкие предметы на этажах — от зерна, у всех одни
     if (this.terrain.tops) {
-      this.props = new Props(this, this.seed, this.variant?.id ?? 'classic')
+      this.props = new Props(this, this.seed, this.variant?.id ?? 'classic', { painted: !!this.bgImage })
         .build([...this.worms, ...this.monsters].map((w) => ({ x: w.x, y: w.y })));
       // Атмосфера вида башни: дальний фон, частицы, события между ходами
-      this.ambience = new Ambience(this, this.variant?.id ?? 'classic', this.seed);
+      this.ambience = new Ambience(this, this.variant?.id ?? 'classic', this.seed, { painted: !!this.bgImage });
       // Аффиксы: свои у уровня, иначе — по виду башни. Только без сети
       const ids = this.match.affixes ?? DEFAULT_AFFIXES[this.variant?.id] ?? [];
       this.affixes = new Affixes(this, ids, this.seed);
@@ -206,6 +206,7 @@ export default class GameScene extends Phaser.Scene {
     this._applyBaseZoom();
     const [cw, ch] = canvasSize();
     this.skyImage?.setDisplaySize(cw, Math.max(this.skyHeight ?? 0, ch));
+    this._fitBg();
     this._buildBarBacking();
 
     // HUD проще собрать заново, чем двигать полсотни объектов поштучно
@@ -615,9 +616,13 @@ export default class GameScene extends Phaser.Scene {
   _chooseBiome() {
     const forced = this.registry.get('forceBiome')
       ?? new URLSearchParams(location.search).get('biome');
-    return BIOMES.find((b) => b.id === forced)
-      ?? BIOMES.find((b) => b.id === this.variant?.biome)
-      ?? pickBiome(this.rng);
+    const own = BIOMES.find((b) => b.id === forced) ?? BIOMES.find((b) => b.id === this.variant?.biome);
+    if (own) return own;
+    // Случайная — из списка вида башни; ГПСЧ расходуется как раньше
+    const picked = pickBiome(this.rng);
+    const list = this.variant?.biomes;
+    if (!list?.length) return picked;
+    return BIOMES.find((b) => b.id === list[BIOMES.indexOf(picked) % list.length]) ?? picked;
   }
 
   _buildSky(biome) {
@@ -651,8 +656,40 @@ export default class GameScene extends Phaser.Scene {
       this.skyHeight = ch;
     }
 
-    this._buildParallax(biome);
+    // Нарисованный фон места: под ним небо, задник темы уже не нужен
+    const bgKey = this.variant ? `bg_${this.variant.id}` : null;
+    this.bgImage = null;
+    if (bgKey && has(this, bgKey)) {
+      this.bgImage = this.rig.bg(this.add.image(0, 0, bgKey).setOrigin(0.5, 0)
+        .setScrollFactor(0).setDepth(DEPTH.SKY + 0.5));
+      this._fitBg();
+    } else {
+      this._buildParallax(biome);
+    }
     this._buildBarBacking();
+  }
+
+  /**
+   * Фон места — во весь экран и чуть выше него: пока камера идёт по башне
+   * сверху вниз, фон медленно едет от неба к силуэтам у его низа.
+   */
+  _fitBg() {
+    const img = this.bgImage;
+    if (!img) return;
+    const [cw, ch] = canvasSize();
+    const src = img.texture.getSourceImage();
+    const k = Math.max(cw / src.width, (ch * 1.3) / src.height);
+    img.setScale(k).setX(cw / 2);
+    this._bgTravel = src.height * k - ch;
+    this._scrollBg();
+  }
+
+  _scrollBg() {
+    if (!this.bgImage) return;
+    const r = this.rig;
+    const span = Math.max(1, CFG.WATER_Y - r.visibleH);
+    const p = Math.min(1, Math.max(0, r.viewTop / span));
+    this.bgImage.y = -this._bgTravel * p;
   }
 
   /**
@@ -694,6 +731,8 @@ export default class GameScene extends Phaser.Scene {
     });
     // Форма башни — от места: карнизы, вулкан, астероиды (shapes.js)
     this.terrain.layout = this.variant?.layout ?? null;
+    // Детали в теле земли — по месту (terrainDetails.js); на обычных картах нет
+    if (this.variant) { this.terrain.look = this.variant.id; this.terrain.decorSeed = this.seed; }
     this.terrain.generate(this.shape, shapeRng(this.seed));
 
     // По одной Phaser-текстуре на чанк: после взрыва в GPU уходит
@@ -972,6 +1011,7 @@ export default class GameScene extends Phaser.Scene {
       this.mines = this.mines.filter((m) => m.alive);
     }
     this.props?.update(dt);
+    this._scrollBg();
     this.ambience?.update(dt);
     for (const m of this.monsters) m.update(dt);
     if (this.monsters.some((m) => !m.alive)) this.monsters = this.monsters.filter((m) => m.alive);
