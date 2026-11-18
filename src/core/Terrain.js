@@ -1,5 +1,6 @@
 import { CFG } from '../config.js';
 import { makeNoise1D } from './rng.js';
+import { planDetails, paintDetails } from './terrainDetails.js';
 
 /** Ширина одного чанка видимой текстуры (см. this.chunks). */
 const CHUNK_W = 640;
@@ -185,6 +186,8 @@ export class Terrain {
     // небольшим: визуальная кромка не должна заметно расходиться с той,
     // по которой считается физика, иначе игрок мажет.
     const over = grass ? Math.round(grass.height * (b.grassOver ?? 0.2)) : 0;
+    // Детали места (камешки, трещины, кристаллы) — раскладка один раз
+    if (this.look && this._details === undefined) this._details = planDetails(this, this.look, this.decorSeed ?? 0);
 
     for (let i = 0; i < this.chunks.length; i++) {
       const chunk = this.chunks[i];
@@ -215,6 +218,7 @@ export class Terrain {
 
       // Объём и контур — в стиле персонажей: снизу у плит тень, по краю
       // земли тёмная обводка. Только картинка: физика по маске не меняется
+      paintDetails(ctx, this._details, x0, x1);
       this._shade(chunk);
 
       // --- верхний слой (трава / песок / снег) ---

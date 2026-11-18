@@ -615,9 +615,13 @@ export default class GameScene extends Phaser.Scene {
   _chooseBiome() {
     const forced = this.registry.get('forceBiome')
       ?? new URLSearchParams(location.search).get('biome');
-    return BIOMES.find((b) => b.id === forced)
-      ?? BIOMES.find((b) => b.id === this.variant?.biome)
-      ?? pickBiome(this.rng);
+    const own = BIOMES.find((b) => b.id === forced) ?? BIOMES.find((b) => b.id === this.variant?.biome);
+    if (own) return own;
+    // Случайная — из списка вида башни; ГПСЧ расходуется как раньше
+    const picked = pickBiome(this.rng);
+    const list = this.variant?.biomes;
+    if (!list?.length) return picked;
+    return BIOMES.find((b) => b.id === list[BIOMES.indexOf(picked) % list.length]) ?? picked;
   }
 
   _buildSky(biome) {
@@ -694,6 +698,8 @@ export default class GameScene extends Phaser.Scene {
     });
     // Форма башни — от места: карнизы, вулкан, астероиды (shapes.js)
     this.terrain.layout = this.variant?.layout ?? null;
+    // Детали в теле земли — по месту (terrainDetails.js); на обычных картах нет
+    if (this.variant) { this.terrain.look = this.variant.id; this.terrain.decorSeed = this.seed; }
     this.terrain.generate(this.shape, shapeRng(this.seed));
 
     // По одной Phaser-текстуре на чанк: после взрыва в GPU уходит
