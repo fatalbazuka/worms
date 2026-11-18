@@ -20,6 +20,8 @@ export class TurnManager {
     this.flyTimer = 0;
     this.holdTimer = 0;     // сколько ждём ход соперника
     this.weaponIndex = 0;
+    // Что держала в руках каждая команда: ход соперника не меняет твоё оружие
+    this.teamWeapon = new Array(CFG.TEAMS).fill(0);
     this.shotsLeft = 1;     // сколько выстрелов осталось этим ходом
     this.retreating = false;   // заряд поставлен, осталось уйти
     this.teamCursor = new Array(CFG.TEAMS).fill(0);
@@ -53,6 +55,7 @@ export class TurnManager {
     if (i < 0 || i >= WEAPONS.length) return;
     if (this.ammoOf(i) <= 0) return;      // пустое оружие не выбирается
     this.weaponIndex = i;
+    this.teamWeapon[this.currentTeam] = i;
     this.shotsLeft = WEAPONS[i].shots;
     this.scene.fx?.sound('select');
     if (!this.scene.isBotTurn?.()) this.scene.haptic?.('select');
@@ -103,7 +106,8 @@ export class TurnManager {
     this.state = STATE.AIM;
     this.retreating = false;
 
-    // Оружие могло кончиться у этой команды — откатываемся на доступное
+    // У команды — её оружие; могло кончиться — откатываемся на доступное
+    this.weaponIndex = this.teamWeapon[team] ?? 0;
     if (this.ammoOf(this.weaponIndex) <= 0) {
       const ok = WEAPONS.findIndex((w, i) => this.ammoOf(i) > 0);
       this.weaponIndex = ok >= 0 ? ok : 0;
@@ -151,7 +155,12 @@ export class TurnManager {
     this.state = STATE.AIM;
     this.retreating = false;
 
-    this.weaponIndex = info.weapon ?? this.weaponIndex;
+    // Своё оружие этой команды, а не то, с которым ходил передавший очередь
+    this.weaponIndex = this.teamWeapon[info.team] ?? info.weapon ?? this.weaponIndex;
+    if (this.ammoOf(this.weaponIndex) <= 0) {
+      const ok = WEAPONS.findIndex((w, i) => this.ammoOf(i) > 0);
+      this.weaponIndex = ok >= 0 ? ok : 0;
+    }
     this.shotsLeft = this.weapon.shots;
     this.scene.hud.setWeaponIndex(this.weaponIndex);
 

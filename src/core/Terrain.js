@@ -70,6 +70,7 @@ export class Terrain {
     // «верхов» в каждом столбце несколько — по этажу на каждый
     if (shape?.build && srng) {
       shape.build(this, srng);
+      if (this.walls) this._addWalls();
       this._syncSolidFromMask();
       this._findTops();
       this._paintTexture();
@@ -97,6 +98,29 @@ export class Terrain {
     if (shape?.carve && srng) shape.carve(this, srng);
     this._syncSolidFromMask();
     this._paintTexture();
+  }
+
+  /**
+   * Каменные стены по краям башни (Ледник, Жерло): видимый край вместо
+   * невидимого. Неровные, без ГПСЧ — у обоих игроков одинаковые; за них
+   * цепляется трос, взрыв выгрызает в них дыры.
+   */
+  _addWalls() {
+    const ctx = this.maskCtx, w = this.width, h = this.height;
+    const edge = (y, k) => 22 + Math.sin(y / 41 + k) * 7 + Math.sin(y / 13 + k * 2) * 3;
+    ctx.globalCompositeOperation = 'source-over';
+    ctx.fillStyle = '#ffffff';
+    for (const side of [0, 1]) {
+      ctx.beginPath();
+      ctx.moveTo(side ? w : 0, 0);
+      for (let y = 0; y <= h; y += 8) {
+        const d = edge(y, side * 3.1);
+        ctx.lineTo(side ? w - d : d, y);
+      }
+      ctx.lineTo(side ? w : 0, h);
+      ctx.closePath();
+      ctx.fill();
+    }
   }
 
   _paintMask() {

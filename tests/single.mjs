@@ -376,6 +376,31 @@ await page.waitForTimeout(200);
 check('рычаг: оттянул и вернул в центр — отмена, быстрый оттяг — выстрел',
   padCancel === 'aim' && await turnState() !== 'aim', padCancel);
 
+// --- лента оружия сверху и отмена выстрела на «✕» ---
+const shotTurn2 = await page.evaluate(() => window.__WORMS__.scene.getScene('Game').turn.turnNumber);
+await page.waitForFunction((n) => {
+  const s = window.__WORMS__.scene.getScene('Game');
+  return s.turn.turnNumber > n && s.canPlayerAct() && s.turn.currentTeam === 0;
+}, shotTurn2, { timeout: 90000 });
+const strip = await page.evaluate(() => {
+  const s = window.__WORMS__.scene.getScene('Game');
+  s.hud.update();
+  const before = s.turn.weaponIndex;
+  const chip = s.hud.strip.chips.find((c) => c.index != null && c.index !== before);
+  chip?.zone.emit('pointerdown');
+  return { shown: s.hud.strip.shown, chips: s.hud.strip.chips.filter((c) => c.index != null).length,
+    switched: chip ? s.turn.weaponIndex === chip.index : false, noPlate: !s.hud.slot };
+});
+check('лента оружия: видна в свой ход, тап по кружку — оружие в руках, нижней плашки нет',
+  strip.shown && strip.chips >= 3 && strip.switched && strip.noPlate, JSON.stringify(strip));
+const toCancel = await page.evaluate(() => {
+  const h = window.__WORMS__.scene.getScene('Game').hud;
+  return [h.padCancel.x - h.slingPad.x, h.padCancel.y - h.slingPad.y];
+});
+await padGesture([['down', 0, 0], ['move', 40, 50], ['move', toCancel[0] / 2, toCancel[1] / 2], ['move', toCancel[0], toCancel[1]], ['up', toCancel[0], toCancel[1]]]);
+await page.waitForTimeout(200);
+check('рычаг: дотянул до «✕» и отпустил — выстрела нет', await turnState() === 'aim');
+
 // --- испытания: все собираются, звёзды и монеты за победу ---
 const challengeIds = await page.evaluate(async () => (await import('/src/campaign/challenges.js')).CHALLENGES.map((c) => c.id));
 const broken = [];
@@ -436,6 +461,7 @@ check('голоса смайликов загружены, победа сказ
 // --- кампания «Подъём»: все бои собираются, Великан ходит и падает ---
 const upIds = await page.evaluate(async () => (await import('/src/campaign/ascent.js')).ASCENT.map((m) => m.id));
 const upBroken = [];
+const edges = {};
 for (const id of upIds) {
   await page.evaluate(async (id) => {
     const { ascentMatch } = await import('/src/core/match.js');
@@ -451,13 +477,68 @@ for (const id of upIds) {
     const m = ASCENT_BY_ID[id];
     const s = window.__WORMS__.scene.getScene('Game');
     const want = Object.values(m.monsters ?? {}).reduce((a, n) => a + n, 0) + (m.boss ? 1 : 0);
+    // Край башни: стена камнем (видна и держит) или обрыв — по месту
+    const t = s.terrain, mid = Math.round(t.height * 0.4);
+    window.__edge = { variant: s.variant.id, wall: t.solidAt(4, mid) && t.solidAt(t.width - 5, mid) };
     return s.shape.id === 'tower' && s.turn.currentTeam === 0 && s.monsters.length === want
       && s.worms.every((w) => w.grounded && w.y < CFG.DROWN_Y - 60)
       && s.monsters.every((x) => x.y < CFG.DROWN_Y - 60);
   }, id);
   if (!ok) upBroken.push(id);
+  const e = await page.evaluate(() => window.__edge);
+  edges[e.variant] = edges[e.variant] ?? e.wall;
 }
 check(`«Подъём»: все ${upIds.length} боёв собираются, монстры на этажах`, upIds.length === 20 && upBroken.length === 0, upBroken.join(','));
+check('края башни: на Леднике и в Жерле стены, у подножия и в космосе — обрыв',
+  edges.ice && edges.lava && edges.classic === false && edges.space === false, JSON.stringify(edges));
+
+// Оружие у каждой команды своё: соперник сменил — у тебя на твоём ходу прежнее
+const weap = await page.evaluate(async () => {
+  const { WEAPONS } = await import('/src/weapons/index.js');
+  const s = window.__WORMS__.scene.getScene('Game');
+  const t = s.turn;
+  const gi = WEAPONS.findIndex((w) => w.id === 'grenade');
+  t.ammo[0][gi] = 5; t.ammo[1][gi] = 5;
+  t.currentTeam = 0; t.setWeaponIndex(gi);
+  t.currentTeam = 1; t.setWeaponIndex(0);
+  t._activate(1, true);                       // обычная очередь: снова команда 0
+  const local = t.currentTeam === 0 ? t.weaponIndex === gi : null;
+  t.currentTeam = 1; t.setWeaponIndex(0);
+  const w0 = s.worms.findIndex((w) => w.alive && w.team === 0);
+  t.forceTurn({ turn: t.turnNumber + 1, team: 0, worm: w0, weapon: 0 });  // очередь по сети
+  const net = t.weaponIndex === gi;
+  return { local, net };
+});
+check('оружие у каждой команды своё: ход соперника не меняет твоё (и по сети)', weap.local === true && weap.net === true, JSON.stringify(weap));
+
+// Невидимых стен нет: за краем — падение; висящего шаг отцепляет; стик ведёт бойца
+const moves = await page.evaluate(async () => {
+  const { CFG } = await import('/src/config.js');
+  const s = window.__WORMS__.scene.getScene('Game');
+  const w = s.worms.find((x) => x.alive);
+  const keep = { x: w.x, y: w.y, hang: w.hang, grounded: w.grounded, vx: w.vx, vy: w.vy };
+  w.x = -40; w.y = 200; w.grounded = false; w.vx = -50; w.vy = 0; w.hang = null;
+  for (let i = 0; i < 10; i++) w.update(1 / 60);
+  const out = w.x < -20 && w.y > 200;
+  w.x = keep.x; w.y = keep.y; w.grounded = false; w.vx = 0; w.vy = 0; w.hang = 'ceil';
+  w.walk(1, 1 / 60);
+  const dropped = w.hang === null && !w.grounded && w.facing === 1;
+  Object.assign(w, keep);
+  // Стик: палец вправо — идёт вправо, рывок вверх — прыжок
+  const h = s.hud, st = h.stick;
+  st.id = 9; st.ax = st.cx; st.ay = st.cy;
+  const fl = CFG.FRAME.left, ft = CFG.FRAME.top;
+  h._stickMove({ id: 9, x: st.cx + 60 + fl, y: st.cy + ft });
+  const walk = s.moveInput.right && !s.moveInput.left && s.moveInput.walkScale > 0.5;
+  h._stickMove({ id: 9, x: st.cx + 60 + fl, y: st.cy - st.R + ft });
+  const jump = s.moveInput.jumpQueued === true;
+  h._stickUp({ id: 9 });
+  const stop = !s.moveInput.right && s.moveInput.walkScale === 1;
+  s.moveInput.jumpQueued = false;
+  return { out, dropped, walk, jump, stop };
+});
+check('за краем без стены — падение; висящего шаг отцепляет; стик: вбок — идёт, вверх — прыжок, отпустил — стоит',
+  Object.values(moves).every(Boolean), JSON.stringify(moves));
 
 // События мест: порыв метели толкает бойцов, извержение роняет лавовые бомбы
 const envEvent = async (id) => {

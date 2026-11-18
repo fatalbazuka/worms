@@ -306,7 +306,6 @@ export class Worm {
     this.zip = null;
     this.vx = 0; this.vy = 0;
     this.fallStartY = this.y;           // рывок — не падение: урона нет
-    this._clampToWorld();
     // Впился в стену: пыль из-под крюка, глухой удар, отдача в руку
     this.squash = 0.9;
     this.scene.fx?.dust(this.x, this.centerY, 7);
@@ -327,6 +326,28 @@ export class Worm {
     out.hang = out.grounded ? null : this._hangSide();
     this.x = keep.x; this.y = keep.y; this.zip = keep.zip;
     return out;
+  }
+
+  /**
+   * Отцепиться шагом в сторону dir: с потолка — вниз с небольшим сносом,
+   * со стены — отскок, если шагнул от неё, иначе просто вниз вдоль неё.
+   */
+  dropFromHang(dir) {
+    if (!this.hang) return;
+    const side = this.hang;
+    this.hang = null;
+    this.grounded = false;
+    this.fallStartY = this.y;
+    this.facing = dir;
+    const away = (side === 'left' && dir > 0) || (side === 'right' && dir < 0);
+    if (away) {
+      this.vx = dir * CFG.JUMP_VX * 0.7;
+      this.vy = CFG.JUMP_VY * 0.4;
+    } else {
+      this.vx = side === 'ceil' ? dir * CFG.JUMP_VX * 0.4 : 0;
+      this.vy = 0;
+    }
+    this.squash = -0.4;
   }
 
   /** Отцепиться: прыжок от стены или просто вниз с потолка. */
@@ -393,6 +414,8 @@ export class Worm {
 
   /** Ходьба по команде игрока. Возвращает true, если сдвинулся. */
   walk(dir, dt) {
+    // Висит на потолке или стене — шаг отцепляет: не застревать вниз головой
+    if (this.alive && this.hang) { this.dropFromHang(dir); return true; }
     if (!this.alive || !this.grounded) return false;
     this.facing = dir;
     this.walking = true;
@@ -413,7 +436,6 @@ export class Worm {
         this.x = nx;
         this.grounded = false;
         this.fallStartY = this.y;
-        this._clampToWorld();
         return true;
       }
 
@@ -432,7 +454,6 @@ export class Worm {
       }
     }
 
-    this._clampToWorld();
     // Уперлись — стоим, а не перебираем ногами на месте
     if (!moved) this.walking = false;
     return moved;
@@ -498,7 +519,6 @@ export class Worm {
       this.vx = 0;
       break;
     }
-    this._clampToWorld();
   }
 
   /** Полёт: те же мелкие подшаги, что и у снаряда. */
@@ -544,7 +564,6 @@ export class Worm {
           break;
         }
       }
-      this._clampToWorld();
     }
   }
 
@@ -562,12 +581,6 @@ export class Worm {
       const dmg = Math.min(CFG.FALL_DMG_MAX, (drop - CFG.FALL_SAFE) * CFG.FALL_DMG_PER_PX);
       this.damage(Math.round(dmg), 'падение');
     }
-  }
-
-  _clampToWorld() {
-    const hw = CFG.WORM_W >> 1;
-    if (this.x < hw) { this.x = hw; this.vx = 0; }
-    if (this.x > this.terrain.width - hw) { this.x = this.terrain.width - hw; this.vx = 0; }
   }
 
   _drown() {
