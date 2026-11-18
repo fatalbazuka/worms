@@ -141,6 +141,15 @@ const MIGRATIONS = [
   create index bonus_player on bonus (player_id);
   alter table player add column referred_by text;
   `,
+  // 5: когда игрок впервые открыл саму игру (а не только /start в чате с
+  // ботом). Новичок для подарка за друга — тот, кто игру ещё не открывал.
+  // Кто уже что-то делал в игре, тот её открывал
+  `
+  alter table player add column app_at integer;
+  update player set app_at = created_at
+    where exists (select 1 from event e where e.player_id = player.id)
+       or wins + losses > 0;
+  `,
 ];
 
 export function openDb(path) {

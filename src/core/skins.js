@@ -28,6 +28,9 @@ export const SKINS = [
 
 export const SKIN_BY_ID = Object.fromEntries(SKINS.map((s) => [s.id, s]));
 
+/** Цена скина напрямую за звёзды. Та же — SKIN_STARS в server/shop.mjs. */
+export const SKIN_STARS = 60;
+
 export function emptyState() {
   // paidSeen — сколько коробок с сервера (куплено + подарено) уже положено
   return { owned: [DEFAULT_SKIN], equipped: DEFAULT_SKIN, boxes: 0, claimed: [], paidSeen: 0 };

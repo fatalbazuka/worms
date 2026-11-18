@@ -242,11 +242,16 @@ check('«твой ход» бот не пишет', !calls('sendMessage').some((
   check('после /mute не напоминаем', muted === 0 && !calls('sendMessage').slice(-2).some((c) => c.params.chat_id === 41 && /Серия/.test(c.params.text)));
 
   clock = Date.UTC(2026, 10, 18, 16, 40);
+  await call('POST', '/api/event', { name: 'step', props: { step: 'first_shot' } }, ann.token);
+  const junk = await call('POST', '/api/event', { name: 'step', props: { step: 'hack' } }, ann.token);
   await hook({ message: { from: { id: ADMIN }, chat: { id: ADMIN, type: 'private' }, text: '/metrics' } });
   const rep = calls('sendMessage').at(-1)?.params.text ?? '';
   check('/metrics у админа: игроки, новички, бои, возврат',
     /Сегодня \(2026-11-18\): игроков 1/.test(rep) && /Вчера: игроков 2/.test(rep)
       && /Вчерашние новички вернулись сегодня: 1 из 2/.test(rep), rep.split('\n').slice(0, 4).join(' | '));
+  check('/metrics: воронка новичков и возврат через 3 и 7 дней',
+    /выстрелил 1/.test(rep) && /Через 3 дня: \d+ из \d+/.test(rep) && junk.data?.ok === false,
+    rep.split('\n').slice(4, 7).join(' | '));
   await hook({ message: { from: { id: 3 }, chat: { id: 3, type: 'private' }, text: '/metrics' } });
   check('/metrics не админу не показывается', !/игроков/.test(calls('sendMessage').at(-1)?.params.text ?? ''));
 }
@@ -304,6 +309,15 @@ check('«твой ход» бот не пишет', !calls('sendMessage').some((
     query_id: 'q', user: { id: 54, first_name: 'Хитрый' }, start_param: 'ref_54', auth_date: String(Math.floor(clock / 1000)),
   }, BOT) });
   check('по своей же ссылке подарка нет', (await call('GET', '/api/shop', null, self.data.token)).data.owned.boxes === 0);
+  // Друг сначала нажал /start в чате с ботом, а игру открыл по ссылке позже
+  await hook({ message: { from: { id: 56, first_name: 'Осторожный' }, chat: { id: 56, type: 'private' }, text: '/start' } });
+  const hostMid = (await call('GET', '/api/shop', null, buyer.token)).data.owned.boxes;
+  const late = await call('POST', '/api/telegram', { initData: await signInitData({
+    query_id: 'q', user: { id: 56, first_name: 'Осторожный' }, start_param: 'ref_51', auth_date: String(Math.floor(clock / 1000)),
+  }, BOT) });
+  check('подарок за друга есть, даже если он сперва нажал /start в боте',
+    (await call('GET', '/api/shop', null, late.data.token)).data.owned.boxes === 1
+      && (await call('GET', '/api/shop', null, buyer.token)).data.owned.boxes === hostMid + 1);
   check('обычный вход без ссылки подарка не даёт', (await call('GET', '/api/shop', null, guest.token)).data.owned.boxes === 0);
 }
 

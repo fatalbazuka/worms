@@ -7,6 +7,7 @@ import {
 } from '../core/match.js';
 import { CHALLENGES, challengeOpen, totalStars, STAR_COINS } from '../campaign/challenges.js';
 import { challengeStars } from '../platform/challenges.js';
+import { onboardStage } from '../platform/onboard.js';
 import { SHAPES } from '../core/shapes.js';
 import { randomRoom, copyText } from '../net/transport.js';
 import { isCasualRoom, isTowerRoom } from '../net/rooms.js';
@@ -14,6 +15,7 @@ import { Lobby } from '../net/lobby.js';
 import { pendingSession, forgetSession } from '../net/session.js';
 import {
   syncMe, fetchTop, myRank, loggedIn, onAccountChange, track, fetchShop, buyShopItem,
+  trackStep,
 } from '../net/server.js';
 import { openAccountDialog } from '../ui/AccountDialog.js';
 import { openTournaments } from '../ui/Tournaments.js';
@@ -28,7 +30,7 @@ import { leagueOf, nextLeague, leagueProgress, toNextLeague, leagueLabel } from 
 import { BOT_LEVELS } from '../ai/Bot.js';
 import { isDesktop, setUiMode, aimScheme, setAimScheme } from '../platform/device.js';
 import { sfx } from '../audio/Sfx.js';
-import { SKINS, SKIN_BY_ID, rewardMissions } from '../core/skins.js';
+import { SKINS, SKIN_BY_ID, SKIN_STARS, rewardMissions } from '../core/skins.js';
 import {
   skinState, equippedSkin, equipSkin, openSkinBox, syncCampaignBoxes, applyServerOwned,
 } from '../platform/skins.js';
@@ -387,7 +389,8 @@ export default class MenuScene extends Phaser.Scene {
   get playChoice() {
     let saved = null;
     try { saved = JSON.parse(localStorage.getItem('worms.play.v1') ?? 'null'); } catch { saved = null; }
-    const level = saved && 'level' in saved ? saved.level : 'fighter';
+    // Пока игрок не выбрал бота сам и ни разу не победил — «Новичок»
+    const level = saved && 'level' in saved ? saved.level : (onboardStage() === 'rookie' ? 'rookie' : 'fighter');
     return { level: level === null || BOT_LEVELS[level] ? level : 'fighter' };
   }
 
@@ -454,9 +457,12 @@ export default class MenuScene extends Phaser.Scene {
     const playH = portrait ? 128 : 104;
     const playY = bottom - tabH - (portrait ? 168 : 124);
     const choice = this.playChoice;
+    // Самый первый раз «Играть» — это обучение: мишень, без ветра
+    const tutorial = onboardStage() === 'tutorial';
     this._button('play', cx, playY, 'ИГРАТЬ',
-      choice.level ? `Башня · бот «${BOT_LEVELS[choice.level].name}»` : 'Башня · вдвоём на одном телефоне',
-      () => this.start(towerMatch(choice.level)),
+      tutorial ? 'Первый бой · научим стрелять'
+        : choice.level ? `Башня · бот «${BOT_LEVELS[choice.level].name}»` : 'Башня · вдвоём на одном телефоне',
+      () => this.start(tutorial ? { ...challengeMatch('first'), tutorial: true } : towerMatch(choice.level)),
       { w: Math.min(W - 72, 560), h: playH, variant: 'primary', big: true });
     this._button('modes', cx, playY + playH / 2 + (portrait ? 48 : 36), 'другие режимы', '',
       () => this.showModes(), { w: 300, h: portrait ? 56 : 48, titleSize: 22 });
@@ -681,6 +687,7 @@ export default class MenuScene extends Phaser.Scene {
     const link = refLink();
     this._button('invite', cx, y + 106, 'Позвать друга', link ? 'вам обоим — по коробке со скином' : 'работает в Telegram',
       () => {
+        trackStep('invite');
         if (!shareLink(link, 'Залетай в бой на башне! По этой ссылке нам обоим дадут коробку со скином 🎁')) {
           copyText(link);
         }
@@ -739,6 +746,11 @@ export default class MenuScene extends Phaser.Scene {
         { w: 190, h: 64, enabled: dailyState().coins >= BOX_PRICE, titleSize: 22 });
     }
 
+    // Что ещё можно получить: скины, которых нет, минус неоткрытые коробки.
+    // Коробку, в которой заведомо ничего не будет, не продаём
+    const left = SKINS.length - st.owned.length - st.boxes;
+    const can = inTelegram() && loggedIn();
+
     // --- сетка скинов ---
     const cols = this.portrait ? 4 : 8;
     const cw = Math.min(170, Math.floor((W - 40) / cols));
@@ -759,29 +771,36 @@ export default class MenuScene extends Phaser.Scene {
       if (owned) face.play(`${sheet}_idle`);
       else face.setTintFill(0x10141f).setAlpha(0.85);
       this.items.push(face);
-      this.items.push(this.add.text(x, y + ch / 2 - 16, owned ? (on ? 'надет' : skin.name) : '???',
-        font(17, 800, on ? '#2a1c06' : owned ? UI.text : UI.textDim)).setOrigin(0.5));
+      // Закрытый скин можно купить сразу — тап по силуэту открывает счёт
+      const buy = !owned && can;
+      this.items.push(this.add.text(x, y + ch / 2 - 16,
+        owned ? (on ? 'надет' : skin.name) : buy ? `${SKIN_STARS} ⭐` : '???',
+        font(17, 800, on ? '#2a1c06' : owned ? UI.text : buy ? UI.accent : UI.textDim)).setOrigin(0.5));
       if (owned) {
         plate.setInteractive({ useHandCursor: true });
         plate.on('pointerup', () => { haptic('select'); equipSkin(skin.id); this.showSkins(); });
+      } else if (buy) {
+        plate.setInteractive({ useHandCursor: true });
+        plate.on('pointerup', () => { haptic('select'); this._buy(`skin-${skin.id}`); });
       }
-      this.buttons[`skin-${skin.id}`] = { x, y: y + this.oy, w: cw - 10, h: ch, enabled: owned };
+      this.buttons[`skin-${skin.id}`] = { x, y: y + this.oy, w: cw - 10, h: ch, enabled: owned || buy };
     });
 
     // --- магазин: коробки за звёзды ---
     const rows = Math.ceil(SKINS.length / cols);
     const sy = y0 + rows * (ch + 10) - ch / 2 + 26;
     this.items.push(this.add.text(cx, sy, 'Магазин', font(26, 800, UI.accent)).setOrigin(0.5, 0));
-    const can = inTelegram() && loggedIn();
+    trackStep('shop_open');
     const bw = Math.min(300, (W - 60) / 2);
-    const shopRow = [['box1', 'Коробка', '25 ⭐'], ['box5', '5 коробок', '99 ⭐']];
-    shopRow.forEach(([id, label, price], i) => {
+    const shopRow = [['box1', 'Коробка', '25 ⭐', 1], ['box5', '5 коробок', '99 ⭐', 5]];
+    shopRow.forEach(([id, label, price, n], i) => {
       this._button(`shop-${id}`, cx + (i ? 1 : -1) * (bw / 2 + 8), sy + 96, label, price,
-        () => this._buy(id), { w: bw, h: 88, titleSize: 25, hintSize: 20, enabled: can && !full });
+        () => this._buy(id), { w: bw, h: 88, titleSize: 25, hintSize: 20, enabled: can && left >= n });
     });
-    this.items.push(this.add.text(cx, sy + 152, can
-      ? 'в коробке — скин, которого у тебя ещё нет; на бой не влияет'
-      : 'покупки за звёзды работают в Telegram',
+    this.items.push(this.add.text(cx, sy + 152, !can
+      ? 'покупки за звёзды работают в Telegram'
+      : left <= 0 ? 'все скины уже твои или ждут в коробках'
+        : `в коробке — скин, которого у тебя ещё нет; закрытый скин — тап, ${SKIN_STARS} ⭐`,
       font(17, 700, UI.textDim)).setOrigin(0.5, 0).setAlign('center').setWordWrapWidth(W - 48));
     this._back();
   }
@@ -792,6 +811,7 @@ export default class MenuScene extends Phaser.Scene {
    * бота чуть позже), и кладём покупку в профиль.
    */
   async _buy(item) {
+    trackStep('buy_click');
     const toast = (msg, color = '#ff9a9a') => {
       const t = this.add.text(this.W / 2, 150, msg, font(22, 800, color)).setOrigin(0.5).setDepth(60);
       this.items.push(t);
@@ -806,6 +826,7 @@ export default class MenuScene extends Phaser.Scene {
     }
     haptic('win');
     const before = skinState().boxes;
+    const skin = /^skin-(\w+)$/.exec(item)?.[1];
     for (let i = 0; i < 8; i++) {
       const shop = await fetchShop();
       const got = shop?.owned ? applyServerOwned(shop.owned) : null;
@@ -813,8 +834,12 @@ export default class MenuScene extends Phaser.Scene {
       await new Promise((r) => setTimeout(r, 1500));
     }
     if (this.section !== this.showSkins) return;
+    if (skin && skinState().owned.includes(skin)) equipSkin(skin);
     this.showSkins();
-    if (skinState().boxes > before) toast('Готово! Коробки уже здесь', '#8ef0a0');
+    if (skin) {
+      if (skinState().owned.includes(skin)) toast(`Готово! «${SKIN_BY_ID[skin]?.name}» уже на тебе`, '#8ef0a0');
+      else toast('Оплата прошла — скин появится через минуту', '#ffd166');
+    } else if (skinState().boxes > before) toast('Готово! Коробки уже здесь', '#8ef0a0');
     else toast('Оплата прошла — коробки появятся через минуту', '#ffd166');
   }
 

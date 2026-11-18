@@ -117,8 +117,13 @@ export function createApp({
     if (!v.ok) throw new HttpError(401, v.reason);
     const photo = typeof v.user.photo_url === 'string' && /^https:\/\//.test(v.user.photo_url)
       ? v.user.photo_url.slice(0, 300) : null;
-    const fresh = !players.byId(`tg${Number(v.user.id)}`);
+    // Новичок — кто игру ещё не открывал. Нажать /start в чате с ботом
+    // раньше, чем открыть игру по ссылке друга, — нормально, подарок от
+    // этого не пропадает
+    const was = players.byId(`tg${Number(v.user.id)}`);
+    const fresh = !was || !was.app_at;
     const p = players.upsertTg(v.user, photo);
+    if (fresh) players.markApp(p.id);
     // Новичок по ссылке друга — обоим по коробке; другу — сообщение в бот
     if (fresh) {
       const host = shop.referral(p, v.startParam, players);
@@ -275,6 +280,10 @@ export function createApp({
         const me = auth(req);
         const it = shopItem((await readJson(req)).item);
         if (!it) throw new HttpError(400, 'нет такого товара');
+        // Скин, уже купленный за звёзды, второй раз не продаём
+        if (it.kind === 'skin' && shop.owned(me.id).skins.includes(it.skin)) {
+          throw new HttpError(409, 'этот скин уже куплен');
+        }
         const link = await bot.shopInvoice(me, it);
         if (!link) throw new HttpError(503, 'оплата звёздами сейчас недоступна');
         return { invoice: link };

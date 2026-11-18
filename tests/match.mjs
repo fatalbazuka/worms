@@ -208,9 +208,10 @@ check('один в лобби никого не находит', findMatch(p('a'
 {
   const K = await import('../src/core/skins.js');
   const D = await import('../src/core/daily.js');
-  const { SKIN_IDS } = await import('../server/shop.mjs');
-  check('сервер и игра знают одни и те же скины',
-    SKIN_IDS.join() === K.SKINS.filter((x) => x.id !== K.DEFAULT_SKIN).map((x) => x.id).join(), SKIN_IDS.join());
+  const { SKIN_IDS, SKIN_STARS } = await import('../server/shop.mjs');
+  check('сервер и игра знают одни и те же скины и цену скина',
+    SKIN_IDS.join() === K.SKINS.filter((x) => x.id !== K.DEFAULT_SKIN).map((x) => x.id).join()
+      && K.SKIN_STARS === SKIN_STARS, SKIN_IDS.join());
 
   const phone = { owned: ['classic', 'ice'], equipped: 'ice', boxes: 1, claimed: ['m0'], paidSeen: 0 };
   const cloud = { owned: ['classic', 'devil'], equipped: 'devil', boxes: 3, claimed: ['m2'], paidSeen: 5 };

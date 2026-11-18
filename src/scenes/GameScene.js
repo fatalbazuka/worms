@@ -21,13 +21,15 @@ import { isCasualRoom, isTournamentRoom } from '../net/rooms.js';
 import { makeTransport } from '../net/connect.js';
 import {
   startRoom, forgetStartRoom, shareRoom, haptic, inviteLink, offerHomeScreenOnce, setBattle,
+  refLink, shareLink,
 } from '../platform/telegram.js';
-import { HOTSEAT } from '../core/match.js';
+import { HOTSEAT, towerMatch, challengeMatch } from '../core/match.js';
+import { markWon } from '../platform/onboard.js';
 import { Bot } from '../ai/Bot.js';
 import { markDone, MISSION_BY_ID } from '../campaign/missions.js';
 import { checkObjective, snapshot, objectiveText } from '../campaign/objectives.js';
 import { player, eloDelta, recordResult } from '../platform/player.js';
-import { reportResult, serverAvailable, track } from '../net/server.js';
+import { reportResult, serverAvailable, track, trackStep } from '../net/server.js';
 import { leagueOf, nextLeague, toNextLeague } from '../platform/league.js';
 import { OffscreenMarkers } from '../ui/OffscreenMarkers.js';
 import { SKIN_BY_ID, rivalSkin } from '../core/skins.js';
@@ -35,7 +37,7 @@ import { equippedSkin, syncCampaignBoxes } from '../platform/skins.js';
 import { recordBattle } from '../platform/daily.js';
 import { TASK_BY_ID } from '../core/daily.js';
 import { EMOTE_BY_ID, EMOTE_COOLDOWN } from '../core/emotes.js';
-import { CHALLENGE_BY_ID, starsFor } from '../campaign/challenges.js';
+import { CHALLENGES, CHALLENGE_BY_ID, starsFor } from '../campaign/challenges.js';
 import { saveChallenge } from '../platform/challenges.js';
 import { grantCoins } from '../platform/daily.js';
 import { CameraRig } from '../ui/CameraRig.js';
@@ -376,6 +378,7 @@ export default class GameScene extends Phaser.Scene {
   }
 
   _countHookUse() {
+    trackStep('first_hook', { once: true });
     this._hookUses = (this._hookUses ?? 0) + 1;
     try { localStorage.setItem('worms.hookUses', String(this._hookUses)); } catch { /* инкогнито */ }
   }
@@ -1307,6 +1310,7 @@ export default class GameScene extends Phaser.Scene {
     if (Math.random() < 0.3) voice.say('shot', { team: w.team });
     if (!this.replaying && !this.isBotTurn()) {
       haptic('shot');
+      trackStep('first_shot', { once: true });
       if (this.slingAim) {
         this._slingUses = (this._slingUses ?? 0) + 1;
         try { localStorage.setItem('worms.slingUses', String(this._slingUses)); } catch { /* инкогнито */ }
@@ -1496,6 +1500,11 @@ export default class GameScene extends Phaser.Scene {
     // Партия доиграна: запись сессии больше не нужна
     this.net?.forget();
     this.fx.sound(winner === mine ? 'victory' : 'defeat');
+    // Первая настоящая победа (не испытание): дальше «Играть» — с «Бойцом»
+    if (solo && winner >= 0 && winner === mine && this.match.mode !== 'challenge') {
+      markWon();
+      trackStep('first_win', { once: true });
+    }
     // Итог — голосом, поверх всего: в хотсите кричит победитель, иначе — ты
     if (winner >= 0 && !solo) voice.say('win', { team: winner, force: true });
     else if (winner >= 0) voice.say(winner === mine ? 'win' : 'lose', { team: mine, force: true });
@@ -1617,9 +1626,47 @@ export default class GameScene extends Phaser.Scene {
     if (box) sub.setColor(UI.accent);
     this.time.delayedCall(500, () => {
       if (!this.gameOverUi) return;
-      this.gameOverUi.push(this._overButton(-140, 'Ещё раз', () => this.scene.restart(), 'again'));
+      const next = this._nextAction(winner >= 0 && winner === mine);
+      this.gameOverUi.push(next
+        ? this._overButton(-140, next.label, () => this._startNext(next.match), 'next')
+        : this._overButton(-140, 'Ещё раз', () => this.scene.restart(), 'again'));
       this.gameOverUi.push(this._overButton(140, 'В меню', () => this.toMenu(), 'menu'));
+      // Позвать друга — прямо отсюда: после боя хочется, а до вкладки
+      // «Задания» никто не доходит. По ссылке — обоим по коробке
+      const link = refLink();
+      if (link && this.match.mode !== 'hotseat' && solo) {
+        const won = winner >= 0 && winner === mine;
+        this.gameOverUi.push(this._overButton(0, 'Позвать друга', () => {
+          trackStep('invite');
+          shareLink(link, won
+            ? 'Только что победил в «Башне» 💥 Залетай — по этой ссылке нам обоим по коробке со скином!'
+            : 'Залетай в бой на башне! По этой ссылке нам обоим дадут коробку со скином 🎁');
+        }, 'invite', 92));
+      }
     });
+  }
+
+  /**
+   * Куда вести после боя, кроме «ещё раз»: из обучения — в первый
+   * настоящий бой с «Новичком», из пройденного испытания — в следующее.
+   */
+  _nextAction(won) {
+    if (!won) return null;
+    if (this.match.tutorial) return { label: 'В бой!', match: towerMatch('rookie') };
+    if (this.match.mode === 'challenge') {
+      const i = CHALLENGES.findIndex((c) => c.id === this.match.challengeId);
+      const c = CHALLENGES[i + 1];
+      if (c) return { label: 'Дальше', match: challengeMatch(c.id) };
+    }
+    return null;
+  }
+
+  _startNext(match) {
+    this.net?.forget();
+    this.registry.set('match', match);
+    this.registry.set('seed', match.seed ?? null);
+    this.registry.set('forceBiome', match.biome ?? null);
+    this.scene.restart();
   }
 
   /** Звёзды испытания на экране итога. */
@@ -1630,6 +1677,7 @@ export default class GameScene extends Phaser.Scene {
     const hpLost = mine.reduce((a, w) => a + (CFG.MAX_HEALTH - (w.alive ? w.health : 0)), 0);
     const stars = starsFor(c, { won, myTurns: this.myTurns, hpLost });
     const res = saveChallenge(c.id, stars);
+    if (c.id === 'first' && stars > 0) trackStep('tutorial_done', { once: true });
     if (res.coins) grantCoins(res.coins);
     // Выше строки монет за бой (она на -96), чтобы не наезжали
     const y = CFG.VIEW_H / 2 - 210;
@@ -1652,9 +1700,9 @@ export default class GameScene extends Phaser.Scene {
   }
 
   /** Кнопка на затемнении итога. */
-  _overButton(dx, label, onTap, key = null) {
+  _overButton(dx, label, onTap, key = null, dy = 0) {
     const w = 250, h = 76;
-    const x = CFG.VIEW_W / 2 + dx, y = CFG.VIEW_H / 2 + 118;
+    const x = CFG.VIEW_W / 2 + dx, y = CFG.VIEW_H / 2 + 118 + dy;
     // Центры кнопок наружу — тестам, чтобы не считать раскладку у себя
     if (key) (this.overButtons ??= {})[key] = { x, y };
     // Главная кнопка — красная, вторая — спокойная: у каждой своя текстура
@@ -1684,7 +1732,7 @@ export default class GameScene extends Phaser.Scene {
     this.registry.set('seed', null);
     forgetStartRoom();
     // Из испытания — обратно к списку испытаний
-    if (this.match.mode === 'challenge') this.registry.set('returnTo', 'challenges');
+    if (this.match.mode === 'challenge' && !this.match.tutorial) this.registry.set('returnTo', 'challenges');
     if (new URLSearchParams(location.search).has('room')) {
       const url = new URL(location.href);
       url.searchParams.delete('room');
