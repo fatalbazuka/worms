@@ -107,6 +107,43 @@ check('один в лобби никого не находит', findMatch(p('a'
   check('с открытым коридором сводит любых', findMatch(a, [b])?.peer.id === 'b' && findMatch(b, [a])?.peer.id === 'a');
 }
 
+// --- скины и коробки: правила без браузера ---
+{
+  const { SKINS, emptyState, normalize, rewardMissions, claimBoxes, openBox, equip } = await import('../src/core/skins.js');
+  const missions = Array.from({ length: 12 }, (_, i) => `m${i}`);
+  const rewards = rewardMissions(missions);
+  check('коробок за кампанию ровно столько, сколько скинов можно получить',
+    rewards.length === SKINS.length - 1 && rewards[0] === 'm0' && rewards.at(-1) === 'm11',
+    rewards.join(','));
+
+  let st = emptyState();
+  let r = claimBoxes(st, ['m0', 'm1'], missions);
+  check('за первую миссию — коробка, за вторую — нет', r.gained === 1 && r.state.boxes === 1);
+  const again = claimBoxes(r.state, ['m0', 'm1'], missions);
+  check('дважды за одну миссию коробку не дают', again.gained === 0 && again.state.boxes === 1);
+
+  // Вся кампания пройдена: открываем всё подряд — повторов нет, собраны все
+  st = claimBoxes(emptyState(), missions, missions).state;
+  const got = [];
+  for (let i = 0; i < 20; i++) {
+    const o = openBox(st, () => 0.999);
+    st = o.state;
+    if (o.skin) got.push(o.skin);
+  }
+  check('коробки не дают повторов и собирают все скины',
+    new Set(got).size === got.length && st.owned.length === SKINS.length && st.boxes === 0,
+    `${got.join(',')} · коробок осталось ${st.boxes}`);
+  check('пустую коробку открыть нельзя', openBox(emptyState()).skin === null);
+  const fullSt = { ...st, boxes: 2 };
+  const none = openBox(fullSt);
+  check('когда собрано всё, коробка не тратится', none.full && none.state.boxes === 2);
+  check('надеть можно только свой скин',
+    equip(emptyState(), 'devil').equipped === 'classic' && equip(st, 'devil').equipped === 'devil');
+  const bad = normalize({ owned: ['devil', 'нет такого'], equipped: 'clown', boxes: -5, claimed: 'x' });
+  check('мусор из хранилища приводится к правильному состоянию',
+    bad.owned.join() === 'classic,devil' && bad.equipped === 'classic' && bad.boxes === 0 && bad.claimed.length === 0);
+}
+
 console.log(failures.length
   ? `\nне прошло: ${failures.length}`
   : '\nпроверки подбора пройдены');

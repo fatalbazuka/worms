@@ -1,5 +1,6 @@
 import { SPRITE_META } from './sprite-meta.js';
 import { BIOMES } from './biomes.js';
+import { SKINS } from './skins.js';
 
 /**
  * Манифест спрайтов.
@@ -65,23 +66,29 @@ for (const b of BIOMES) {
  * `rotational: true` означает, что кадры — это не анимация, а 32
  * предрассчитанных поворота (кадр выбирается по направлению полёта).
  */
+/**
+ * Анимации листа бойца: у всех скинов одна раскладка кадров, отличается
+ * только имя листа — оно же приставка к именам анимаций.
+ */
+function fighterAnims(sheet) {
+  return {
+    [`${sheet}_idle`]: { frameRate: 6, repeat: -1, frames: [0, 0, 0, 2, 0, 3, 0, 0, 0, 0, 1, 0, 0, 2, 0, 3] },
+    [`${sheet}_walk`]: { frameRate: 12, repeat: -1, frames: [4, 5, 6, 7] },
+    [`${sheet}_fall`]: { frameRate: 6, repeat: -1, frames: [6, 9] },
+    [`${sheet}_fly`]: { frameRate: 1, repeat: -1, frames: [8] },
+    [`${sheet}_hurt`]: { frameRate: 1, repeat: -1, frames: [10] },
+    [`${sheet}_dizzy`]: { frameRate: 1, repeat: -1, frames: [11] },
+    [`${sheet}_aim`]: { frameRate: 1, repeat: -1, frames: [12] },
+    [`${sheet}_win`]: { frameRate: 5, repeat: -1, frames: [13, 3] },
+    [`${sheet}_cry`]: { frameRate: 1, repeat: -1, frames: [14] },
+  };
+}
+
 export const SHEETS = {
-  // Боец-смайлик: один лист на все позы (tools/build_smiley.py). Если он
-  // загрузился, бойцы рисуются им, а червяки ниже остаются запасными.
-  // Анимации — наборы кадров по номерам, а не подряд идущие отрезки.
-  smiley: {
-    anims: {
-      smiley_idle: { frameRate: 6, repeat: -1, frames: [0, 0, 0, 2, 0, 3, 0, 0, 0, 0, 1, 0, 0, 2, 0, 3] },
-      smiley_walk: { frameRate: 12, repeat: -1, frames: [4, 5, 6, 7] },
-      smiley_fall: { frameRate: 6, repeat: -1, frames: [6, 9] },
-      smiley_fly: { frameRate: 1, repeat: -1, frames: [8] },
-      smiley_hurt: { frameRate: 1, repeat: -1, frames: [10] },
-      smiley_dizzy: { frameRate: 1, repeat: -1, frames: [11] },
-      smiley_aim: { frameRate: 1, repeat: -1, frames: [12] },
-      smiley_win: { frameRate: 5, repeat: -1, frames: [13, 3] },
-      smiley_cry: { frameRate: 1, repeat: -1, frames: [14] },
-    },
-  },
+  // Боец-смайлик и его скины: по листу на все позы (tools/build_smiley.py).
+  // Если лист загрузился, бойцы рисуются им, а червяки ниже остаются
+  // запасными. Анимации — наборы кадров по номерам, а не отрезки подряд.
+  ...Object.fromEntries(SKINS.map((s) => [s.sheet, { anims: fighterAnims(s.sheet) }])),
   worm_idle: { anims: { worm_idle: { frameRate: 10, repeat: -1 } } },
   worm_walk: { anims: { worm_walk: { frameRate: 18, repeat: -1 } } },
   worm_fall: { anims: { worm_fall: { frameRate: 8, repeat: -1 } } },
@@ -128,9 +135,8 @@ export function has(scene, key) {
  * уменьшается на экране, originY — где в кадре линия ног, ghost — кадр
  * призрака.
  */
-const EXTRA_META = {
-  smiley: { frameWidth: 100, frameHeight: 100, frames: 16, originY: 0.92, scale: 0.52, ghost: 15 },
-};
+const FIGHTER_META = { frameWidth: 100, frameHeight: 100, frames: 16, originY: 0.92, scale: 0.52, ghost: 15 };
+const EXTRA_META = Object.fromEntries(SKINS.map((s) => [s.sheet, FIGHTER_META]));
 
 export function meta(key) {
   return SPRITE_META[key] ?? EXTRA_META[key] ?? null;

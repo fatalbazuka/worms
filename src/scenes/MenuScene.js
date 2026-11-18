@@ -22,6 +22,9 @@ import { leagueOf, nextLeague, leagueProgress, toNextLeague, leagueLabel } from 
 import { BOT_LEVELS } from '../ai/Bot.js';
 import { isDesktop, setUiMode } from '../platform/device.js';
 import { sfx } from '../audio/Sfx.js';
+import { SKINS, SKIN_BY_ID, rewardMissions } from '../core/skins.js';
+import { skinState, equippedSkin, equipSkin, openSkinBox, syncCampaignBoxes } from '../platform/skins.js';
+import { fitScale } from '../core/assets.js';
 
 /**
  * Меню.
@@ -66,6 +69,8 @@ export default class MenuScene extends Phaser.Scene {
     this.events.on('addedtoscene', assignCamera);
     this.events.once('shutdown', () => this.events.off('addedtoscene', assignCamera));
     this._backdrop();
+    // Коробки за миссии, пройденные раньше, чем появились скины
+    syncCampaignBoxes();
     this.showRoot();
 
     // Вернулись из турнирного матча — сразу к сетке. Пришли по кнопке бота
@@ -431,21 +436,163 @@ export default class MenuScene extends Phaser.Scene {
     // --- твой боец ---
     const areaTop = top + 196;
     const areaH = areaBottom - areaTop;
-    if (areaH > 110 && this.textures.exists('smiley')) {
+    const sheet = this.textures.exists(equippedSkin().sheet) ? equippedSkin().sheet : 'smiley';
+    if (areaH > 110 && this.textures.exists(sheet)) {
       const k = Phaser.Math.Clamp(areaH / 175, 1, 2.8);
       const fy = areaTop + areaH * 0.6;
       this.items.push(this.add.ellipse(cx, fy + 6 * k, 130 * k, 20 * k, 0x000000, 0.28));
-      const hero = this.add.sprite(cx, fy, 'smiley', 0).setOrigin(0.5, 0.92).setScale(k).setFlipX(true);
-      hero.play('smiley_idle');
-      // Тапнул по бойцу — он радуется. Мелочь, но экран от неё живой
+      const hero = this.add.sprite(cx, fy, sheet, 0).setOrigin(0.5, 0.92).setScale(k).setFlipX(true);
+      hero.play(`${sheet}_idle`);
+      // Тап по бойцу — к его скинам
       hero.setInteractive({ useHandCursor: true });
-      hero.on('pointerdown', () => {
-        haptic('tap');
-        hero.play('smiley_win');
-        this.time.delayedCall(900, () => { if (hero.active) hero.play('smiley_idle'); });
-      });
+      hero.on('pointerdown', () => { haptic('tap'); this.showSkins(); });
       this.items.push(hero);
+      this.buttons.hero = { x: cx, y: fy - 40 * k + this.oy, w: 100 * k, h: 90 * k, enabled: true };
+
+      // Подпись под бойцом и коробка, если есть неоткрытая: она
+      // подпрыгивает, чтобы её заметили
+      const st = skinState();
+      this.items.push(this.add.text(cx, fy + 22 * k, `скин: ${equippedSkin().name} · ${st.owned.length} из ${SKINS.length}`,
+        font(18, 700, UI.textDim)).setOrigin(0.5, 0));
+      if (st.boxes > 0 && this.textures.exists('shot_crate_weapon')) {
+        const bx = cx + 78 * k, by = fy - 8 * k;
+        const box = this.add.image(bx, by, 'shot_crate_weapon').setOrigin(0.5, 1)
+          .setScale(fitScale(this, 'shot_crate_weapon', 46 * k));
+        box.setInteractive({ useHandCursor: true });
+        box.on('pointerdown', () => { haptic('tap'); this.showSkins(); });
+        this.tweens.add({ targets: box, y: by - 10 * k, duration: 420, yoyo: true, repeat: -1, ease: 'Sine.easeInOut' });
+        const badge = this.add.text(bx + 22 * k, by - 46 * k, `×${st.boxes}`, font(22, 800, '#1a1408'))
+          .setOrigin(0.5).setPadding(8, 2, 8, 2).setBackgroundColor('#ffe27a');
+        this.items.push(box, badge);
+        this.buttons.box = { x: bx, y: by - 20 * k + this.oy, w: 50 * k, h: 46 * k, enabled: true };
+      }
     }
+  }
+
+  // --------------------------------------------------------------- скины
+
+  /**
+   * Скины бойца: что надето, что собрано, что ещё закрыто, и коробки.
+   * Закрытые показаны тёмным силуэтом — видно, что там кто-то есть, но не
+   * кто именно: открытие коробки остаётся сюрпризом.
+   */
+  showSkins() {
+    this.section = this.showSkins;
+    this._clear();
+    const st = skinState();
+    this._title('Скины', `собрано ${st.owned.length} из ${SKINS.length}`);
+    const W = this.W, cx = W / 2;
+
+    // --- коробки ---
+    const full = st.owned.length >= SKINS.length;
+    const boxY = 186;
+    if (this.textures.exists('shot_crate_weapon')) {
+      this.items.push(this.add.image(cx - 190, boxY, 'shot_crate_weapon')
+        .setScale(fitScale(this, 'shot_crate_weapon', 72)).setAlpha(st.boxes > 0 ? 1 : 0.4));
+    }
+    this.items.push(this.add.text(cx - 140, boxY - 24, `Коробок: ${st.boxes}`, font(24, 800)).setOrigin(0, 0));
+    this.items.push(this.add.text(cx - 140, boxY + 8,
+      full ? 'все скины собраны' : st.boxes > 0 ? 'внутри — случайный скин' : 'дают за миссии кампании',
+      font(17, 700, UI.textDim)).setOrigin(0, 0));
+    this._button('open-box', cx + 190, boxY, 'Открыть', '', () => this._openBox(),
+      { w: 170, h: 64, variant: 'primary', enabled: st.boxes > 0 && !full, titleSize: 24 });
+
+    // --- сетка скинов ---
+    const cols = this.portrait ? 4 : 8;
+    const cw = Math.min(170, Math.floor((W - 40) / cols));
+    const ch = cw + 34;
+    const x0 = cx - (cols * cw) / 2 + cw / 2;
+    const y0 = 270 + ch / 2;
+    SKINS.forEach((skin, i) => {
+      const x = x0 + (i % cols) * cw, y = y0 + Math.floor(i / cols) * (ch + 10);
+      const owned = st.owned.includes(skin.id);
+      const on = st.equipped === skin.id;
+      const key = `menu-skin-${cw - 10}x${ch}-${on ? 'active' : 'normal'}`;
+      ensureButton(this, key, cw - 10, ch, on ? 'active' : 'normal');
+      const plate = this.add.image(x, y, key).setAlpha(owned ? 1 : 0.5);
+      this.items.push(plate);
+      const sheet = this.textures.exists(skin.sheet) ? skin.sheet : 'smiley';
+      const face = this.add.sprite(x, y + cw * 0.22, sheet, 0).setOrigin(0.5, 0.92)
+        .setScale((cw - 30) / 100).setFlipX(true);
+      if (owned) face.play(`${sheet}_idle`);
+      else face.setTintFill(0x10141f).setAlpha(0.85);
+      this.items.push(face);
+      this.items.push(this.add.text(x, y + ch / 2 - 16, owned ? (on ? 'надет' : skin.name) : '???',
+        font(17, 800, on ? '#2a1c06' : owned ? UI.text : UI.textDim)).setOrigin(0.5));
+      if (owned) {
+        plate.setInteractive({ useHandCursor: true });
+        plate.on('pointerup', () => { haptic('select'); equipSkin(skin.id); this.showSkins(); });
+      }
+      this.buttons[`skin-${skin.id}`] = { x, y: y + this.oy, w: cw - 10, h: ch, enabled: owned };
+    });
+    this._back();
+  }
+
+  /**
+   * Открытие коробки: она трясётся, лопается, из неё выскакивает скин.
+   * Что выпадет, решается сразу; анимация только показывает.
+   */
+  _openBox() {
+    const res = openSkinBox();
+    if (!res.skin) { this.showSkins(); return; }
+    const skin = SKIN_BY_ID[res.skin];
+    const W = this.W, H = this.H, cx = W / 2;
+    const cy = this.topY(H * 0.42);
+    const layer = [];
+    const add = (o) => { o.setDepth(50); layer.push(o); this.items.push(o); return o; };
+
+    // Затемнение ловит касания: под ним ничего нажать нельзя
+    const shade = add(this.add.rectangle(0, this.topY(0), W, H, 0x05070c, 0.82).setOrigin(0, 0));
+    shade.setInteractive();
+    const box = add(this.add.image(cx, cy, 'shot_crate_weapon')
+      .setScale(fitScale(this, 'shot_crate_weapon', 190)));
+    haptic('tap');
+    sfx.play('crateDrop');
+    this.tweens.add({ targets: box, angle: { from: -9, to: 9 }, duration: 90, yoyo: true, repeat: 7 });
+    this.tweens.add({ targets: box, scale: box.scale * 1.18, duration: 1300, ease: 'Quad.easeIn' });
+
+    this.time.delayedCall(1350, () => {
+      if (!box.active) return;
+      box.destroy();
+      haptic('win');
+      sfx.play('pickup');
+      sfx.play('explosion', { radius: 30 });
+      // Вспышка, лучи и конфетти
+      const flash = add(this.add.circle(cx, cy, 40, 0xffffff, 0.95));
+      this.tweens.add({ targets: flash, radius: 420, alpha: 0, duration: 500, ease: 'Cubic.easeOut' });
+      if (!this.textures.exists('fx-dot')) {
+        const tex = this.textures.createCanvas('fx-dot', 12, 12);
+        const c = tex.getContext();
+        c.fillStyle = '#ffffff';
+        c.beginPath(); c.arc(6, 6, 5.5, 0, Math.PI * 2); c.fill();
+        tex.refresh();
+      }
+      const em = add(this.add.particles(cx, cy, 'fx-dot', {
+        speed: { min: 160, max: 520 }, angle: { min: 0, max: 360 }, gravityY: 520,
+        lifespan: { min: 900, max: 1700 }, scale: { start: 1.3, end: 0.4 },
+        tint: [0xff5a5a, 0x5aa9ff, 0x6ee36e, 0xffd45a, 0xff8ad4, 0xffffff], emitting: false,
+      }));
+      em.explode(70);
+
+      const sheet = this.textures.exists(skin.sheet) ? skin.sheet : 'smiley';
+      const hero = add(this.add.sprite(cx, cy + 70, sheet, 0).setOrigin(0.5, 0.92).setScale(0.2).setFlipX(true));
+      hero.play(`${sheet}_win`);
+      this.tweens.add({ targets: hero, scale: 3, duration: 520, ease: 'Back.easeOut' });
+      add(this.add.text(cx, cy - 200, 'Новый скин!', font(26, 800, UI.textDim)).setOrigin(0.5));
+      const name = add(this.add.text(cx, cy + 120, skin.name, font(48, 800, UI.accent)).setOrigin(0.5).setScale(0.3));
+      this.tweens.add({ targets: name, scale: 1, duration: 420, delay: 180, ease: 'Back.easeOut' });
+
+      const btn = (key, dx, label, variant, onTap) => {
+        const before = this.items.length;
+        this._button(key, cx + dx, cy + 230, label, '', onTap, { w: 250, h: 78, variant, titleSize: 26 });
+        for (const o of this.items.slice(before)) o.setDepth(51);
+      };
+      this.time.delayedCall(600, () => {
+        if (this.section !== this.showSkins) return;
+        btn('skin-wear', -140, 'Надеть', 'primary', () => { equipSkin(skin.id); this.showSkins(); });
+        btn('skin-later', 140, 'Потом', 'normal', () => this.showSkins());
+      });
+    });
   }
 
   // -------------------------------------------------------------- режимы
@@ -573,6 +720,8 @@ export default class MenuScene extends Phaser.Scene {
     const y0 = roomy ? 178 : 168;
     const colX = roomy ? [this.W / 2] : [this.W / 2 - w / 2 - 14, this.W / 2 + w / 2 + 14];
 
+    const rewards = new Set(rewardMissions(MISSIONS.map((mm) => mm.id)));
+    const claimed = new Set(skinState().claimed);
     MISSIONS.forEach((m, i) => {
       const open = isUnlocked(i, done);
       const mark = done.has(m.id) ? ' ✓' : '';
@@ -586,6 +735,13 @@ export default class MenuScene extends Phaser.Scene {
         roomy
           ? { enabled: open, variant: next ? 'primary' : 'normal', w, h: 82, titleSize: 25, hintSize: 17 }
           : { enabled: open, variant: next ? 'primary' : 'normal', w, h: 60 });
+      // Миссии с наградой помечены коробкой, пока она не получена
+      if (rewards.has(m.id) && !claimed.has(m.id) && this.textures.exists('shot_crate_weapon')) {
+        const size = roomy ? 44 : 32;
+        this.items.push(this.add.image(colX[Math.floor(i / rows)] + w / 2 - size * 0.8,
+          y0 + step * (i % rows), 'shot_crate_weapon')
+          .setScale(fitScale(this, 'shot_crate_weapon', size)).setAlpha(open ? 1 : 0.5));
+      }
     });
     this._back(() => this.showModes());
   }

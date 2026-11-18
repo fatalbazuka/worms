@@ -83,16 +83,20 @@ export class Worm {
   _buildView() {
     const s = this.scene;
     const color = TEAM_COLORS[this.team % TEAM_COLORS.length];
-    this.smiley = has(s, 'smiley');
+    // Лист бойца — скин его команды (сцена знает, чей); нет такого листа —
+    // обычный смайлик, нет и его — червяк
+    const wanted = s.skinFor?.(this.team) ?? 'smiley';
+    this.sheet = has(s, wanted) ? wanted : 'smiley';
+    this.smiley = has(s, this.sheet);
     this.sprited = this.smiley || has(s, 'worm_idle');
 
     if (this.smiley) {
       // Смайлик: один лист на все позы, рисуется вдвое мельче кадра
-      const m = meta('smiley');
-      this.view = s.add.sprite(this.x, this.y, 'smiley', 0).setScale(m.scale);
+      const m = meta(this.sheet);
+      this.view = s.add.sprite(this.x, this.y, this.sheet, 0).setScale(m.scale);
       this.view.setOrigin(0.5, m.originY);
-      this.view.play('smiley_idle');
-      this.anim = 'smiley_idle';
+      this.view.play(`${this.sheet}_idle`);
+      this.anim = `${this.sheet}_idle`;
       // Смайлики одинаковые, поэтому команду красим контуром: цветное
       // свечение видно и на земле, и на стене, и в полёте. Нет WebGL —
       // нет свечения, тогда остаётся кольцо у ног (ниже)
@@ -153,7 +157,7 @@ export class Worm {
   /** Переключить анимацию, если она отличается от текущей. */
   _setAnim(name) {
     // Имена анимаций исторически червячьи; у смайлика тот же набор и свои
-    const key = this.smiley ? name.replace('worm_', 'smiley_') : name;
+    const key = this.smiley ? name.replace('worm_', `${this.sheet}_`) : name;
     if (!this.sprited || this.anim === key) return;
     this.anim = key;
     this.view.play(key, true);
@@ -627,8 +631,8 @@ export class Worm {
   /** Призрак: поднимается с места гибели и тает. */
   _ghost() {
     const s = this.scene;
-    const m = meta('smiley');
-    const g = s.rig.world(s.add.image(this.x, this.centerY, 'smiley', m.ghost)
+    const m = meta(this.sheet);
+    const g = s.rig.world(s.add.image(this.x, this.centerY, this.sheet, m.ghost)
       .setScale(m.scale).setDepth(DEPTH.WORM + 4).setAlpha(0.95));
     if (g.setFlipX) g.setFlipX(this.facing > 0);
     s.tweens.add({
@@ -661,7 +665,7 @@ export class Worm {
     this._syncHeld(rx);
     // Сплющивание и вытягивание: приземлился, получил, прыгнул. Затухает
     // само за несколько кадров; знак минус — вытянут вверх
-    const base = this.smiley ? meta('smiley').scale : 1;
+    const base = this.smiley ? meta(this.sheet).scale : 1;
     const sq = this.squash ?? 0;
     this.view.setScale(base * (1 + 0.24 * sq), base * (1 - 0.24 * sq));
     this.squash = Math.abs(sq) < 0.02 ? 0 : sq * 0.82;
@@ -720,7 +724,7 @@ export class Worm {
  */
 Worm.prototype._syncSmiley = function _syncSmiley(rx, ry) {
   const scene = this.scene;
-  const m = meta('smiley');
+  const m = meta(this.sheet);
   const now = scene.time.now;
   if (this.zip) {
     const dx = this.zip.ax - this.x, dy = this.zip.ay - this.centerY;

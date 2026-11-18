@@ -1,7 +1,11 @@
 #!/usr/bin/env python3
 """Собрать спрайты бойца-смайлика из листа 4x4 на зелёном фоне.
 
-    python3 tools/build_smiley.py [assets/raw/smiley/sheet.png]
+    python3 tools/build_smiley.py            # основной смайлик и все скины
+    python3 tools/build_smiley.py лист.png выход.png
+
+Скины — листы той же раскладки в assets/raw/skins/<имя>.png; на выходе
+assets/skin_<имя>.png. Список скинов для игры — src/core/skins.js.
 
 На входе — картинка от генератора: 16 клеток, фон #00FF00, персонаж смотрит
 вправо. На выходе — assets/smiley.png: горизонтальная лента из 16 кадров
@@ -20,11 +24,12 @@ CELL x CELL с прозрачным фоном, персонаж смотрит 
 """
 import sys
 from pathlib import Path
-from PIL import Image
+from PIL import Image, ImageFilter
 
 ROOT = Path(__file__).resolve().parent.parent
-SRC = Path(sys.argv[1]) if len(sys.argv) > 1 else ROOT / 'assets/raw/smiley/sheet.png'
+SRC = ROOT / 'assets/raw/smiley/sheet.png'
 OUT = ROOT / 'assets/smiley.png'
+SKINS = ROOT / 'assets/raw/skins'
 
 GRID = 4
 CELL = 100          # кадр на выходе; на экране рисуется вдвое меньше
@@ -34,19 +39,32 @@ AIR = {5, 6, 13}    # в воздухе: высоту над линией ног
 
 
 def key_out(im):
-    """Убрать зелёный фон и зелёную кайму на сглаженных краях."""
+    """Убрать зелёный фон и зелёную кайму на сглаженных краях.
+
+    Фон — чистый яркий зелёный; персонаж тоже бывает зеленоватым (токсик в
+    пятнах), поэтому «всё зелёное прозрачно» не годится. Фоном считается
+    только насыщенный зелёный, а смягчение каймы применяется лишь в двух
+    пикселях от него — пятна внутри персонажа остаются как есть.
+    """
     im = im.convert('RGBA')
-    px = im.load()
     w, h = im.size
-    for y in range(h):
-        for x in range(w):
-            r, g, b, _ = px[x, y]
-            spill = g - max(r, b)
-            if spill <= 24:
-                continue
-            # Чем зеленее, тем прозрачнее; сам цвет — без зелёной примеси
+    data = list(im.getdata())
+    bg = Image.new('L', (w, h))
+    bg.putdata([255 if (g > 170 and r < 120 and b < 120 and g - max(r, b) > 90) else 0
+                for (r, g, b, _) in data])
+    near = list(bg.filter(ImageFilter.MaxFilter(5)).getdata())
+    out = []
+    for (r, g, b, _), is_bg, edge in zip(data, bg.getdata(), near):
+        if is_bg:
+            out.append((r, max(r, b), b, 0))
+            continue
+        spill = g - max(r, b)
+        if edge and spill > 24:
             a = max(0, min(255, int(255 * (1 - (spill - 24) / 150))))
-            px[x, y] = (r, max(r, b), b, a)
+            out.append((r, max(r, b), b, a))
+        else:
+            out.append((r, g, b, 255))
+    im.putdata(out)
     return im
 
 
@@ -54,10 +72,9 @@ def bbox(im):
     return im.split()[3].point(lambda v: 255 if v > 40 else 0).getbbox()
 
 
-def main():
-    sheet = key_out(Image.open(SRC))
+def build(src, out_path):
+    sheet = key_out(Image.open(src))
     step = sheet.width / GRID
-    scale = CELL / step
     cells = []
     for i in range(GRID * GRID):
         cx, cy = i % GRID, i // GRID
@@ -83,8 +100,17 @@ def main():
         frame = Image.new('RGBA', (CELL, CELL), (0, 0, 0, 0))
         frame.paste(art, (x, max(0, y)), art)
         out.paste(frame.transpose(Image.FLIP_LEFT_RIGHT), (i * CELL, 0))
-    out.save(OUT)
-    print(f'{OUT.relative_to(ROOT)}: {len(cells)} кадров {CELL}x{CELL}, масштаб {scale:.3f}')
+    out.save(out_path)
+    print(f'{Path(out_path).name}: {len(cells)} кадров {CELL}x{CELL}')
+
+
+def main():
+    if len(sys.argv) > 2:
+        build(Path(sys.argv[1]), Path(sys.argv[2]))
+        return
+    build(SRC, OUT)
+    for src in sorted(SKINS.glob('*.png')):
+        build(src, ROOT / f'assets/skin_{src.stem}.png')
 
 
 if __name__ == '__main__':
