@@ -233,7 +233,24 @@ async function playersTab() {
     } catch (e) { clear(list).append(h('div', { class: 'msg err' }, e.message)); }
   };
   q.addEventListener('keydown', (e) => { if (e.key === 'Enter') find(); });
-  clear(app).append(h('div', { class: 'row', style: 'margin-bottom:14px' }, q, h('button', { class: 'btn primary', onclick: find }, 'Найти')),
+  // Аккаунт только для сайта — для тех, у кого нет Telegram
+  const nl = h('input', { placeholder: 'логин (латиница)', autocomplete: 'off', style: 'width:170px' });
+  const nn = h('input', { placeholder: 'имя в игре (можно пусто)', style: 'width:200px' });
+  const np = h('input', { placeholder: 'пароль (пусто — придумаю)', autocomplete: 'new-password', style: 'width:210px' });
+  const nmsg = h('div', { class: 'msg' });
+  const create = h('button', { class: 'btn primary', onclick: async () => {
+    try {
+      const r = await call('POST', 'admin/accounts', { login: nl.value, name: nn.value, password: np.value });
+      nmsg.className = 'msg ok';
+      nmsg.textContent = `Готово: «${r.name}», логин ${r.login}${r.password ? `, пароль ${r.password}` : ''}. Вход — на сайте игры.`;
+      nl.value = ''; nn.value = ''; np.value = '';
+      q.value = r.login; selected = r.id; find(); showPlayer(side, r.id);
+    } catch (e) { nmsg.className = 'msg err'; nmsg.textContent = e.message; }
+  } }, 'Создать');
+  clear(app).append(
+    h('div', { class: 'card' }, h('h3', {}, 'Новый аккаунт для сайта (без Telegram)'),
+      h('div', { class: 'row' }, nl, nn, np, create), nmsg),
+    h('div', { class: 'row' }, q, h('button', { class: 'btn primary', onclick: find }, 'Найти')),
     h('div', { class: 'split' }, list, side));
   find();
   if (selected) showPlayer(side, selected);
@@ -276,6 +293,7 @@ async function showPlayer(box, id) {
       h('div', { class: 'row' }, h('h2', { style: 'margin:0' }, p.name),
         p.admin ? h('span', { class: 'tag gold' }, 'админ') : null,
         p.banned_at ? h('span', { class: 'tag red' }, `бан с ${fmtDate(p.banned_at)}`) : h('span', { class: 'tag green' }, 'активен'),
+        p.tg_id ? null : h('span', { class: 'tag' }, 'только сайт'),
         h('span', { style: 'margin-left:auto' }, banBtn)),
       h('table', { style: 'margin-top:10px' },
         kv('id', p.id), kv('Telegram ID', p.tg_id), kv('Рейтинг', `${p.rating} · ${p.wins}–${p.losses} · турниров выиграно ${p.tourney_wins}`),
@@ -286,6 +304,7 @@ async function showPlayer(box, id) {
         kv('Скины', g.skins ? `${g.skins.length}: ${g.skins.join(', ')}${g.equipped ? ` · надет ${g.equipped}` : ''}` : null),
         kv('«Подъём»', g.ascent != null ? `пройдено ${g.ascent} из 20` : null)),
       h('div', { class: 'sub', style: 'margin-top:6px' }, 'Прогресс — из копии на сервере, может отставать на минуту.')),
+    passCard(p, box, id),
     h('div', { class: 'card' }, h('h3', {}, 'Подарок'),
       h('div', { class: 'row' }, h('label', {}, 'монеты', coins), h('label', {}, 'коробки', boxes), h('label', {}, 'скин', skin)),
       h('div', { class: 'row', style: 'margin-top:8px' }, note, h('label', { style: 'flex-direction:row;align-items:center;gap:6px' }, notify, 'написать в бот'), giftBtn),
@@ -306,6 +325,22 @@ async function showPlayer(box, id) {
       c.events.length ? h('table', {}, c.events.map((x) => h('tr', {},
         h('td', { class: 'sub', style: 'width:110px' }, fmtDate(x.created_at)), h('td', {}, x.name), h('td', { class: 'sub' }, x.props ?? '')))) : h('p', { class: 'muted' }, 'нет')),
   );
+}
+
+/** Вход на сайт: логин и новый пароль (свой или придуманный). */
+function passCard(p, box, id) {
+  const login = h('input', { value: p.name_key ?? '', placeholder: 'логин', autocomplete: 'off', style: 'width:170px' });
+  const pass = h('input', { placeholder: 'новый пароль (пусто — придумаю)', autocomplete: 'new-password', style: 'width:230px' });
+  const msg = h('div', { class: 'msg' });
+  return h('div', { class: 'card' }, h('h3', {}, 'Вход на сайт'),
+    h('div', { class: 'row' }, login, pass, h('button', { class: 'btn', onclick: async () => {
+      try {
+        const r = await call('POST', 'admin/password', { id: p.id, login: login.value, password: pass.value });
+        msg.className = 'msg ok';
+        msg.textContent = `Логин ${r.login}${r.password ? `, пароль ${r.password}` : ', пароль задан'} — старый пароль больше не подходит`;
+        pass.value = '';
+      } catch (e) { msg.className = 'msg err'; msg.textContent = e.message; }
+    } }, p.name_key ? 'Сменить пароль' : 'Выдать вход')), msg);
 }
 
 // ------------------------------------------------------------- турниры

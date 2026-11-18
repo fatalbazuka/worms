@@ -295,6 +295,35 @@ check('башня дня в Telegram: попытка в таблице, мест
   await W.close();
 }
 
+// --- аккаунт только для сайта (без Telegram): вход, меню, бой ---
+{
+  app.players.createWeb('exs', 'Экс', hashPassword('exs123'));
+  const X = await browsers[1].newPage({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true });
+  X.on('pageerror', (e) => errors.push(`[сайт без tg] pageerror: ${e.message}`));
+  await X.addInitScript(() => { globalThis.WORMS_TELEGRAM_ONLY = true; });
+  await X.goto(URL, { waitUntil: 'domcontentloaded' });
+  await X.waitForSelector('#gate-login', { state: 'visible', timeout: 15000 });
+  await X.fill('#gate-login input[name=login]', 'exs');
+  await X.fill('#gate-login input[name=password]', 'exs123');
+  await X.click('#gate-login button');
+  await X.waitForFunction(() => window.__WORMS__?.scene.isActive('Menu'), null, { timeout: 40000 });
+  const who = await X.evaluate(async () => {
+    const { player } = await import('/src/platform/player.js');
+    const m = window.__WORMS__.scene.getScene('Menu');
+    m.start({ mode: 'quick', teams: [{ worms: 2, control: 'human' }, { worms: 2, control: 'bot', bot: 'rookie' }], rules: {} });
+    return { id: player().id, name: player().name };
+  });
+  // Бой пошёл: сцена боя открыта и ход у кого-то из бойцов (первым может ходить и бот)
+  const fought = await X.waitForFunction(() => {
+    const g = window.__WORMS__.scene;
+    return g.isActive('Game') && Boolean(g.getScene('Game').turn?.activeWorm);
+  }, null, { timeout: 60000 })
+    .then(() => true).catch(() => false);
+  check('аккаунт без Telegram: вход логином на сайте, меню и бой работают',
+    /^u[0-9a-f]+$/.test(who.id) && who.name === 'Экс' && fought, JSON.stringify(who));
+  await X.close();
+}
+
 check('нет ошибок в консоли', errors.length === 0, errors.slice(0, 4).join(' | '));
 
 await Promise.all(browsers.map((b) => b.close()));

@@ -372,6 +372,8 @@ export function createApp({
       }
       case 'POST /api/admin/ban': return fail(admin.setBan(body.id, Boolean(body.ban)), 409);
       case 'POST /api/admin/gift': return fail(await admin.gift(body.id, body));
+      case 'POST /api/admin/accounts': return fail(admin.createAccount(body), 409);
+      case 'POST /api/admin/password': return fail(admin.setPassword(body.id, body), 409);
       case 'GET /api/admin/tours': return { items: admin.tours() };
       case 'POST /api/admin/tours': {
         try {
