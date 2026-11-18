@@ -3,7 +3,9 @@
   assets/raw/tower_items_sheet.png — 4×3: оружие башни, камень, слизень,
       кактус, тролль-Великан в трёх позах;
   assets/raw/bosses_sheet.png — 4×2: йети и лавовый голем в трёх позах и
-      их снаряды (снежок, огненный шар).
+      их снаряды (снежок, огненный шар);
+  assets/raw/affixes_sheet.png — 4×2: эффекты аффиксов (жерло в трёх
+      стадиях, сосульки и их осколки, молния и её удар, гравитационная воронка).
 
     python3 tools/build_tower_sheet.py
 
@@ -27,6 +29,10 @@ SHEETS = [
     ('bosses_sheet.png', 4, 2, [
         ('mon_yeti', 240), ('mon_yeti_throw', 240), ('mon_yeti_down', 200), ('shot_snowball', 84),
         ('mon_golem', 240), ('mon_golem_throw', 240), ('mon_golem_down', 200), ('shot_fireball', 70),
+    ]),
+    ('affixes_sheet.png', 4, 2, [
+        ('fx_vent1', 70), ('fx_vent2', 110), ('fx_geyser', 300), ('fx_icicles', 120),
+        ('fx_shatter', 100), ('fx_bolt', 320), ('fx_impact', 110), ('fx_vortex', 220),
     ]),
 ]
 
