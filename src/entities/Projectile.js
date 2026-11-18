@@ -1,4 +1,5 @@
 import { CFG, DEPTH } from '../config.js';
+import { item } from '../core/cosmetics.js';
 import { has, rotFrame, meta, fitScale } from '../core/assets.js';
 
 /**
@@ -317,9 +318,18 @@ export class Projectile {
     if (this.trail) {
       this.trail.clear();
       const pts = this.trailPts;
-      for (let i = 2; i < pts.length; i += 2) {
-        const a = (i / pts.length) * 0.45;
-        this.trail.lineStyle(2, this.weapon.color, a);
+      // След по украшению стрелка: свой цвет, радуга или точки-звёздочки
+      const cos = this.owner?.cos && item('trail', this.owner.cos.trail);
+      const n = pts.length;
+      for (let i = 2; i < n; i += 2) {
+        const a = (i / n) * (cos?.price ? 0.85 : 0.45);
+        let color = cos?.color ?? this.weapon.color;
+        if (cos?.rainbow) color = Phaser.Display.Color.HSVToRGB(((i / n) + this.age) % 1, 0.8, 1).color;
+        if (cos?.dots) {
+          if (i % 8 === 0) this.trail.fillStyle(color, a).fillCircle(pts[i], pts[i + 1], 3.5);
+          continue;
+        }
+        this.trail.lineStyle(cos?.price ? 3 : 2, color, a);
         this.trail.lineBetween(pts[i - 2], pts[i - 1], pts[i], pts[i + 1]);
       }
     }

@@ -9,7 +9,10 @@
  *     BATTLE_COIN_LIMIT боёв в сутки, иначе монеты фармились бы о ботов;
  *   • первый вход за день — бонус серии; каждый седьмой день подряд —
  *     коробка со скином, монеты после седьмого дня держатся на максимуме;
- *   • коробку можно купить за BOX_PRICE монет.
+ *   • коробку можно купить за BOX_PRICE монет;
+ *   • заморозка серии: пропустил один день — серия не сгорает, если есть
+ *     заморозка. Одна приходит бесплатно каждую неделю, ещё — за
+ *     FREEZE_PRICE монет; больше FREEZE_MAX держать нельзя.
  *
  * Все функции чистые: берут состояние и «сегодня», возвращают новое. Где
  * оно лежит, решает platform/daily.js. День — строка YYYY-MM-DD по
@@ -24,6 +27,8 @@ export const TASKS_PER_DAY = 3;
 /** Награда за серию: день 1…7, дальше — седьмая. Каждый 7-й день — коробка. */
 export const STREAK_COINS = [20, 30, 40, 50, 60, 80, 120];
 export const STREAK_BOX_DAY = 7;
+export const FREEZE_PRICE = 200;
+export const FREEZE_MAX = 3;
 
 /**
  * Задания. stat — счётчик из боя (см. GameScene.battleStats), goal — сколько
@@ -63,6 +68,13 @@ export function prevDay(day) {
   return dayKey(new Date(y, m - 1, d - 1));
 }
 
+/** Неделя дня day: понедельник этой недели. */
+export function weekKey(day) {
+  const [y, m, d] = day.split('-').map(Number);
+  const t = new Date(y, m - 1, d);
+  return dayKey(new Date(y, m - 1, d - ((t.getDay() + 6) % 7)));
+}
+
 /** Простой генератор от строки — чтобы выбор заданий зависел только от даты. */
 function seeded(str) {
   let h = 2166136261;
@@ -94,6 +106,8 @@ export function emptyState() {
     battlesToday: 0,    // сколько боёв сегодня уже принесли монеты
     streak: 0,          // дней подряд
     streakDay: null,    // день, за который бонус серии уже забран
+    freezes: 0,         // заморозки серии в запасе
+    freezeWeek: null,   // неделя, за которую бесплатная заморозка уже выдана
   };
 }
 
@@ -111,6 +125,8 @@ export function normalize(raw) {
   st.battlesToday = int(raw.battlesToday, 1000);
   st.streak = int(raw.streak, 10000);
   st.streakDay = typeof raw.streakDay === 'string' ? raw.streakDay : null;
+  st.freezes = int(raw.freezes, FREEZE_MAX);
+  st.freezeWeek = typeof raw.freezeWeek === 'string' ? raw.freezeWeek : null;
   return st;
 }
 
@@ -175,20 +191,46 @@ export function streakReady(state, day) {
 }
 
 /**
- * Бонус за вход: вчера забирал — серия растёт, пропустил день — с начала.
- * @returns {{state, coins, box: boolean, streak: number}}
+ * Бонус за вход: вчера забирал — серия растёт; пропустил ровно один день и
+ * есть заморозка — тоже растёт, заморозка тратится; иначе — с начала.
+ * Новая неделя — бесплатная заморозка (если запас не полон).
+ * @returns {{state, coins, box: boolean, streak: number, frozen: boolean}}
  */
 export function claimStreak(state, day) {
-  if (!streakReady(state, day)) return { state, coins: 0, box: false, streak: state.streak };
-  const streak = state.streakDay === prevDay(day) ? state.streak + 1 : 1;
+  if (!streakReady(state, day)) return { state, coins: 0, box: false, streak: state.streak, frozen: false };
+  let freezes = state.freezes ?? 0;
+  let freezeWeek = state.freezeWeek ?? null;
+  const week = weekKey(day);
+  if (freezeWeek !== week) { freezes = Math.min(FREEZE_MAX, freezes + 1); freezeWeek = week; }
+  let streak = 1;
+  let frozen = false;
+  if (state.streakDay === prevDay(day)) streak = state.streak + 1;
+  else if (state.streakDay === prevDay(prevDay(day)) && state.streak > 0 && freezes > 0) {
+    streak = state.streak + 1;
+    freezes -= 1;
+    frozen = true;
+  }
   const coins = STREAK_COINS[Math.min(streak, STREAK_COINS.length) - 1];
   const box = streak % STREAK_BOX_DAY === 0;
   return {
-    state: { ...state, streak, streakDay: day, coins: state.coins + coins },
+    state: { ...state, streak, streakDay: day, coins: state.coins + coins, freezes, freezeWeek },
     coins,
     box,
     streak,
+    frozen,
   };
+}
+
+/** Купить заморозку серии за монеты. */
+export function buyFreeze(state) {
+  if (state.coins < FREEZE_PRICE || (state.freezes ?? 0) >= FREEZE_MAX) return { state, ok: false };
+  return { state: { ...state, coins: state.coins - FREEZE_PRICE, freezes: (state.freezes ?? 0) + 1 }, ok: true };
+}
+
+/** Потратить монеты (украшения). */
+export function spendCoins(state, n) {
+  if (n <= 0 || state.coins < n) return { state, ok: false };
+  return { state: { ...state, coins: state.coins - n }, ok: true };
 }
 
 /** Списать цену коробки. ok: false — монет не хватает. */
@@ -221,6 +263,8 @@ export function mergeDaily(a, b) {
     battlesToday: other.day === later.day ? Math.max(x.battlesToday, y.battlesToday) : later.battlesToday,
     streak: streakSrc.streak,
     streakDay: streakSrc.streakDay,
+    freezes: streakSrc.freezes,
+    freezeWeek: (x.freezeWeek ?? '') >= (y.freezeWeek ?? '') ? x.freezeWeek : y.freezeWeek,
   };
 }
 

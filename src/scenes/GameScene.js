@@ -39,6 +39,8 @@ import { leagueOf, nextLeague, toNextLeague } from '../platform/league.js';
 import { OffscreenMarkers } from '../ui/OffscreenMarkers.js';
 import { SKIN_BY_ID, rivalSkin } from '../core/skins.js';
 import { equippedSkin, syncCampaignBoxes } from '../platform/skins.js';
+import { myCosmetics } from '../platform/cosmetics.js';
+import { DEFAULTS as DEFAULT_COS } from '../core/cosmetics.js';
 import { recordBattle } from '../platform/daily.js';
 import { TASK_BY_ID } from '../core/daily.js';
 import { EMOTE_BY_ID, EMOTE_COOLDOWN } from '../core/emotes.js';
@@ -228,6 +230,16 @@ export default class GameScene extends Phaser.Scene {
     const theirs = this.registry.get('net')?.opponent?.skin;
     const id = SKIN_BY_ID[theirs] ? theirs : rivalSkin(this.seed, team, mine.id);
     return SKIN_BY_ID[id].sheet;
+  }
+
+  /** Украшения команды: свои — надетые, соперник по сети — присланные, остальные — обычные. */
+  cosmeticsFor(team) {
+    const net = this.registry.get('net');
+    const myTeam = (net && this.myTeam != null)
+      ? this.myTeam
+      : Math.max(0, this.match.teams.findIndex((t) => t.control !== 'bot'));
+    if (team === myTeam && this.match.teams[team]?.control !== 'bot') return myCosmetics();
+    return net?.opponent?.cos ?? DEFAULT_COS;
   }
 
   // ------------------------------------------------------------ эмоции

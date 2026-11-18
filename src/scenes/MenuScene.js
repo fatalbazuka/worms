@@ -37,11 +37,14 @@ import {
   skinState, equippedSkin, equipSkin, openSkinBox, syncCampaignBoxes, applyServerOwned,
 } from '../platform/skins.js';
 import {
-  TASK_BY_ID, BOX_PRICE, STREAK_COINS, STREAK_BOX_DAY, streakReady, dayKey, prevDay as prevDayOf,
+  TASK_BY_ID, BOX_PRICE, STREAK_COINS, STREAK_BOX_DAY, streakReady, dayKey, claimStreak,
+  FREEZE_PRICE, FREEZE_MAX,
 } from '../core/daily.js';
 import {
-  dailyState, rewardWaiting, claimDailyTask, claimDailyStreak, buyBox,
+  dailyState, rewardWaiting, claimDailyTask, claimDailyStreak, buyBox, buyStreakFreeze,
 } from '../platform/daily.js';
+import { COSMETICS, KINDS, KIND_NAMES } from '../core/cosmetics.js';
+import { cosState, buyCosmetic, equipCosmetic } from '../platform/cosmetics.js';
 import { fitScale } from '../core/assets.js';
 
 /**
@@ -574,10 +577,9 @@ export default class MenuScene extends Phaser.Scene {
   _streakPopup() {
     const W = this.W, H = this.H, cx = W / 2;
     const st = dailyState();
-    const yesterday = st.streakDay && st.streakDay === prevDayOf(dayKey());
-    const day = yesterday ? st.streak + 1 : 1;
-    const coins = STREAK_COINS[Math.min(day, STREAK_COINS.length) - 1];
-    const box = day % STREAK_BOX_DAY === 0;
+    // Что даст «Забрать» — те же правила, что и само забирание (с заморозкой)
+    const pre = claimStreak(st, dayKey());
+    const day = pre.streak, coins = pre.coins, box = pre.box;
     const cy = this.topY(H * 0.42);
     const layer = [];
     const add = (o) => { o.setDepth(50); layer.push(o); this.items.push(o); return o; };
@@ -587,7 +589,8 @@ export default class MenuScene extends Phaser.Scene {
     ensureButton(this, `menu-streak-${pw}x${ph}`, pw, ph, 'normal');
     add(this.add.image(cx, cy, `menu-streak-${pw}x${ph}`));
     add(this.add.text(cx, cy - 160, `День ${day} подряд`, font(36, 800, UI.accent)).setOrigin(0.5));
-    add(this.add.text(cx, cy - 116, 'заходи каждый день — награда растёт', font(18, 700, UI.textDim)).setOrigin(0.5));
+    add(this.add.text(cx, cy - 116, pre.frozen ? 'вчера пропустил — заморозка спасла серию!' : 'заходи каждый день — награда растёт',
+      font(18, 700, pre.frozen ? '#8fe3ff' : UI.textDim)).setOrigin(0.5));
     // Семь кружков недели
     const n = STREAK_BOX_DAY, step = Math.min(78, (pw - 60) / n);
     const inWeek = ((day - 1) % n) + 1;
@@ -687,7 +690,7 @@ export default class MenuScene extends Phaser.Scene {
     if (wide) { cx = W * 0.79; y = 150; }
     y += 10;
     this.items.push(this.add.text(cx, y, st.streak > 0
-      ? `Серия: ${st.streak} ${plural(st.streak, 'день', 'дня', 'дней')} подряд · на ${STREAK_BOX_DAY}-й день — коробка`
+      ? `Серия: ${st.streak} ${plural(st.streak, 'день', 'дня', 'дней')} подряд · на ${STREAK_BOX_DAY}-й день — коробка · заморозок: ${st.freezes ?? 0}`
       : `Заходи каждый день: на ${STREAK_BOX_DAY}-й день подряд — коробка`,
       font(19, 700, UI.textDim)).setOrigin(0.5, 0).setAlign('center').setWordWrapWidth(wide ? W * 0.36 : cw));
 
@@ -710,7 +713,71 @@ export default class MenuScene extends Phaser.Scene {
           copyText(link);
         }
       }, { w: Math.min(cw, 460), h: 90, titleSize: 25, hintSize: 17, enabled: Boolean(link), variant: 'primary' });
+    // Куда тратить монеты, кроме коробок
+    this._button('cosmetics', cx, y + 212, 'Украшения', 'трос, след, надгробие · заморозка серии',
+      () => this.showCosmetics(), { w: Math.min(cw, 460), h: 90, titleSize: 25, hintSize: 17 });
     this._tabs('tasks');
+  }
+
+  // ------------------------------------------------------------ украшения
+
+  /**
+   * Украшения за монеты: по ряду на трос, след и надгробие. Купленное —
+   * тап, и надето; некупленное — цена, тап — купить и надеть. Внизу —
+   * заморозка серии.
+   */
+  showCosmetics() {
+    this.section = this.showCosmetics;
+    this._clear();
+    this._title('Украшения', 'на бой не влияют · соперник видит их тоже');
+    const W = this.W, cx = W / 2;
+    this._coinBadge(W - 40, 72, true);
+    const st = cosState();
+    const coins = dailyState().coins;
+    const toast = (msg, color = '#ff9a9a') => {
+      const t = this.add.text(cx, 150, msg, font(22, 800, color)).setOrigin(0.5).setDepth(60);
+      this.items.push(t);
+      this.tweens.add({ targets: t, alpha: 0, delay: 1400, duration: 400 });
+    };
+    let y = 176;
+    const rowH = this.portrait ? 92 : 70;
+    for (const kind of KINDS) {
+      this.items.push(this.add.text(cx, y, KIND_NAMES[kind], font(this.fs(15), 800, UI.accent)).setOrigin(0.5, 0));
+      y += 34;
+      const list = COSMETICS[kind];
+      const cols = this.portrait ? 3 : list.length;
+      const bw = Math.min(200, (W - 48 - (cols - 1) * 10) / cols), bh = rowH - 10;
+      list.forEach((it, i) => {
+        const x = cx + ((i % cols) - (cols - 1) / 2) * (bw + 10);
+        const yy = y + Math.floor(i / cols) * rowH + bh / 2;
+        const own = st.owned[kind].includes(it.id);
+        const on = st.equipped[kind] === it.id;
+        this._button(`cos-${kind}-${it.id}`, x, yy, it.name, on ? 'надето' : own ? 'надеть' : `${it.price} монет`, () => {
+          if (own) { equipCosmetic(kind, it.id); haptic('select'); this.showCosmetics(); return; }
+          const res = buyCosmetic(kind, it.id);
+          if (res === 'ok') { haptic('win'); sfx.play('pickup'); this.showCosmetics(); toast(`«${it.name}» куплено и надето`, '#8ef0a0'); return; }
+          haptic('warn'); toast('не хватает монет');
+        }, {
+          w: bw, h: bh, titleSize: this.portrait ? 21 : 18, hintSize: 15,
+          variant: on ? 'active' : 'normal', enabled: own || coins >= it.price,
+        });
+        // Образец цвета у троса и следа
+        if (it.color || it.rainbow) {
+          const c = it.rainbow ? 0xff7ad9 : it.color;
+          this.items.push(this.add.rectangle(x - bw / 2 + 12, yy, 8, bh - 22, c).setOrigin(0.5).setDepth(1));
+        }
+      });
+      y += Math.ceil(list.length / cols) * rowH + 12;
+    }
+    // Заморозка серии
+    const d = dailyState();
+    const full = (d.freezes ?? 0) >= FREEZE_MAX;
+    this._button('freeze', cx, y + 40, `Заморозка серии · ${FREEZE_PRICE}`,
+      `в запасе ${d.freezes ?? 0} из ${FREEZE_MAX} · спасает серию, если пропустил день · одна бесплатно в неделю`, () => {
+        if (buyStreakFreeze()) { haptic('win'); sfx.play('pickup'); this.showCosmetics(); toast('заморозка в запасе', '#8fe3ff'); return; }
+        haptic('warn'); toast(full ? 'запас полон' : 'не хватает монет');
+      }, { w: Math.min(W - 48, 620), h: 84, titleSize: 24, hintSize: 14, enabled: !full && d.coins >= FREEZE_PRICE });
+    this._back(() => this.showTasks());
   }
 
   /** Купить коробку и сразу перейти к скинам, где её можно открыть. */

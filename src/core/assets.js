@@ -59,7 +59,7 @@ IMAGES.mon_slime = 'assets/items/mon_slime.png';
  */
 export const EMOJI = ['pine', 'tree', 'palm', 'mushroom', 'rock', 'barrel', 'cactus', 'ogre',
   'slime', 'cloud', 'sun', 'mountain', 'herb', 'sunflower', 'bricks', 'box', 'volcano', 'ice',
-  'snowflake', 'fire', 'snowman'];
+  'snowflake', 'fire', 'snowman', 'blossom', 'headstone', 'skull', 'crown'];
 
 /** Текстуры ландшафта: по четыре файла на каждую тему из biomes.js. */
 for (const b of BIOMES) {

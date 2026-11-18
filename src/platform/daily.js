@@ -8,6 +8,7 @@
  */
 import {
   normalize, rollDay, addBattle, claimTask, claimStreak, payForBox, hasReward, dayKey, mergeDaily,
+  buyFreeze, spendCoins,
 } from '../core/daily.js';
 import { inTelegram, cloudGet, cloudSet } from './telegram.js';
 import { grantBoxes, allSkinsOwned } from './skins.js';
@@ -70,7 +71,7 @@ export function claimDailyStreak() {
   if (!res.coins) return null;
   save(res.state);
   if (res.box) grantBoxes(1);
-  return { coins: res.coins, box: res.box, streak: res.streak };
+  return { coins: res.coins, box: res.box, streak: res.streak, frozen: res.frozen };
 }
 
 /** Начислить монеты (звёзды испытаний). */
@@ -78,6 +79,20 @@ export function grantCoins(n) {
   if (!(n > 0)) return;
   const st = load();
   save({ ...st, coins: st.coins + Math.floor(n) });
+}
+
+/** Купить заморозку серии. @returns {boolean} */
+export function buyStreakFreeze() {
+  const res = buyFreeze(load());
+  if (res.ok) save(res.state);
+  return res.ok;
+}
+
+/** Списать монеты. @returns {boolean} хватило ли */
+export function payCoins(n) {
+  const res = spendCoins(load(), n);
+  if (res.ok) save(res.state);
+  return res.ok;
 }
 
 /**
