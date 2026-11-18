@@ -45,11 +45,15 @@ const THEMES = {
     props: ['rock', 'mushroom', 'bricks', 'box', 'barrel', 'barrel'],
     back: ['volcano', 'fire', 'mountain', 'cloud', 'volcano'],
   },
+  space: {
+    props: ['rock', 'gem', 'gem', 'satellite', 'rocket', 'barrel'],
+    back: ['planet', 'moon', 'star', 'comet', 'ufo'],
+  },
 };
 
 const SIZE = {
   tree: 84, pine: 84, palm: 88, mushroom: 52, herb: 46, sunflower: 62, rock: 52, box: 48,
-  barrel: 52, snowman: 70, ice: 48, bricks: 54,
+  barrel: 52, snowman: 70, ice: 48, bricks: 54, gem: 50, satellite: 60, rocket: 70,
 };
 
 /**
@@ -67,6 +71,7 @@ const SILHOUETTE = {
   bricks: [['rect', -0.45, -0.62, 0.9, 0.62]],
   mushroom: [['rect', -0.13, -0.42, 0.26, 0.42], ['ellipse', -0.43, -0.9, 0.86, 0.52]],
   snowman: [['ellipse', -0.3, -0.58, 0.6, 0.58], ['ellipse', -0.21, -0.98, 0.42, 0.44]],
+  gem: [['ellipse', -0.4, -0.8, 0.8, 0.8]],
 };
 export const SOLID = new Set(Object.keys(SILHOUETTE));
 
@@ -107,7 +112,7 @@ export class Props {
     const n = 7;
     for (let i = 0; i < n; i++) {
       const name = this.theme.back[r.int(0, this.theme.back.length - 1)];
-      const high = name === 'cloud' || name === 'sun' || name === 'snowflake';
+      const high = ['cloud', 'sun', 'snowflake', 'planet', 'moon', 'star', 'comet', 'ufo'].includes(name);
       const x = (W / n) * (i + 0.2 + r() * 0.6);
       const y = high ? ground - 520 - r() * 900 : ground + 10;
       const size = high ? 130 + r() * 80 : 240 + r() * 160;

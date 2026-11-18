@@ -295,6 +295,23 @@ check('один в лобби никого не находит', findMatch(p('a'
       && net.rope === 'classic' && net.trail === 'fire' && net.grave === 'ghost');
 }
 
+// --- редкость скинов: редкие выпадают реже, «только за звёзды» — не выпадают ---
+{
+  const K = await import('../src/core/skins.js');
+  const counts = {};
+  let seed = 7;
+  const rnd = () => { seed = (seed * 16807) % 2147483647; return seed / 2147483647; };
+  for (let i = 0; i < 3000; i++) {
+    const r = K.openBox({ ...K.emptyState(), boxes: 1 }, rnd);
+    const rar = K.SKIN_BY_ID[r.skin].rarity;
+    counts[rar] = (counts[rar] ?? 0) + 1;
+  }
+  const perSkin = (rar) => counts[rar] / K.BOX_SKINS.filter((s) => s.rarity === rar && s.id !== K.DEFAULT_SKIN).length;
+  check('коробка: обычный скин выпадает чаще редкого, редкий — чаще эпического',
+    perSkin('common') > perSkin('rare') * 1.4 && perSkin('rare') > perSkin('epic') * 1.8, JSON.stringify(counts));
+  check('у каждого скина есть редкость', K.SKINS.every((s) => K.RARITY[s.rarity]));
+}
+
 console.log(failures.length
   ? `\nне прошло: ${failures.length}`
   : '\nпроверки подбора пройдены');

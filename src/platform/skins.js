@@ -7,7 +7,7 @@
  * останутся теми же снаружи.
  */
 import {
-  SKINS, SKIN_BY_ID, DEFAULT_SKIN, normalize, claimBoxes, openBox, equip, mergeSkins, applyOwned,
+  SKINS, SKIN_BY_ID, DEFAULT_SKIN, BOX_SKINS, normalize, claimBoxes, openBox, equip, mergeSkins, applyOwned,
 } from '../core/skins.js';
 import { inTelegram, cloudGet, cloudSet } from './telegram.js';
 import { MISSIONS, loadProgress } from '../campaign/missions.js';
@@ -71,7 +71,7 @@ export function grantBoxes(n = 1) {
 
 /** Собраны ли все скины — тогда коробку покупать незачем. */
 export function allSkinsOwned() {
-  return load().owned.length >= SKINS.length;
+  return BOX_SKINS.every((s) => load().owned.includes(s.id));
 }
 
 /**

@@ -128,7 +128,7 @@ export function ascentMatch(id) {
     teams: m.teams.map((t) => ({ ...t })),
     rules: { flood: { after: 9, step: 85 }, ...m.rules },
     monsters: { ...(m.monsters ?? {}) },
-    boss: Boolean(m.boss),
+    boss: m.boss === true ? true : (m.boss || false),
     bossHp: m.bossHp ?? null,
   };
 }

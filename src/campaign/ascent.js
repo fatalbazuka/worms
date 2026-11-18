@@ -1,10 +1,11 @@
 /**
- * Кампания «Подъём»: пятнадцать боёв на башне, три главы по пять.
+ * Кампания «Подъём»: двадцать боёв на башне, четыре главы по пять.
  *
  *   Подножие — обычная башня: слизни, кактусы, гиря; в конце — Великан;
  *   Ледник   — ледяная: скользко, липкая бомба, батут; снова Великан;
- *   Жерло    — лавовая: лава поднимается, нашествие слизней; финальный
- *              Великан покрепче.
+ *   Жерло    — лавовая: лава поднимается, нашествие слизней; лавовый голем;
+ *   Космос   — тяжесть вдвое слабее, трос тянет дальше, внизу пустота;
+ *              Король слизней.
  *
  * Бой — данные, как испытание: зерно (одна башня у всех), вид башни,
  * стороны, правила, монстры. Победа — выбить всех бойцов соперника, а где
@@ -13,7 +14,8 @@
  * дальше через один и за последний (core/skins.js, rewardMissions).
  *
  * monsters: { slime, cactus } — сколько каких рассадить по этажам (места
- * выбираются от зерна, у всех одинаково); boss: true — Великан на вершине.
+ * выбираются от зерна, у всех одинаково); boss — босс главы на вершине:
+ * true (тролль-Великан), 'yeti', 'golem', 'slimeking' (entities/Monster.js).
  * rules.ammo — патроны нового оружия, чтобы бой учил ему.
  */
 
@@ -26,6 +28,7 @@ export const CHAPTERS = [
   { id: 'foot', title: 'Подножие', variant: 'classic' },
   { id: 'glacier', title: 'Ледник', variant: 'ice' },
   { id: 'crater', title: 'Жерло', variant: 'lava' },
+  { id: 'space', title: 'Космос', variant: 'space' },
 ];
 
 export const ASCENT = [
@@ -80,8 +83,8 @@ export const ASCENT = [
     teams: [human(2), bot(2, 'sniper')], monsters: { cactus: 4 }, rules: { ...base },
   },
   {
-    id: 'up-10', chapter: 'glacier', title: 'Ледяной Великан', seed: 12005, boss: true,
-    brief: 'Великан вернулся, и с ним ветер. Бери поправку.',
+    id: 'up-10', chapter: 'glacier', title: 'Йети', seed: 12005, boss: 'yeti',
+    brief: 'На вершине ледника — йети. Его снежок замораживает: кого задело, тот пропустит ход.',
     teams: [human(3)], monsters: { slime: 2, cactus: 1 },
     rules: { ...base, windRange: [-90, 90], ammo: { sticky: 2, spring: 2 } },
   },
@@ -111,12 +114,44 @@ export const ASCENT = [
     rules: { ...base, flood: { after: 7, step: 85 }, ammo: { sticky: 2, weight: 2 } },
   },
   {
-    id: 'up-15', chapter: 'crater', title: 'Вершина', seed: 13005, boss: true, bossHp: 520,
-    brief: 'Финал: Великан на вершине жерла, лава уже идёт. Повали его, пока не поздно.',
+    id: 'up-15', chapter: 'crater', title: 'Лавовый голем', seed: 13005, boss: 'golem',
+    brief: 'На вершине жерла — лавовый голем. Его огненные шары бьют широко, а лава уже идёт.',
     teams: [human(3)], monsters: { slime: 2, cactus: 2 },
     rules: { ...base, flood: { after: 6, step: 80 }, ammo: { weight: 3, sticky: 3, spring: 2 } },
   },
+  // --- Космос ---
+  {
+    id: 'up-16', chapter: 'space', title: 'Невесомость', seed: 14001,
+    brief: 'Тяжести почти нет: снаряды летят дальше, прыжки выше. Целься ниже, чем привык.',
+    teams: [human(2), bot(2, 'rookie')], monsters: { slime: 2 }, rules: { ...base },
+  },
+  {
+    id: 'up-17', chapter: 'space', title: 'Кристаллы', seed: 14002,
+    brief: 'Прячься за кристаллами — они держат удар, пока их не разобьют.',
+    teams: [human(2), bot(2, 'fighter')], monsters: { cactus: 2 }, rules: { ...base, ammo: { sticky: 3 } },
+  },
+  {
+    id: 'up-18', chapter: 'space', title: 'Батут до звёзд', seed: 14003,
+    brief: 'В невесомости батут подбрасывает на несколько этажей. Не улети в пустоту!',
+    teams: [human(2), bot(3, 'rookie')], monsters: { slime: 3 }, rules: { ...base, ammo: { spring: 3 } },
+  },
+  {
+    id: 'up-19', chapter: 'space', title: 'Орбитальная дуэль', seed: 14004,
+    brief: 'Снайперы на орбите. Гиря падает медленно, но этаж всё равно пробьёт.',
+    teams: [human(2), bot(2, 'sniper')], monsters: { slime: 2, cactus: 1 },
+    rules: { ...base, ammo: { weight: 3 } },
+  },
+  {
+    id: 'up-20', chapter: 'space', title: 'Король слизней', seed: 14005, boss: 'slimeking',
+    brief: 'Финал: Король слизней плюётся слизью и через ход зовёт подданных. Повали его.',
+    teams: [human(3)], monsters: { slime: 2 },
+    rules: { ...base, ammo: { weight: 3, sticky: 3, spring: 2 } },
+  },
 ];
+
+const BOSS_NAMES = { yeti: 'Йети', golem: 'Лавовый голем', slimeking: 'Король слизней' };
+/** Имя босса боя для меню; null — боя без босса. */
+export const bossName = (m) => (m.boss ? BOSS_NAMES[m.boss] ?? 'Великан' : null);
 
 export const ASCENT_BY_ID = Object.fromEntries(ASCENT.map((m) => [m.id, m]));
 

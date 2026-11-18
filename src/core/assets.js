@@ -62,7 +62,8 @@ for (const id of ['mon_slime', 'mon_cactus', 'mon_boss', 'mon_boss_throw', 'mon_
  */
 export const EMOJI = ['pine', 'tree', 'palm', 'mushroom', 'rock', 'barrel', 'cactus', 'ogre',
   'slime', 'cloud', 'sun', 'mountain', 'herb', 'sunflower', 'bricks', 'box', 'volcano', 'ice',
-  'snowflake', 'fire', 'snowman', 'blossom', 'headstone', 'skull', 'crown'];
+  'snowflake', 'fire', 'snowman', 'blossom', 'headstone', 'skull', 'crown',
+  'planet', 'rocket', 'satellite', 'moon', 'star', 'comet', 'ufo', 'gem'];
 
 /** Текстуры ландшафта: по четыре файла на каждую тему из biomes.js. */
 for (const b of BIOMES) {

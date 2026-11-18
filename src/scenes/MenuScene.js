@@ -6,7 +6,7 @@ import {
   quickMatch, campaignMatch, onlineMatch, towerMatch, fallbackMatch, challengeMatch, ascentMatch, dailyMatch, QUICK_OPTIONS,
 } from '../core/match.js';
 import { CHALLENGES, challengeOpen, totalStars, STAR_COINS } from '../campaign/challenges.js';
-import { ASCENT, CHAPTERS, ascentOpen } from '../campaign/ascent.js';
+import { ASCENT, CHAPTERS, ascentOpen, bossName } from '../campaign/ascent.js';
 import { ascentDone } from '../platform/ascent.js';
 import { challengeStars } from '../platform/challenges.js';
 import { onboardStage } from '../platform/onboard.js';
@@ -32,7 +32,7 @@ import { leagueOf, nextLeague, leagueProgress, toNextLeague, leagueLabel } from 
 import { BOT_LEVELS } from '../ai/Bot.js';
 import { isDesktop, setUiMode, aimScheme, setAimScheme } from '../platform/device.js';
 import { sfx } from '../audio/Sfx.js';
-import { SKINS, SKIN_BY_ID, SKIN_STARS, rewardMissions } from '../core/skins.js';
+import { SKINS, SKIN_BY_ID, SKIN_STARS, BOX_SKINS, RARITY, rewardMissions } from '../core/skins.js';
 import {
   skinState, equippedSkin, equipSkin, openSkinBox, syncCampaignBoxes, applyServerOwned,
 } from '../platform/skins.js';
@@ -812,7 +812,7 @@ export default class MenuScene extends Phaser.Scene {
     const W = this.W, cx = W / 2;
 
     // --- коробки ---
-    const full = st.owned.length >= SKINS.length;
+    const full = BOX_SKINS.every((s) => st.owned.includes(s.id));
     const boxY = 186;
     if (this.textures.exists('shot_crate_weapon')) {
       this.items.push(this.add.image(cx - 190, boxY, 'shot_crate_weapon')
@@ -833,7 +833,7 @@ export default class MenuScene extends Phaser.Scene {
 
     // Что ещё можно получить: скины, которых нет, минус неоткрытые коробки.
     // Коробку, в которой заведомо ничего не будет, не продаём
-    const left = SKINS.length - st.owned.length - st.boxes;
+    const left = BOX_SKINS.filter((s) => !st.owned.includes(s.id)).length - st.boxes;
     const can = inTelegram() && loggedIn();
 
     // --- сетка скинов ---
@@ -860,7 +860,7 @@ export default class MenuScene extends Phaser.Scene {
       const buy = !owned && can;
       this.items.push(this.add.text(x, y + ch / 2 - 16,
         owned ? (on ? 'надет' : skin.name) : buy ? `${SKIN_STARS} ⭐` : '???',
-        font(17, 800, on ? '#2a1c06' : owned ? UI.text : buy ? UI.accent : UI.textDim)).setOrigin(0.5));
+        font(17, 800, on ? '#2a1c06' : owned ? RARITY[skin.rarity]?.color ?? UI.text : buy ? UI.accent : UI.textDim)).setOrigin(0.5));
       if (owned) {
         plate.setInteractive({ useHandCursor: true });
         plate.on('pointerup', () => { haptic('select'); equipSkin(skin.id); this.showSkins(); });
@@ -978,7 +978,8 @@ export default class MenuScene extends Phaser.Scene {
       const hero = add(this.add.sprite(cx, cy + 70, sheet, 0).setOrigin(0.5, 0.92).setScale(0.2).setFlipX(true));
       hero.play(`${sheet}_win`);
       this.tweens.add({ targets: hero, scale: 3, duration: 520, ease: 'Back.easeOut' });
-      add(this.add.text(cx, cy - 200, 'Новый скин!', font(26, 800, UI.textDim)).setOrigin(0.5));
+      const rar = RARITY[skin.rarity] ?? RARITY.common;
+      add(this.add.text(cx, cy - 200, `Новый скин · ${rar.name}!`, font(26, 800, rar.color)).setOrigin(0.5));
       const name = add(this.add.text(cx, cy + 120, skin.name, font(48, 800, UI.accent)).setOrigin(0.5).setScale(0.3));
       this.tweens.add({ targets: name, scale: 1, duration: 420, delay: 180, ease: 'Back.easeOut' });
 
@@ -1006,7 +1007,7 @@ export default class MenuScene extends Phaser.Scene {
     const stars = totalStars(challengeStars());
     const done = ascentDone().size;
     const modes = [
-      ['ascent', 'Кампания «Подъём»', `15 боёв, монстры и Великан · пройдено ${done} из ${ASCENT.length}`, () => this.showAscent()],
+      ['ascent', 'Кампания «Подъём»', `${ASCENT.length} боёв, монстры и боссы · пройдено ${done} из ${ASCENT.length}`, () => this.showAscent()],
       ['daily', 'Башня дня', 'одна башня на всех · таблица дня', () => this.showDailyTower()],
       ['tower', 'Башня', 'высокая арена и трос · выбрать соперника', () => this.showTower()],
       ['challenges', 'Испытания', `задачи на три звезды · ★ ${stars} из ${CHALLENGES.length * 3}`, () => this.showChallenges()],
@@ -1082,15 +1083,20 @@ export default class MenuScene extends Phaser.Scene {
     this._clear();
     const done = ascentDone();
     this._title('Подъём', `пройдено ${done.size} из ${ASCENT.length} · коробки со скинами по пути`);
-    const cx = this.W / 2;
-    const w = Math.min(this.W - 64, 620), h = this.portrait ? 120 : 96;
+    const cx0 = this.W / 2;
+    // Четыре главы: в портрете столбиком, в ландшафте — два на два
+    const cols = this.portrait ? 1 : 2;
+    const w = this.portrait ? Math.min(this.W - 64, 620) : Math.min(420, (this.W - 96) / 2);
+    const h = this.portrait ? 120 : 96;
     const step = h + 18;
-    CHAPTERS.forEach((ch, i) => {
+    CHAPTERS.forEach((ch, idx) => {
+      const i = Math.floor(idx / cols);
+      const cx = cols === 1 ? cx0 : cx0 + (idx % 2 ? 1 : -1) * (w / 2 + 12);
       const list = ASCENT.filter((m) => m.chapter === ch.id);
       const first = ASCENT.indexOf(list[0]);
       const open = ascentOpen(first, done);
       const n = list.filter((m) => done.has(m.id)).length;
-      this._button(`chapter-${ch.id}`, cx, 196 + h / 2 + i * step, `${i + 1}. ${ch.title}`,
+      this._button(`chapter-${ch.id}`, cx, 196 + h / 2 + i * step, `${idx + 1}. ${ch.title}`,
         open ? `${n} из ${list.length}${n === list.length ? ' · пройдено' : ''}` : 'откроется после предыдущей главы',
         () => this.showAscentChapter(ch), {
           w, h, enabled: open, variant: open && n < list.length ? 'primary' : 'normal', titleSize: 30, hintSize: 20,
@@ -1111,7 +1117,7 @@ export default class MenuScene extends Phaser.Scene {
       const i = ASCENT.indexOf(m);
       const open = ascentOpen(i, done);
       const won = done.has(m.id);
-      const tag = m.boss && !/Великан/.test(m.title) ? ' · Великан' : '';
+      const tag = m.boss && m.title !== bossName(m) && !m.title.includes(bossName(m)) ? ` · ${bossName(m)}` : '';
       this._button(`up-${m.id}`, cx, 186 + h / 2 + k * (h + gap), `${i + 1}. ${m.title}${tag}`,
         won ? '✓ пройдено' : open ? 'открыто' : 'откроется после предыдущего боя',
         () => this.showAscentBrief(m), {
@@ -1129,12 +1135,12 @@ export default class MenuScene extends Phaser.Scene {
     const w = Math.min(640, this.W - 56);
     const mons = m.monsters ?? {};
     const parts = [];
-    if (m.boss) parts.push('Великан');
+    if (m.boss) parts.push(`босс: ${bossName(m)}`);
     if (mons.slime) parts.push(`слизней: ${mons.slime}`);
     if (mons.cactus) parts.push(`кактусов: ${mons.cactus}`);
     const sides = m.teams.length > 1
       ? `${m.teams[0].worms} против ${m.teams[1].worms}`
-      : `${m.teams[0].worms} бойца против Великана`;
+      : `${m.teams[0].worms} бойца против босса`;
     const t = this.add.text(cx, 176, [m.brief, '', sides, parts.join(' · ')].join('\n'), font(this.fs(16), 700))
       .setOrigin(0.5, 0).setAlign('center').setWordWrapWidth(w - 40).setLineSpacing(6);
     this.items.push(t);

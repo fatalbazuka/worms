@@ -431,7 +431,7 @@ for (const id of upIds) {
   }, id);
   if (!ok) upBroken.push(id);
 }
-check('«Подъём»: все 15 боёв собираются, монстры на этажах', upBroken.length === 0, upBroken.join(','));
+check(`«Подъём»: все ${upIds.length} боёв собираются, монстры на этажах`, upIds.length === 20 && upBroken.length === 0, upBroken.join(','));
 
 // Башня дня: одна и та же башня от даты, бойцы и монстры на этажах
 await page.evaluate(async () => {
@@ -480,7 +480,7 @@ for (let i = 0; i < 80; i++) {
 check('ход монстров: после хода игрока Великан кидает камень', rock);
 await page.evaluate(() => {
   const s = window.__WORMS__.scene.getScene('Game');
-  s.monsters.find((m) => m.kind === 'boss').damage(9999);
+  s.monsters.find((m) => m.def.boss).damage(9999);
   s.turn.endTurn();
 });
 const bossWin = await page.waitForFunction(() => window.__WORMS__.scene.getScene('Game').overButtons?.menu, null, { timeout: 20000 })

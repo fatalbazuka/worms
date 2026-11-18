@@ -10,7 +10,7 @@ import { Crate } from '../entities/Crate.js';
 import { Mine } from '../entities/Mine.js';
 import { Spring } from '../entities/Spring.js';
 import { Props } from '../entities/Props.js';
-import { Monster } from '../entities/Monster.js';
+import { Monster, isBoss } from '../entities/Monster.js';
 import { Hud, TOP_H } from '../ui/Hud.js';
 import { Fx } from '../ui/Fx.js';
 import { AimController } from '../ui/AimController.js';
@@ -52,6 +52,11 @@ import { voice } from '../audio/Voice.js';
 import { askText, closeOverlay } from '../ui/Overlay.js';
 import { isDesktop, aimScheme } from '../platform/device.js';
 
+
+// Тяжесть и длина троса без правил партии: космос их меняет на один бой
+const BASE_GRAVITY = CFG.GRAVITY;
+const BASE_HOOK_RANGE = CFG.HOOK_RANGE;
+
 export default class GameScene extends Phaser.Scene {
   constructor() { super('Game'); }
 
@@ -84,8 +89,12 @@ export default class GameScene extends Phaser.Scene {
       : null;
     if (this.variant) {
       const v = this.variant.rules;
-      this.rules = { ...this.rules, ...v, flood: v.flood ?? this.rules.flood };
+      this.rules = { ...this.rules, ...v, flood: 'flood' in v ? v.flood : this.rules.flood };
     }
+    // Тяжесть и длина троса — от правил (космос); иначе как всегда.
+    // CFG общий на всю игру, поэтому выставляем каждый раз заново
+    CFG.GRAVITY = BASE_GRAVITY * (Number(this.rules.gravity) || 1);
+    CFG.HOOK_RANGE = BASE_HOOK_RANGE * (Number(this.rules.hookRange) || 1);
     // Крюк-трос: сколько раз за ход. Ноль — крюка в партии нет. Вместе с
     // ним приходит и новая схема под палец: рогатка, тап, любая ориентация
     this.hookPerTurn = Math.max(0, Number(this.rules.hook) || 0);
@@ -431,6 +440,18 @@ export default class GameScene extends Phaser.Scene {
   /** Начало хода: боту нужен чистый план, чужой ему не годится. */
   onTurnBegin() {
     for (const b of this.bots ?? []) b?.reset();
+    // Замёрзший боец ход пропускает — и оттаивает
+    const fw = this.turn.activeWorm;
+    if (fw?.frozen) {
+      fw.frozen = false;
+      fw.skipping = true;
+      this.fx.banner('Заморожен — ход пропущен', '#9fd8ff', 1300);
+      const turn = this.turn.turnNumber;
+      this.time.delayedCall(1100, () => {
+        fw.skipping = false;
+        if (this.turn.turnNumber === turn && this.turn.state === STATE.AIM) this.turn.endTurn();
+      });
+    }
     if (this.turn.currentTeam === this.myTeamIndex) this.myTurns++;
     // Тот, чей ход, подпрыгивает на месте: глаз сразу находит своего
     const active = this.turn.activeWorm;
@@ -686,14 +707,28 @@ export default class GameScene extends Phaser.Scene {
     const wide = CFG.WORLD_W + 4000;
     // Лава — гуще и ярче воды, с огненной кромкой
     const lava = this.rules.liquid === 'lava';
+    // Пустота космоса: тёмная, с фиолетовой кромкой — упал туда, и всё
+    const space = this.rules.liquid === 'void';
     this.waterBody = this.rig.world(this.add.rectangle(-2000, CFG.WATER_Y, wide, deep + 2000,
-      lava ? 0xd2400f : biome.water, lava ? 0.93 : biome.waterAlpha)
+      lava ? 0xd2400f : space ? 0x07041a : biome.water, lava ? 0.93 : space ? 0.97 : biome.waterAlpha)
       .setOrigin(0, 0).setDepth(DEPTH.WATER));
-    this.waterLine = this.rig.world(this.add.rectangle(-2000, CFG.WATER_Y, wide, lava ? 6 : 3,
-      lava ? 0xffc23a : 0xffffff, lava ? 0.9 : 0.25)
+    this.waterLine = this.rig.world(this.add.rectangle(-2000, CFG.WATER_Y, wide, lava || space ? 6 : 3,
+      lava ? 0xffc23a : space ? 0x9a6bff : 0xffffff, lava || space ? 0.9 : 0.25)
       .setOrigin(0, 0).setDepth(DEPTH.WATER));
+    if (space) this._buildStars();
     this.waterBase = CFG.WATER_Y;
     this.floodLevel = 0;
+  }
+
+  /** Космос: небо темнее и в звёздах — от зерна, у всех одинаково. */
+  _buildStars() {
+    this.skyImage?.setTint(0x3a2a6a);
+    const [cw, ch] = canvasSize();
+    const r = subRng(this.seed >>> 0, 0x57a2);
+    const g = this.rig.bg(this.add.graphics().setScrollFactor(0).setDepth(DEPTH.SKY + 1));
+    for (let i = 0; i < 140; i++) {
+      g.fillStyle(0xffffff, 0.35 + r() * 0.6).fillCircle(r() * cw, r() * ch, r() < 0.15 ? 2 : 1);
+    }
   }
 
   /**
@@ -1264,6 +1299,7 @@ export default class GameScene extends Phaser.Scene {
     if (this.turn.state !== STATE.AIM) return false;
     if (this.replaying) return false;         // идёт показ чужого хода
     if (this.landing()) return false;          // десант ещё в воздухе
+    if (this.turn.activeWorm?.skipping) return false;  // замёрз — ход пропускает
     // В сетевой партии ходит только тот, чья команда сейчас на очереди
     if (this.net?.connected && this.net.myTeam !== this.turn.currentTeam) return false;
     return true;
@@ -1382,13 +1418,20 @@ export default class GameScene extends Phaser.Scene {
       if (c.alive && Math.hypot(c.x - x, c.y - c.h / 2 - y) <= cfg.damageRadius) c.destroy();
     }
 
+    // Снежок йети: кого задело — замерзает и пропускает свой следующий ход
+    if (cfg.freeze) {
+      for (const w of this.worms) {
+        if (w.alive && Math.hypot(w.x - x, w.centerY - y) <= cfg.damageRadius) w.frozen = true;
+      }
+    }
+
     // Монстрам достаётся так же, как бойцам; Великана не отбрасывает
     for (const m of [...this.monsters]) {
       if (!m.alive) continue;
       const d = Math.max(0, Math.hypot(m.x - x, m.centerY - y) - m.def.w / 4);
       if (d > cfg.damageRadius) continue;
       const dmg = Math.round(cfg.damage * (1 - d / cfg.damageRadius));
-      if (m.kind !== 'boss' && cfg.knockback > 0) m.vy = -Math.min(320, cfg.knockback * 0.6);
+      if (!m.def.boss && cfg.knockback > 0) m.vy = -Math.min(320, cfg.knockback * 0.6);
       m.damage(dmg);
     }
 
@@ -1488,7 +1531,8 @@ export default class GameScene extends Phaser.Scene {
       const roomy = spots.filter((p) => !this.terrain.solidInRect(p.x - 46, p.y - 104, p.x + 46, p.y - 6)
         && free(p, 260));
       const top = (roomy.length ? roomy : spots).reduce((a, b) => (b.y < a.y ? b : a));
-      this.addMonster('boss', top.x, top.y, this.match.bossHp ?? null);
+      // boss: true — тролль; иначе имя босса главы (yeti, golem, slimeking)
+      this.addMonster(isBoss(this.match.boss) ? this.match.boss : 'boss', top.x, top.y, this.match.bossHp ?? null);
       taken.push({ x: top.x, y: top.y, r: 160 });
     }
     for (const [kind, n] of Object.entries(want)) {
@@ -1519,7 +1563,7 @@ export default class GameScene extends Phaser.Scene {
   }
 
   onMonsterDied(m) {
-    if (m.kind === 'boss') haptic('win');
+    if (m.def.boss) haptic('win');
   }
 
   /** Ход отыгран и очередь передана — отдаём второму игроку итог. */
@@ -1571,7 +1615,7 @@ export default class GameScene extends Phaser.Scene {
     if (this.match.boss) {
       const mine = this.myTeamIndex;
       if (!this.teamAlive(mine)) return mine === 0 ? 1 : 0;
-      return this.monsters.some((m) => m.kind === 'boss' && m.alive) ? null : mine;
+      return this.monsters.some((m) => m.def.boss && m.alive) ? null : mine;
     }
     // Задача миссии решает раньше обычного «кого выбили»
     const outcome = this.missionOutcome();

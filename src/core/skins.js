@@ -15,16 +15,29 @@
 
 export const DEFAULT_SKIN = 'classic';
 
+/**
+ * Редкость: чем реже, тем меньше шанс в коробке (weight). starsOnly — в
+ * коробках не выпадает, только покупка за звёзды.
+ */
+export const RARITY = {
+  common: { name: 'обычный', weight: 60, color: '#c8d2e0' },
+  rare: { name: 'редкий', weight: 30, color: '#6fb7ff' },
+  epic: { name: 'эпический', weight: 10, color: '#c58bff' },
+};
+
 export const SKINS = [
-  { id: 'classic', name: 'Смайлик', sheet: 'smiley' },
-  { id: 'ice', name: 'Ледышка', sheet: 'skin_ice' },
-  { id: 'alien', name: 'Пришелец', sheet: 'skin_alien' },
-  { id: 'toxic', name: 'Токсик', sheet: 'skin_toxic' },
-  { id: 'pumpkin', name: 'Тыква', sheet: 'skin_pumpkin' },
-  { id: 'rage', name: 'Злюка', sheet: 'skin_rage' },
-  { id: 'devil', name: 'Чертёнок', sheet: 'skin_devil' },
-  { id: 'clown', name: 'Клоун', sheet: 'skin_clown' },
+  { id: 'classic', name: 'Смайлик', sheet: 'smiley', rarity: 'common' },
+  { id: 'ice', name: 'Ледышка', sheet: 'skin_ice', rarity: 'common' },
+  { id: 'alien', name: 'Пришелец', sheet: 'skin_alien', rarity: 'rare' },
+  { id: 'toxic', name: 'Токсик', sheet: 'skin_toxic', rarity: 'common' },
+  { id: 'pumpkin', name: 'Тыква', sheet: 'skin_pumpkin', rarity: 'common' },
+  { id: 'rage', name: 'Злюка', sheet: 'skin_rage', rarity: 'rare' },
+  { id: 'devil', name: 'Чертёнок', sheet: 'skin_devil', rarity: 'epic' },
+  { id: 'clown', name: 'Клоун', sheet: 'skin_clown', rarity: 'rare' },
 ];
+
+/** Что может выпасть из коробки: всё, кроме скинов только за звёзды. */
+export const BOX_SKINS = SKINS.filter((s) => !s.starsOnly);
 
 export const SKIN_BY_ID = Object.fromEntries(SKINS.map((s) => [s.id, s]));
 
@@ -117,9 +130,16 @@ export function claimBoxes(state, doneIds, missionIds) {
  */
 export function openBox(state, rnd = Math.random) {
   if (state.boxes <= 0) return { state, skin: null, full: false };
-  const pool = SKINS.filter((s) => !state.owned.includes(s.id));
+  const pool = BOX_SKINS.filter((s) => !state.owned.includes(s.id));
   if (!pool.length) return { state, skin: null, full: true };
-  const skin = pool[Math.min(pool.length - 1, Math.floor(rnd() * pool.length))];
+  // Редкие выпадают реже: шанс по весу редкости среди тех, которых ещё нет
+  const weight = (s) => RARITY[s.rarity]?.weight ?? RARITY.common.weight;
+  let r = rnd() * pool.reduce((a, s) => a + weight(s), 0);
+  let skin = pool[pool.length - 1];
+  for (const s of pool) {
+    r -= weight(s);
+    if (r < 0) { skin = s; break; }
+  }
   return {
     state: { ...state, boxes: state.boxes - 1, owned: [...state.owned, skin.id] },
     skin: skin.id,

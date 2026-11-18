@@ -686,6 +686,7 @@ export class Worm {
     this.squash = Math.abs(sq) < 0.02 ? 0 : sq * 0.82;
     if (this.view.setTintFill) {
       if (this.scene.time.now < (this.flashUntil ?? 0)) this.view.setTintFill(0xffffff);
+      else if (this.frozen) this.view.setTint(0x9fd8ff);      // замёрз — голубой, пропустит ход
       else if (this.view.isTinted) this.view.clearTint();
     }
 
