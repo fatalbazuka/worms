@@ -436,6 +436,7 @@ check('голоса смайликов загружены, победа сказ
 // --- кампания «Подъём»: все бои собираются, Великан ходит и падает ---
 const upIds = await page.evaluate(async () => (await import('/src/campaign/ascent.js')).ASCENT.map((m) => m.id));
 const upBroken = [];
+const edges = {};
 for (const id of upIds) {
   await page.evaluate(async (id) => {
     const { ascentMatch } = await import('/src/core/match.js');
@@ -451,13 +452,49 @@ for (const id of upIds) {
     const m = ASCENT_BY_ID[id];
     const s = window.__WORMS__.scene.getScene('Game');
     const want = Object.values(m.monsters ?? {}).reduce((a, n) => a + n, 0) + (m.boss ? 1 : 0);
+    // Край башни: стена камнем (видна и держит) или обрыв — по месту
+    const t = s.terrain, mid = Math.round(t.height * 0.4);
+    window.__edge = { variant: s.variant.id, wall: t.solidAt(4, mid) && t.solidAt(t.width - 5, mid) };
     return s.shape.id === 'tower' && s.turn.currentTeam === 0 && s.monsters.length === want
       && s.worms.every((w) => w.grounded && w.y < CFG.DROWN_Y - 60)
       && s.monsters.every((x) => x.y < CFG.DROWN_Y - 60);
   }, id);
   if (!ok) upBroken.push(id);
+  const e = await page.evaluate(() => window.__edge);
+  edges[e.variant] = edges[e.variant] ?? e.wall;
 }
 check(`«Подъём»: все ${upIds.length} боёв собираются, монстры на этажах`, upIds.length === 20 && upBroken.length === 0, upBroken.join(','));
+check('края башни: на Леднике и в Жерле стены, у подножия и в космосе — обрыв',
+  edges.ice && edges.lava && edges.classic === false && edges.space === false, JSON.stringify(edges));
+
+// Невидимых стен нет: за краем — падение; висящего шаг отцепляет; стик ведёт бойца
+const moves = await page.evaluate(async () => {
+  const { CFG } = await import('/src/config.js');
+  const s = window.__WORMS__.scene.getScene('Game');
+  const w = s.worms.find((x) => x.alive);
+  const keep = { x: w.x, y: w.y, hang: w.hang, grounded: w.grounded, vx: w.vx, vy: w.vy };
+  w.x = -40; w.y = 200; w.grounded = false; w.vx = -50; w.vy = 0; w.hang = null;
+  for (let i = 0; i < 10; i++) w.update(1 / 60);
+  const out = w.x < -20 && w.y > 200;
+  w.x = keep.x; w.y = keep.y; w.grounded = false; w.vx = 0; w.vy = 0; w.hang = 'ceil';
+  w.walk(1, 1 / 60);
+  const dropped = w.hang === null && !w.grounded && w.facing === 1;
+  Object.assign(w, keep);
+  // Стик: палец вправо — идёт вправо, рывок вверх — прыжок
+  const h = s.hud, st = h.stick;
+  st.id = 9; st.ax = st.cx; st.ay = st.cy;
+  const fl = CFG.FRAME.left, ft = CFG.FRAME.top;
+  h._stickMove({ id: 9, x: st.cx + 60 + fl, y: st.cy + ft });
+  const walk = s.moveInput.right && !s.moveInput.left && s.moveInput.walkScale > 0.5;
+  h._stickMove({ id: 9, x: st.cx + 60 + fl, y: st.cy - st.R + ft });
+  const jump = s.moveInput.jumpQueued === true;
+  h._stickUp({ id: 9 });
+  const stop = !s.moveInput.right && s.moveInput.walkScale === 1;
+  s.moveInput.jumpQueued = false;
+  return { out, dropped, walk, jump, stop };
+});
+check('за краем без стены — падение; висящего шаг отцепляет; стик: вбок — идёт, вверх — прыжок, отпустил — стоит',
+  Object.values(moves).every(Boolean), JSON.stringify(moves));
 
 // События мест: порыв метели толкает бойцов, извержение роняет лавовые бомбы
 const envEvent = async (id) => {

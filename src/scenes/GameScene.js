@@ -25,7 +25,7 @@ import { randomRoom, copyText } from '../net/transport.js';
 import { isCasualRoom, isTournamentRoom } from '../net/rooms.js';
 import { makeTransport } from '../net/connect.js';
 import {
-  startRoom, forgetStartRoom, shareRoom, haptic, inviteLink, offerHomeScreenOnce, setBattle,
+  startRoom, forgetStartRoom, shareRoom, haptic, inviteLink, setBattle,
   refLink, shareLink,
 } from '../platform/telegram.js';
 import { HOTSEAT, towerMatch, challengeMatch, ascentMatch } from '../core/match.js';
@@ -732,6 +732,8 @@ export default class GameScene extends Phaser.Scene {
     });
     // Форма башни — от места: карнизы, вулкан, астероиды (shapes.js)
     this.terrain.layout = this.variant?.layout ?? null;
+    // Стены по краям — у некоторых мест; у остальных за краем обрыв в воду
+    this.terrain.walls = Boolean(this.variant?.walls);
     // Детали в теле земли — по месту (terrainDetails.js); на обычных картах нет
     if (this.variant) { this.terrain.look = this.variant.id; this.terrain.decorSeed = this.seed; }
     this.terrain.generate(this.shape, shapeRng(this.seed));
@@ -1161,7 +1163,8 @@ export default class GameScene extends Phaser.Scene {
     const right = this.moveInput.right || k.right.isDown || k.d.isDown;
 
     if (left !== right) {
-      w.walk(left ? -1 : 1, dt);
+      // Стик: чем дальше палец, тем быстрее; клавиши и кнопки — всегда полный шаг
+      w.walk(left ? -1 : 1, dt * (this.moveInput.walkScale ?? 1));
       this.rig.manual = false; // пошли — камера снова ведёт бойца
     }
 
@@ -1753,12 +1756,8 @@ export default class GameScene extends Phaser.Scene {
     else if (winner >= 0) voice.say(winner === mine ? 'win' : 'lose', { team: mine, force: true });
     if (winner >= 0 && (winner === mine || !solo)) this.fx.confetti();
     haptic(winner === mine ? 'win' : 'lose');
-    // Первая доигранная партия — момент предложить иконку на экран Домой.
-    // Чуть позже итога, чтобы не перекрыть его; Telegram покажет своё окно.
-    // Реальные часы, а не игровые: игровой шаг Phaser ограничен 17 мс за
-    // кадр, и на слабом рендере полторы игровые секунды тянутся десятки
-    // реальных. Иконка к кадрам отношения не имеет.
-    setTimeout(() => offerHomeScreenOnce(), 1500);
+    // Иконку на экран Домой сами не предлагаем: только кнопкой в меню и
+    // в профиле, когда игрок захотел
 
     // Рейтинг двигается только в сетевом бою: против бота и в хотсите
     // очков не бывает, иначе их можно было бы «нафармить» о самого себя.

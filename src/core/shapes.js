@@ -409,12 +409,13 @@ export const TOWER_VARIANTS = [
   // biomes — из чего выбирать землю, если своей нет: у подножия только зелень
   { id: 'classic', name: 'Башня', weight: 2, biome: null, biomes: ['jungle', 'forest'], rules: {}, intro: null },
   {
-    id: 'ice', name: 'Ледяная башня', weight: 1, biome: 'snow', layout: 'shelves',
+    // walls — каменные стены по краям вместо обрыва в воду
+    id: 'ice', name: 'Ледяная башня', weight: 1, biome: 'snow', layout: 'shelves', walls: true,
     rules: { groundFriction: 0.9, landKeep: 0.85 },
     intro: 'Ледяная башня: скользко — от взрыва катишься далеко',
   },
   {
-    id: 'lava', name: 'Лавовая башня', weight: 1, biome: 'hell', layout: 'caldera',
+    id: 'lava', name: 'Лавовая башня', weight: 1, biome: 'hell', layout: 'caldera', walls: true,
     rules: { flood: { after: 5, step: 90 }, liquid: 'lava' },
     intro: 'Лавовая башня: лава пойдёт вверх уже с 6-го хода',
   },

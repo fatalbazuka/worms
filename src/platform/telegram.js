@@ -388,20 +388,6 @@ export function addToHomeScreen() {
   }
 }
 
-const OFFERED_KEY = 'worms.home.offered';
-
-/**
- * Предложить иконку один раз — после первой доигранной партии. Отметка
- * «уже предлагали» лежит в CloudStorage: иначе после переустановки
- * клиента предложение всплывало бы снова.
- */
-export async function offerHomeScreenOnce() {
-  if (!canOfferHomeScreen()) return false;
-  if (await cloudGet(OFFERED_KEY)) return false;
-  await cloudSet(OFFERED_KEY, '1');
-  return addToHomeScreen();
-}
-
 // ---------------------------------------------------------- CloudStorage
 
 /**
