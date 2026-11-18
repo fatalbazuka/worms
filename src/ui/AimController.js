@@ -173,6 +173,11 @@ export class AimController {
       // Рычаг короче рогатки: его ход растягиваем до полной силы рогатки
       const dx = pointer.x - this.startX, dy = pointer.y - this.startY;
       this.scene.hud.padPull = { dx, dy };
+      // Палец на круге «✕» — отпустит без выстрела
+      const hud = this.scene.hud;
+      const inCancel = hud.padCancelHit?.(pointer) ?? false;
+      if (inCancel && !hud.padCancelOn) this.scene.haptic?.('warn');
+      hud.padCancelOn = inCancel;
       const k = CFG.SLING_MAX / CFG.SLING_PAD_MAX;
       this.dragX = dx * k; this.dragY = dy * k;
       if (Math.hypot(this.dragX, this.dragY) > CFG.SLING_MIN) this.wasOut = true;
@@ -215,7 +220,14 @@ export class AimController {
     }
     this.tap = null;
     if (this.mode === 'charge') this.scene.mouseFire = false;
-    if (this.pad) { this.pad = false; this.scene.hud.padPull = null; }
+    const cancelled = this.pad && this.scene.hud.padCancelOn;
+    if (this.pad) { this.pad = false; this.scene.hud.padPull = null; this.scene.hud.padCancelOn = false; }
+    if (this.mode === 'aim' && cancelled) {
+      this.mode = null;
+      this.dragX = 0; this.dragY = 0;
+      this.gfx.clear();
+      return;
+    }
     if (this.mode === 'aim') {
       const shot = this.computeShot();
       // Отпустил до того, как стало ясно, что это натяжение, или всё касание
@@ -282,7 +294,7 @@ export class AimController {
 
   cancel() {
     if (this.mode === 'charge') this.scene.mouseFire = false;
-    if (this.pad) { this.pad = false; this.scene.hud.padPull = null; }
+    if (this.pad) { this.pad = false; this.scene.hud.padPull = null; this.scene.hud.padCancelOn = false; }
     this.tap = null;
     this.mode = null;
     this.dragX = 0; this.dragY = 0;
@@ -567,6 +579,8 @@ export class AimController {
 
   _drawSwipe() {
     if (this.worm?.marker?.visible) this.worm.setActiveMarker(false);
+    // Палец на «✕» — выстрела не будет, прицел не рисуем
+    if (this.pad && this.scene.hud.padCancelOn) { this.crosshair?.setVisible(false); return; }
     const shot = this.computeShot();
     // Рогатка: пока палец в круге отмены, круг виден — отпусти здесь, и
     // выстрела не будет. Особенно ясно, когда натянул и вернул обратно

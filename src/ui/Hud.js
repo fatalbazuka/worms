@@ -49,7 +49,8 @@ export class Hud {
     if (this.compact) {
       this._buildCompactControls(W, H);
       this._buildHelp(W, H);
-      this._buildWeapons(W, H);
+      // Оружие — лентой под верхней панелью: низ остаётся стику и рычагу
+      this._buildWeaponStrip(W);
       this._buildPowerBar();
     } else if (this.desktop) {
       // На ПК крупные кнопки под пальцы не нужны: ходьба, прицел и выстрел
@@ -176,7 +177,7 @@ export class Hud {
     this.windCy = 40;
 
     // Подсказка новичку под панелью: гаснет сама после трёх тросов
-    this.hintText = this.fix(s.add.text(Math.round(W / 2), TOP_H + 14,
+    this.hintText = this.fix(s.add.text(Math.round(W / 2), TOP_H + (this.compact ? 96 : 14),
       'коснись светящейся точки — трос подтянет туда', font(15, 800, '#1a1408'))
       .setOrigin(0.5, 0).setPadding(12, 6, 12, 6).setBackgroundColor('#ffe27a'), DEPTH.HUD + 1)
       .setVisible(false);
@@ -413,6 +414,8 @@ export class Hud {
     const x = Math.round(W - CFG.SLING_PAD_MAX - 30);
     const y = Math.round(top - 26 - R);
     this.slingPad = { x, y, r: R };
+    this.padCancel = { x, y: y - CFG.SLING_PAD_MAX - 70, r: CFG.SLING_CANCEL_R };
+    this.padCancelOn = false;
     this.padPull = null;       // {dx, dy} — палец тянет, экранные пиксели
     this.padGfx = this.fix(this.scene.add.graphics(), DEPTH.HUD);
   }
@@ -449,6 +452,16 @@ export class Hud {
     }
     g.fillStyle(0xffd166, ready ? 1 : 0.4).fillCircle(kx, ky, 22);
     g.lineStyle(3, 0x1a1410, ready ? 0.9 : 0.3).strokeCircle(kx, ky, 22);
+    // Пока тянешь — над рычагом круг «✕»: дотянул туда и отпустил — отмена
+    if (this.padPull) {
+      const c = this.padCancel, on = this.padCancelOn;
+      g.fillStyle(0xd23b3b, on ? 0.95 : 0.45).fillCircle(c.x, c.y, on ? c.r + 6 : c.r);
+      g.lineStyle(4, 0xffffff, on ? 1 : 0.7).strokeCircle(c.x, c.y, on ? c.r + 6 : c.r);
+      const d = c.r * 0.38;
+      g.lineStyle(7, 0xffffff, on ? 1 : 0.85);
+      g.lineBetween(c.x - d, c.y - d, c.x + d, c.y + d);
+      g.lineBetween(c.x + d, c.y - d, c.x - d, c.y + d);
+    }
   }
 
   /**
@@ -607,8 +620,86 @@ export class Hud {
   /** Шкала силы над плашкой оружия: на ПК кнопки «Огонь» с дугой нет. */
   _buildPowerBar() {
     const sl = this.slot;
-    this.powerBar = { x: sl.x, y: sl.y - 16, w: sl.w, h: 10 };
-    this.chargeGfx = this.fix(this.scene.add.graphics(), DEPTH.HUD + 2);
+    if (sl) this.powerBar = { x: sl.x, y: sl.y - 16, w: sl.w, h: 10 };
+    this.chargeGfx ??= this.fix(this.scene.add.graphics(), DEPTH.HUD + 2);
+  }
+
+  /**
+   * Лента оружия под верхней панелью (макет A): до шести кружков — то, что
+   * брал недавно, дополненное по порядку арсенала; тап — сразу в руках,
+   * последний кружок — весь арсенал. Порядок кружков — как в арсенале, чтобы
+   * оружие не прыгало с места на место. Видна только в свой ход.
+   */
+  _buildWeaponStrip(W) {
+    const s = this.scene;
+    const r = 32, step = 76;
+    const y = TOP_H + 12 + 30;
+    const x0 = 14 + r;
+    const right = W - 14 - 60 - 68 - 18;    // левее «☺» и «⋯»
+    const n = Math.max(3, Math.min(6, Math.floor((right - x0 - r) / step)));
+    this.strip = { y, r, n, chips: [], recent: [], gfx: this.fix(s.add.graphics(), DEPTH.HUD) };
+    for (let i = 0; i < n; i++) {
+      const cx = x0 + i * step;
+      const icon = this.fix(s.add.image(cx, y, 'icon_bazooka'), DEPTH.HUD + 1).setVisible(false);
+      const badge = this.fix(s.add.text(cx + r * 0.66, y + r * 0.62, '', font(15, 800, '#ffffff'))
+        .setOrigin(0.5).setStroke('#10131a', 5), DEPTH.HUD + 2);
+      const zone = this.fix(s.add.zone(cx - r, y - r, r * 2, r * 2).setOrigin(0, 0).setInteractive(), DEPTH.HUD + 1);
+      zone.on('pointerdown', () => {
+        const c = this.strip.chips[i];
+        if (c.index == null || !s.canPlayerAct() || !this.strip.shown) return;
+        s.turn.setWeaponIndex(c.index);
+      });
+      this.uiRects.push({ x: cx - r, y: y - r, w: r * 2, h: r * 2, round: true });
+      this.strip.chips.push({ cx, icon, badge, zone, index: null });
+    }
+    const mx = x0 + n * step;
+    this.strip.more = this._tap(mx - 30, y - 30, 60, 'arsenal', () => this.inventory?.toggle());
+    this.buttons.arsenal = { x: mx, y };
+  }
+
+  /** Какие оружия на ленте: недавние и по порядку арсенала, только с патронами. */
+  _stripWeapons(turn) {
+    const st = this.strip;
+    const team = turn.currentTeam;
+    const has = (i) => (turn.ammoOf ? turn.ammoOf(i) : 1) > 0;
+    const out = [];
+    for (const i of [turn.weaponIndex, ...(st.recent[team] ?? [])]) {
+      if (has(i) && !out.includes(i)) out.push(i);
+    }
+    for (let i = 0; i < WEAPONS.length && out.length < st.n; i++) if (has(i) && !out.includes(i)) out.push(i);
+    return out.slice(0, st.n).sort((a, b) => a - b);
+  }
+
+  _drawStrip(scene) {
+    const st = this.strip, g = st.gfx, turn = scene.turn;
+    g.clear();
+    st.shown = scene.canPlayerAct() && !scene.isBotTurn?.();
+    st.more.setVisible(st.shown);
+    st.more.iconImage?.setVisible(st.shown);
+    const list = st.shown ? this._stripWeapons(turn) : [];
+    st.chips.forEach((c, i) => {
+      const idx = list[i];
+      c.index = idx ?? null;
+      if (idx == null) { c.icon.setVisible(false); c.badge.setVisible(false); return; }
+      const on = idx === turn.weaponIndex;
+      g.fillStyle(on ? 0xffd166 : 0x10131a, on ? 1 : 0.78).fillCircle(c.cx, st.y, st.r);
+      g.lineStyle(on ? 4 : 2, on ? 0x1a1410 : 0xffffff, on ? 1 : 0.3).strokeCircle(c.cx, st.y, st.r);
+      const key = weaponIcon(scene, WEAPONS[idx]);
+      if (key) {
+        if (c.icon.texture.key !== key) c.icon.setTexture(key);
+        c.icon.setScale(fitScale(scene, key, st.r * 1.5)).setVisible(true);
+      } else c.icon.setVisible(false);
+      const n = turn.ammoOf ? turn.ammoOf(idx) : Infinity;
+      c.badge.setText(Number.isFinite(n) ? String(n) : '∞').setVisible(true);
+    });
+  }
+
+  /** Отмена выстрела рычагом: круг «✕» над рычагом. */
+  padCancelHit(pointer) {
+    const c = this.padCancel;
+    if (!c) return false;
+    const px = pointer.x - CFG.FRAME.left, py = pointer.y - CFG.FRAME.top;
+    return Math.hypot(px - c.x, py - c.y) <= c.r;
   }
 
   _plate(x, y, size, iconName) {
@@ -893,6 +984,11 @@ export class Hud {
 
   setWeaponIndex(i) {
     const w = WEAPONS[i];
+    if (this.strip && w) {
+      const team = this.scene.turn?.currentTeam ?? 0;
+      const rec = (this.strip.recent[team] ?? []).filter((x) => x !== i);
+      this.strip.recent[team] = [i, ...rec].slice(0, 6);
+    }
     if (!w || !this.slot) return;
     this.slot.name.setText(w.name);
     const key = weaponIcon(this.scene, w);
@@ -921,6 +1017,7 @@ export class Hud {
     }
     if (this.hookGfx) this._updateHooks(scene);
     if (this.padGfx) this._drawSlingPad(scene);
+    if (this.strip) this._drawStrip(scene);
     if (this.stickGfx) this._drawStick();
 
     this._updateTimer(turn);

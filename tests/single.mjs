@@ -376,6 +376,31 @@ await page.waitForTimeout(200);
 check('рычаг: оттянул и вернул в центр — отмена, быстрый оттяг — выстрел',
   padCancel === 'aim' && await turnState() !== 'aim', padCancel);
 
+// --- лента оружия сверху и отмена выстрела на «✕» ---
+const shotTurn2 = await page.evaluate(() => window.__WORMS__.scene.getScene('Game').turn.turnNumber);
+await page.waitForFunction((n) => {
+  const s = window.__WORMS__.scene.getScene('Game');
+  return s.turn.turnNumber > n && s.canPlayerAct() && s.turn.currentTeam === 0;
+}, shotTurn2, { timeout: 90000 });
+const strip = await page.evaluate(() => {
+  const s = window.__WORMS__.scene.getScene('Game');
+  s.hud.update();
+  const before = s.turn.weaponIndex;
+  const chip = s.hud.strip.chips.find((c) => c.index != null && c.index !== before);
+  chip?.zone.emit('pointerdown');
+  return { shown: s.hud.strip.shown, chips: s.hud.strip.chips.filter((c) => c.index != null).length,
+    switched: chip ? s.turn.weaponIndex === chip.index : false, noPlate: !s.hud.slot };
+});
+check('лента оружия: видна в свой ход, тап по кружку — оружие в руках, нижней плашки нет',
+  strip.shown && strip.chips >= 3 && strip.switched && strip.noPlate, JSON.stringify(strip));
+const toCancel = await page.evaluate(() => {
+  const h = window.__WORMS__.scene.getScene('Game').hud;
+  return [h.padCancel.x - h.slingPad.x, h.padCancel.y - h.slingPad.y];
+});
+await padGesture([['down', 0, 0], ['move', 40, 50], ['move', toCancel[0] / 2, toCancel[1] / 2], ['move', toCancel[0], toCancel[1]], ['up', toCancel[0], toCancel[1]]]);
+await page.waitForTimeout(200);
+check('рычаг: дотянул до «✕» и отпустил — выстрела нет', await turnState() === 'aim');
+
 // --- испытания: все собираются, звёзды и монеты за победу ---
 const challengeIds = await page.evaluate(async () => (await import('/src/campaign/challenges.js')).CHALLENGES.map((c) => c.id));
 const broken = [];

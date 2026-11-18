@@ -266,6 +266,13 @@ const ICONS = {
     ctx.beginPath(); ctx.arc(c, c + s * 0.02, s * 0.15, 0.2 * Math.PI, 0.8 * Math.PI); ctx.stroke();
   },
   // Три точки: редкие кнопки спрятаны под одной
+  arsenal: (ctx, s) => {
+    const c = s * 0.18, w = s * 0.26, g = s * 0.1;
+    ctx.fillStyle = '#ffffff';
+    for (const [x, y] of [[c, c], [c + w + g, c], [c, c + w + g], [c + w + g, c + w + g]]) {
+      ctx.beginPath(); ctx.roundRect(x, y, w, w, s * 0.05); ctx.fill();
+    }
+  },
   more: (ctx, s) => {
     ctx.fillStyle = '#ffffff';
     for (const k of [0.28, 0.5, 0.72]) {
