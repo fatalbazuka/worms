@@ -433,6 +433,35 @@ for (const id of upIds) {
 }
 check(`«Подъём»: все ${upIds.length} боёв собираются, монстры на этажах`, upIds.length === 20 && upBroken.length === 0, upBroken.join(','));
 
+// События мест: порыв метели толкает бойцов, извержение роняет лавовые бомбы
+const envEvent = async (id) => {
+  await page.evaluate(async (id) => {
+    const { ascentMatch } = await import('/src/core/match.js');
+    const g = window.__WORMS__.scene.getScene('Game');
+    g.registry.set('match', ascentMatch(id));
+    g.registry.set('seed', ascentMatch(id).seed);
+    g.scene.restart();
+  }, id);
+  await gameReady();
+  return page.evaluate(() => {
+    const s = window.__WORMS__.scene.getScene('Game');
+    s.hud.setHelp(false);
+    const before = s.worms.map((w) => w.x);
+    let turn = 0;
+    for (let t = 2; t <= 40 && !turn; t++) if (s.ambience.run(t)) turn = t;
+    return { turn, before };
+  });
+};
+const gust = await envEvent('up-6');
+await page.waitForTimeout(1500);
+const moved = await page.evaluate((before) => window.__WORMS__.scene.getScene('Game').worms
+  .filter((w, i) => Math.abs(w.x - before[i]) > 6).length, gust.before);
+check('Ледник: порыв метели сдвигает бойцов по ветру', gust.turn > 0 && moved >= 2, `ход ${gust.turn}, сдвинуто ${moved}`);
+const erupt = await envEvent('up-11');
+const bombs = await page.waitForFunction(() => window.__WORMS__.scene.getScene('Game').projectiles
+  .filter((p) => p.weapon.id === 'fireball').length, null, { timeout: 5000 }).then((h) => h.jsonValue()).catch(() => 0);
+check('Жерло: извержение — с неба падают лавовые бомбы', erupt.turn > 0 && bombs >= 1, `ход ${erupt.turn}, бомб ${bombs}`);
+
 // Башня дня: одна и та же башня от даты, бойцы и монстры на этажах
 await page.evaluate(async () => {
   const { dailyMatch } = await import('/src/core/match.js');

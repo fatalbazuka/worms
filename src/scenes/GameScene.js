@@ -11,6 +11,7 @@ import { Mine } from '../entities/Mine.js';
 import { Spring } from '../entities/Spring.js';
 import { Props } from '../entities/Props.js';
 import { Monster, isBoss } from '../entities/Monster.js';
+import { Ambience } from '../ui/Ambience.js';
 import { Hud, TOP_H } from '../ui/Hud.js';
 import { Fx } from '../ui/Fx.js';
 import { AimController } from '../ui/AimController.js';
@@ -157,6 +158,8 @@ export default class GameScene extends Phaser.Scene {
     if (this.terrain.tops) {
       this.props = new Props(this, this.seed, this.variant?.id ?? 'classic')
         .build([...this.worms, ...this.monsters].map((w) => ({ x: w.x, y: w.y })));
+      // Атмосфера вида башни: дальний фон, частицы, события между ходами
+      this.ambience = new Ambience(this, this.variant?.id ?? 'classic', this.seed);
     }
     this._setupKeyboard();
     this._setupBots();
@@ -962,6 +965,7 @@ export default class GameScene extends Phaser.Scene {
       this.mines = this.mines.filter((m) => m.alive);
     }
     this.props?.update(dt);
+    this.ambience?.update(dt);
     for (const m of this.monsters) m.update(dt);
     if (this.monsters.some((m) => !m.alive)) this.monsters = this.monsters.filter((m) => m.alive);
     for (const sp of this.springs) sp.update(dt);
@@ -1555,10 +1559,13 @@ export default class GameScene extends Phaser.Scene {
     if (this.net) return false;
     let any = false;
     for (const m of [...this.monsters]) if (m.alive && m.act()) any = true;
+    // Событие места: метель, извержение, метеориты (ui/Ambience.js)
+    if (this.ambience?.run(this.turn.turnNumber)) any = true;
     return any;
   }
 
   monstersBusy() {
+    if (this.ambience?.busy) return true;
     return this.monsters.some((m) => m.alive && m.busy);
   }
 
@@ -1960,6 +1967,7 @@ export default class GameScene extends Phaser.Scene {
     this.springs = [];
     this.monsters = [];
     this.props = null;
+    this.ambience = null;
     this.aim?.destroy();
     this.crates = [];
     this.rig?.destroy();
