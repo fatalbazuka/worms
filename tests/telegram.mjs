@@ -13,8 +13,8 @@
  *   • ссылка-приглашение ведёт в t.me, а «позвать друга» открывает
  *     родной выбор чата;
  *   • startapp=КОД из приглашения ведёт прямо в комнату;
- *   • «На экран Домой»: кнопка в меню, предложение после первой партии
- *     ровно один раз, и кнопка пропадает, когда иконка стоит.
+ *   • «На экран Домой»: только по кнопке в меню (сами не предлагаем),
+ *     и кнопка пропадает, когда иконка стоит.
  */
 import { chromium } from 'playwright';
 import { launchOptions } from './browser.mjs';
@@ -235,37 +235,7 @@ await page.evaluate(() => window.__WORMS__.scene.getScene('Menu').showRoot());
 const homeBtn = await page.evaluate(() => window.__WORMS__.scene.getScene('Menu').buttons.home ?? null);
 check('в меню есть кнопка «На экран Домой», пока иконки нет', Boolean(homeBtn));
 
-// Первая партия: играем хотсит и завершаем — предложение должно всплыть
-await page.evaluate(() => {
-  const m = window.__WORMS__.scene.getScene('Menu');
-  m.showQuick();
-});
-await page.evaluate(() => {
-  const m = window.__WORMS__.scene.getScene('Menu');
-  const b = m.buttons.hotseat;
-  m.start({ mode: 'quick', teams: [{ worms: 2, control: 'human' }, { worms: 2, control: 'human' }], rules: {} });
-  return b;
-});
-await gameReady(page);
-await page.evaluate(() => {
-  const s = window.__WORMS__.scene.getScene('Game');
-  s.worms.filter((w) => w.team === 1).forEach((w) => w.damage(999));
-});
-const offered = await page.waitForFunction(
-  () => Telegram.WebApp.__calls.includes('addToHomeScreen'), null, { timeout: 15000 },
-).then(() => true).catch(() => false);
-check('после первой доигранной партии Telegram предлагает иконку', offered);
-const offeredFlag = await page.evaluate(() => Telegram.WebApp.CloudStorage.__store.get('worms.home.offered'));
-check('отметка «уже предлагали» лежит в облаке', offeredFlag === '1', String(offeredFlag));
-
-// Иконка поставлена → кнопка в меню пропадает
-await page.evaluate(() => window.__WORMS__.scene.getScene('Game').toMenu());
-await menuReady(page);
-const homeAfter = await page.evaluate(() => window.__WORMS__.scene.getScene('Menu').buttons.home ?? null);
-check('когда иконка стоит, кнопки в меню нет', homeAfter === null);
-
-// Вторая партия — предложения быть не должно
-const offersBefore = (await calls(page)).filter((c) => c === 'addToHomeScreen').length;
+// Доигранная партия: иконку сами не предлагаем — только по кнопке
 await page.evaluate(() => {
   const m = window.__WORMS__.scene.getScene('Menu');
   m.start({ mode: 'quick', teams: [{ worms: 2, control: 'human' }, { worms: 2, control: 'human' }], rules: {} });
@@ -277,8 +247,22 @@ await page.evaluate(() => {
 });
 await page.waitForFunction(() => window.__WORMS__.scene.getScene('Game').gameOverUi, null, { timeout: 15000 });
 await page.waitForTimeout(2200);
-const offersAfter = (await calls(page)).filter((c) => c === 'addToHomeScreen').length;
-check('второй раз иконку не предлагают', offersAfter === offersBefore, `${offersBefore} → ${offersAfter}`);
+const offeredAuto = (await calls(page)).includes('addToHomeScreen');
+check('после партии иконку на экран Домой сами не предлагают', !offeredAuto);
+
+// Кнопка в меню — предложение Telegram; иконка поставлена → кнопка пропадает
+await page.evaluate(() => window.__WORMS__.scene.getScene('Game').toMenu());
+await menuReady(page);
+const homeNow = await page.evaluate(() => window.__WORMS__.scene.getScene('Menu').buttons.home ?? null);
+if (homeNow) await tapButton(page, homeNow);
+const offeredByTap = await page.waitForFunction(
+  () => Telegram.WebApp.__calls.includes('addToHomeScreen'), null, { timeout: 8000 },
+).then(() => true).catch(() => false);
+check('по кнопке «На экран Домой» Telegram предлагает иконку', offeredByTap);
+await page.evaluate(() => window.__WORMS__.scene.getScene('Menu').showRoot());
+await page.waitForTimeout(300);
+const homeAfter = await page.evaluate(() => window.__WORMS__.scene.getScene('Menu').buttons.home ?? null);
+check('когда иконка стоит, кнопки в меню нет', homeAfter === null);
 
 // Результат боя ушёл в облако
 const cloudAfter = await page.evaluate(() => JSON.parse(Telegram.WebApp.CloudStorage.__store.get('worms.player.v1')));
