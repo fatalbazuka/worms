@@ -31,6 +31,7 @@ const fakeTg = createServer((req, res) => {
       getMe: { id: 1, is_bot: true, username: 'worms_test_bot' },
       createInvoiceLink: `https://t.me/$invoice-${tgCalls.length}`,
       sendMessage: { message_id: tgCalls.length },
+      savePreparedInlineMessage: { id: `prep-${tgCalls.length}`, expiration_date: 0 },
     }[method] ?? true;
     res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({ ok: true, result }));
   });
@@ -318,6 +319,16 @@ check('«твой ход» бот не пишет', !calls('sendMessage').some((
   check('подарок за друга есть, даже если он сперва нажал /start в боте',
     (await call('GET', '/api/shop', null, late.data.token)).data.owned.boxes === 1
       && (await call('GET', '/api/shop', null, buyer.token)).data.owned.boxes === hostMid + 1);
+  // Вызов на бой: карточка с кнопкой в комнату башни
+  const ch = await call('POST', '/api/challenge', { room: 'ZWAB12', link: 'https://t.me/worms_test_bot/game?startapp=ZWAB12' }, buyer.token);
+  const prep = calls('savePreparedInlineMessage').at(-1)?.params;
+  check('вызов на бой: карточка с кнопкой «Принять вызов» в ту же комнату',
+    ch.status === 200 && prep?.user_id === 51
+      && prep.result.reply_markup.inline_keyboard[0][0].url.endsWith('startapp=ZWAB12') && prep.allow_group_chats,
+    JSON.stringify(prep?.result?.reply_markup));
+  const badLink = await call('POST', '/api/challenge', { room: 'ZWAB12', link: 'https://evil.test/?startapp=ZWAB12' }, buyer.token);
+  const badRoom = await call('POST', '/api/challenge', { room: 'A1B2C3', link: 'https://t.me/worms_test_bot/game?startapp=A1B2C3' }, buyer.token);
+  check('вызов на бой: чужая ссылка и не башня — отказ', badLink.status === 400 && badRoom.status === 400);
   check('обычный вход без ссылки подарка не даёт', (await call('GET', '/api/shop', null, guest.token)).data.owned.boxes === 0);
 }
 

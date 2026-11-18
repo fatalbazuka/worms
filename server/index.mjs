@@ -36,6 +36,7 @@
  *   POST /api/event {name, props}         → {ok}             статистика: open | battle
  *   GET  /api/shop                        → {items, skinStars, owned}  товары и что положено
  *   POST /api/shop/buy {item}             → {invoice}        box1 | box5 | skin-<id>
+ *   POST /api/challenge {room, link}      → {id}             карточка «вызов на бой» для shareMessage
  *   POST /api/bot/webhook                 ← обновления Telegram
  *   GET  /api/config, /api/health
  */
@@ -275,6 +276,20 @@ export function createApp({
       case 'GET /api/shop': {
         const me = auth(req);
         return { items: SHOP, skinStars: SKIN_STARS, owned: shop.owned(me.id), stars: api.enabled };
+      }
+      case 'POST /api/challenge': {
+        const me = auth(req);
+        const { room, link } = await readJson(req);
+        const code = String(room ?? '').toUpperCase();
+        // Только комната башни с другом и только ссылка в Telegram на неё же
+        if (!/^ZW[A-Z0-9]{2,10}$/.test(code)) throw new HttpError(400, 'не та комната');
+        const url = String(link ?? '');
+        if (!/^https:\/\/t\.me\/[\w/]+\?startapp=[A-Za-z0-9_-]+$/.test(url) || !url.endsWith(`startapp=${code}`)) {
+          throw new HttpError(400, 'не та ссылка');
+        }
+        const id = await bot.prepareChallenge(me, code, url);
+        if (!id) throw new HttpError(503, 'карточка сейчас недоступна');
+        return { id };
       }
       case 'POST /api/shop/buy': {
         const me = auth(req);

@@ -33,7 +33,10 @@ const fakeTg = createServer((req, res) => {
   req.on('end', () => {
     const method = req.url.split('/').pop();
     tgCalls.push({ method, params: body ? JSON.parse(body) : {} });
-    const result = { getMe: { username: 'worms_test_bot' }, createInvoiceLink: 'https://t.me/$inv' }[method] ?? true;
+    const result = {
+      getMe: { username: 'worms_test_bot' }, createInvoiceLink: 'https://t.me/$inv',
+      savePreparedInlineMessage: { id: 'prep-1', expiration_date: 0 },
+    }[method] ?? true;
     res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({ ok: true, result }));
   });
 });
@@ -83,6 +86,7 @@ async function tgPage(i, user, { gateOnly = false } = {}) {
         checkHomeScreenStatus(cb) { cb('missed'); }, addToHomeScreen() {},
         requestWriteAccess(cb) { cb(true); },
         openInvoice(link, cb) { globalThis.__invoices = [...(globalThis.__invoices ?? []), link]; cb('paid'); },
+        shareMessage(id) { globalThis.__shared = [...(globalThis.__shared ?? []), id]; },
         HapticFeedback: {
           impactOccurred: (k) => haptics.push(`impact:${k}`),
           notificationOccurred: (k) => haptics.push(`note:${k}`),
@@ -232,6 +236,20 @@ const boxesAfter = await A.waitForFunction((b) => {
 }, boxesBefore, { timeout: 20000 }).then((h) => h.jsonValue()).catch(() => boxesBefore);
 check('коробка за звёзды: счёт на 25 ⭐, после оплаты коробка в профиле',
   shopInv?.prices?.[0]?.amount === 25 && boxesAfter === boxesBefore + 1, `${boxesBefore} → ${boxesAfter}`);
+
+// --- вызов друга с главного экрана: карточка с кнопкой в комнату башни ---
+await A.evaluate(() => {
+  globalThis.WORMS_TG = { bot: 'worms_test_bot', app: 'game' };
+  window.__WORMS__.scene.getScene('Menu').showRoot();
+});
+await A.waitForTimeout(300);
+await A.evaluate(() => window.__WORMS__.scene.getScene('Menu').challengeFriend());
+const shared = await A.waitForFunction(() => globalThis.__shared?.length && globalThis.__shared, null, { timeout: 8000 })
+  .then((h) => h.jsonValue()).catch(() => null);
+const prep = tgCalls.filter((c) => c.method === 'savePreparedInlineMessage').at(-1)?.params;
+check('«вызвать друга»: комната башни, карточка с кнопкой ушла в окно «поделиться»',
+  Boolean(shared?.length) && /startapp=ZW/.test(prep?.result?.reply_markup?.inline_keyboard?.[0]?.[0]?.url ?? ''),
+  JSON.stringify({ shared, url: prep?.result?.reply_markup?.inline_keyboard?.[0]?.[0]?.url }));
 
 check('нет ошибок в консоли', errors.length === 0, errors.slice(0, 4).join(' | '));
 

@@ -158,6 +158,12 @@ export async function fetchShop() {
 }
 
 /** Счёт на покупку: box1 | box5 | skin-<id>. @returns {Promise<string>} ссылка на счёт */
+/** Карточка «вызов на бой» для комнаты башни. @returns {Promise<string|null>} id сообщения */
+export async function prepareChallenge(room, link) {
+  if (!token) return null;
+  try { return (await call('POST', '/challenge', { room, link })).id ?? null; } catch { return null; }
+}
+
 export async function buyShopItem(item) {
   const r = await call('POST', '/shop/buy', { item });
   return r.invoice;

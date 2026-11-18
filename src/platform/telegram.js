@@ -301,6 +301,21 @@ export function shareLink(link, text) {
   }
 }
 
+/**
+ * Отправить подготовленное сервером сообщение (карточку с кнопкой) в
+ * выбранный чат — родным окном Telegram 8.0+. @returns {boolean} показано ли
+ */
+export function shareMessage(id) {
+  const tg = tgApi();
+  if (!id || !tg?.shareMessage || !tgSupports('8.0')) return false;
+  try {
+    tg.shareMessage(id);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export function shareRoom(room, link = inviteLink(room)) {
   const tg = tgApi();
   if (!tg?.openTelegramLink) return false;

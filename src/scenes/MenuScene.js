@@ -17,7 +17,7 @@ import { Lobby } from '../net/lobby.js';
 import { pendingSession, forgetSession } from '../net/session.js';
 import {
   syncMe, fetchTop, myRank, loggedIn, onAccountChange, track, fetchShop, buyShopItem,
-  trackStep,
+  trackStep, prepareChallenge,
 } from '../net/server.js';
 import { openAccountDialog } from '../ui/AccountDialog.js';
 import { openTournaments } from '../ui/Tournaments.js';
@@ -25,7 +25,7 @@ import { askText, closeOverlay } from '../ui/Overlay.js';
 import { makeTransport } from '../net/connect.js';
 import { player } from '../platform/player.js';
 import {
-  inviteLink as tgInviteLink, shareRoom, canOfferHomeScreen, addToHomeScreen, onHomeScreenChange,
+  inviteLink as tgInviteLink, shareRoom, shareMessage, canOfferHomeScreen, addToHomeScreen, onHomeScreenChange,
   haptic, inTelegram, botLink, openInvoice, refLink, shareLink,
 } from '../platform/telegram.js';
 import { leagueOf, nextLeague, leagueProgress, toNextLeague, leagueLabel } from '../platform/league.js';
@@ -269,6 +269,9 @@ export default class MenuScene extends Phaser.Scene {
     // Надписи кнопки — чтобы обновлять подсказку на месте (счётчик поиска)
     this.buttonTexts ??= {};
     this.buttonTexts[key] = { title, sub };
+    // Действие кнопки — чтобы нажать её из кода (вызов друга с главного экрана)
+    this.buttonHandlers ??= {};
+    this.buttonHandlers[key] = enabled ? onTap : null;
 
     if (enabled) {
       img.setInteractive({ useHandCursor: true });
@@ -470,8 +473,13 @@ export default class MenuScene extends Phaser.Scene {
         : choice.level ? `Башня · бот «${BOT_LEVELS[choice.level].name}»` : 'Башня · вдвоём на одном телефоне',
       () => this.start(tutorial ? { ...challengeMatch('first'), tutorial: true } : towerMatch(choice.level)),
       { w: Math.min(W - 72, 560), h: playH, variant: 'primary', big: true });
-    this._button('modes', cx, playY + playH / 2 + (portrait ? 48 : 36), 'другие режимы', '',
-      () => this.showModes(), { w: 300, h: portrait ? 56 : 48, titleSize: 22 });
+    // Под «Играть»: другие режимы и вызов друга — бок о бок
+    const subY = playY + playH / 2 + (portrait ? 48 : 36);
+    const subW = Math.min(300, (Math.min(W - 72, 560) - 16) / 2);
+    this._button('modes', cx - subW / 2 - 8, subY, 'другие режимы', '',
+      () => this.showModes(), { w: subW, h: portrait ? 56 : 48, titleSize: 22 });
+    this._button('challenge', cx + subW / 2 + 8, subY, 'вызвать друга', '',
+      () => this.challengeFriend(), { w: subW, h: portrait ? 56 : 48, titleSize: 22 });
 
     // Партия оборвалась (Telegram перезапустился, погас экран), а мы
     // открылись без ссылки: предлагаем вернуться, пока соперник ждёт
@@ -1575,9 +1583,15 @@ export default class MenuScene extends Phaser.Scene {
     this.items.push(this.add.text(cx, 268, 'код для друга', font(this.fs(12), 700, UI.textDim)).setOrigin(0.5, 0));
 
     const link = this.inviteLink(room);
-    // В Telegram зовём родным выбором чата, снаружи — буфером обмена
-    this._button('copy', cx, 330, 'Позвать друга', '',
-      () => {
+    // В Telegram зовём родным выбором чата: в башню — карточкой «вызов на
+    // бой» с кнопкой (Telegram 8.0+), иначе ссылкой; снаружи — буфером обмена
+    this._button('copy', cx, 330, isTowerRoom(room) ? 'Вызвать друга' : 'Позвать друга', '',
+      async () => {
+        trackStep('invite');
+        if (isTowerRoom(room) && inTelegram()) {
+          const id = await prepareChallenge(room, link);
+          if (shareMessage(id)) return;
+        }
         if (shareRoom(room, link)) return;
         copyText(link);
         // Подтверждение одно на все нажатия: иначе оно множится стопкой
@@ -1598,6 +1612,13 @@ export default class MenuScene extends Phaser.Scene {
 
   inviteLink(room) {
     return tgInviteLink(room);
+  }
+
+  /** Вызов с главного экрана: комната башни и сразу выбор чата для карточки. */
+  challengeFriend() {
+    const room = randomRoom(true, true);
+    this.showRoom(room);
+    if (inTelegram()) this.time.delayedCall(250, () => this.buttonHandlers?.copy?.());
   }
 
   // ---------------------------------------------------------------- старт

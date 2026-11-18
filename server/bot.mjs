@@ -379,8 +379,36 @@ export function createBot({ db, api, players, tournaments, analytics = null, adm
     return true;
   }
 
+  /**
+   * Вызов на бой карточкой: сообщение с кнопкой «Принять вызов», которое
+   * игра покажет родным окном Telegram «поделиться» (WebApp.shareMessage).
+   * Кнопка — ссылка в мини-приложение сразу в комнату вызвавшего.
+   * @returns {Promise<string|null>} id подготовленного сообщения
+   */
+  async function prepareChallenge(player, room, link) {
+    if (!player?.tg_id) return null;
+    const res = await api.call('savePreparedInlineMessage', {
+      user_id: Number(player.tg_id),
+      result: {
+        type: 'article',
+        id: `ch-${room}`.slice(0, 64),
+        title: 'Вызов на бой ⚔️',
+        description: `${player.name} зовёт на башню`,
+        input_message_content: {
+          message_text: `⚔️ ${player.name} вызывает тебя на бой на башне!\n`
+            + 'Тросы, рогатка и смайлики. Жми кнопку — и сразу в бой.',
+        },
+        reply_markup: { inline_keyboard: [[{ text: '⚔️ Принять вызов', url: link }]] },
+      },
+      allow_user_chats: true,
+      allow_group_chats: true,
+    });
+    return res?.id ?? null;
+  }
+
   return {
     handleUpdate, setup, notify, notifyAdmins, refund, donateInvoice, tourInvoice, shopInvoice, remind,
+    prepareChallenge,
     get username() { return username; },
   };
 }
