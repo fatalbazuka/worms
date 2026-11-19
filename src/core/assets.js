@@ -52,6 +52,14 @@ const SHOTS = ['bazooka', 'grenade', 'cluster', 'bomblet', 'mole', 'banana', 'ho
   'weight', 'sticky', 'spring', 'rock', 'snowball', 'fireball'];
 for (const id of HANDS) IMAGES[`hand_${id}`] = `assets/items/hand_${id}.png`;
 for (const id of SHOTS) IMAGES[`shot_${id}`] = `assets/items/shot_${id}.png`;
+// Нарисованные отдельно (tools/build_new_weapons.py): бумеранг, самонаводка
+// и попрыгунчик — у него мяч вместо прежнего банана
+for (const id of ['boomerang', 'homing']) {
+  IMAGES[`hand_${id}`] = `assets/items/hand_${id}.png`;
+  IMAGES[`shot_${id}`] = `assets/items/shot_${id}.png`;
+}
+IMAGES.hand_banana = 'assets/items/hand_bouncer.png';
+IMAGES.shot_banana = 'assets/items/shot_bouncer.png';
 // Монстры «Подъёма» (tools/build_tower_sheet.py): слизень, кактус, тролль-Великан в трёх позах
 for (const id of ['mon_slime', 'mon_cactus', 'mon_boss', 'mon_boss_throw', 'mon_boss_down',
   'mon_yeti', 'mon_yeti_throw', 'mon_yeti_down', 'mon_golem', 'mon_golem_throw', 'mon_golem_down',
@@ -103,6 +111,7 @@ function fighterAnims(sheet) {
     [`${sheet}_aim`]: { frameRate: 1, repeat: -1, frames: [12] },
     [`${sheet}_win`]: { frameRate: 5, repeat: -1, frames: [13, 3] },
     [`${sheet}_cry`]: { frameRate: 1, repeat: -1, frames: [14] },
+    [`${sheet}_surprised`]: { frameRate: 1, repeat: -1, frames: [9] },
   };
 }
 

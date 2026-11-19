@@ -14,8 +14,10 @@ import { has, fitScale } from '../core/assets.js';
  * оружием позиционным, а не просто отложенным взрывом.
  */
 export class Mine {
-  constructor(scene, x, y, weapon, owner) {
+  constructor(scene, x, y, weapon, owner, { magnetic = false } = {}) {
     this.scene = scene;
+    // Магнитная: взведённая, ползёт к ближайшему врагу бросившего
+    this.magnetic = magnetic;
     this.terrain = scene.terrain;
     this.weapon = weapon;
     this.owner = owner;
@@ -42,6 +44,23 @@ export class Mine {
       this.view.setStrokeStyle(2, 0x1a1a24, 0.8);
     }
     scene.rig.world(this.view.setDepth(DEPTH.WORM - 1));
+    if (magnetic && this.view.setTint) this.view.setTint(0x9fc8ff);
+  }
+
+  /** Ползёт по полу к ближайшему врагу в радиусе; стенка — стоп. */
+  _crawl(dt) {
+    let best = null, bd = 190;
+    for (const w of this.scene.worms) {
+      if (!w.alive || (this.owner && w.team === this.owner.team)) continue;
+      const d = Math.hypot(w.x - this.x, w.centerY - this.y);
+      if (d < bd) { bd = d; best = w; }
+    }
+    if (!best || Math.abs(best.x - this.x) < 4) return;
+    const dir = Math.sign(best.x - this.x);
+    const nx = this.x + dir * 70 * dt;
+    if (this.terrain.solidAt(nx + dir * 5, this.y - 6)) return;
+    this.x = nx;
+    this.view.setAngle(Math.sin(this.scene.time.now / 60) * 8);
   }
 
   /** Опустить на землю: мину ставят стоя, а под ногами может быть склон. */
@@ -93,6 +112,8 @@ export class Mine {
     } else if (this._someoneClose()) {
       this.fuse = CFG.MINE_FUSE;
       this.scene.fx.pickup(this.x, this.y - 14, 'мина!', '#ff8a8a');
+    } else if (this.magnetic) {
+      this._crawl(dt);
     }
 
     this.view.setPosition(Math.round(this.x), Math.round(this.y));

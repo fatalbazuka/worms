@@ -23,6 +23,9 @@ export class Weapon {
     // Раздел в инвентаре: с четырьмя стволами хватало одного ряда,
     // с дюжиной нужны полки
     this.category = cfg.category ?? 'взрывное';
+    // Редкость: обычное есть с начала боя, остальное падает с неба в ящиках
+    // (common / rare / epic / legendary — шансы в CRATE_RARITY)
+    this.rarity = cfg.rarity ?? 'common';
     // Сколько выстрелов даёт один ход. У дробовика два, ход после первого
     // не заканчивается.
     this.shots = cfg.shots ?? 1;
@@ -48,6 +51,13 @@ export class Weapon {
       pierce: 0,          // >0 — первый пол пробивает на столько px вглубь (гиря)
       sticky: false,      // прилипает к первой же поверхности (липкая бомба)
       stickFuse: 0,       // сек от прилипания до взрыва
+      maxBounces: 0,      // >0 — рвётся на этом отскоке (попрыгунчик)
+      split: null,        // оружие осколков: тап в полёте делит на 3 (сплит-ракета)
+      homing: 0,          // >0 — через homeDelay с доворачивает к врагу, рад/с
+      homeDelay: 0.6,
+      boomerang: 0,       // >0 — возвратное ускорение бумеранга, px/с²
+      hitDamage: 0,       // урон бумеранга по каждому, кого задел
+      deploy: null,       // 'mine' — на земле становится миной (магнитная мина)
       trail: true,
     }, cfg.projectile);
 
@@ -189,6 +199,8 @@ export class PlacedWeapon extends Weapon {
  */
 export class MineWeapon extends Weapon {
   fire(scene, x, y, vx, vy, owner) {
+    // Магнитная мина бросается рогаткой и становится миной там, где легла
+    if (this.projectile.deploy === 'mine') return [new Projectile(scene, x, y, vx, vy, this, owner)];
     scene.addMine(owner ? owner.x : x, owner ? owner.y - 4 : y, this, owner);
     return [];
   }

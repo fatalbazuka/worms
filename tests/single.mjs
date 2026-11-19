@@ -732,6 +732,40 @@ check('прицел «кнопки»: на башне ▲▼ и «Огонь», 
   check('новичок: первая «Играть» — обучение «Первый выстрел»',
     tut.mode === 'challenge' && tut.id === 'first' && tut.tutorial, JSON.stringify(tut));
   await p2.waitForFunction(() => window.__WORMS__.scene.getScene('Game').canPlayerAct(), null, { timeout: 40000 });
+  // Тренировка: шаги по порядку, рычаг заперт до последнего, ход не сгорает
+  const coach = await p2.evaluate(async () => {
+    const { WEAPONS } = await import('/src/weapons/index.js');
+    const s = window.__WORMS__.scene.getScene('Game');
+    const c = s.coach;
+    if (!c) return { coach: false };
+    const seen = [c.current.id];
+    const locked = c.lockShot && !s.hud.slingPad ? null : c.lockShot;
+    const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+    // Ход: идти к флажку
+    const dir = Math.sign(c.flag?.x - s.turn.activeWorm.x) || 1;
+    for (let i = 0; i < 80 && c.current?.id === 'walk'; i++) { s.moveInput[dir > 0 ? 'right' : 'left'] = true; await wait(50); }
+    s.moveInput.left = s.moveInput.right = false;
+    seen.push(c.current?.id);
+    await wait(400);
+    s.moveInput.jumpQueued = true;
+    for (let i = 0; i < 40 && c.current?.id === 'jump'; i++) await wait(50);
+    seen.push(c.current?.id);
+    await wait(1200);
+    for (let i = 0; i < 40 && c.current?.id === 'hook'; i++) {
+      const p = s.aim._hints?.[0];
+      if (p && !s.turn.activeWorm.zip) s.tryHook(p.x, p.y);
+      await wait(100);
+    }
+    seen.push(c.current?.id);
+    await wait(400);
+    s.turn.setWeaponIndex(WEAPONS.findIndex((w) => w.id === 'grenade'));
+    for (let i = 0; i < 20 && c.current?.id === 'weapon'; i++) await wait(50);
+    seen.push(c.current?.id);
+    return { coach: true, seen, lockedBefore: locked, lockedAfter: c.lockShot, time: s.turn.timeLeft };
+  });
+  check('тренировка новичка: ходьба → прыжок → трос → граната → выстрел, рычаг заперт до выстрела',
+    coach.coach && coach.seen.join() === 'walk,jump,hook,weapon,shoot' && coach.lockedBefore === true && coach.lockedAfter === false
+      && coach.time > 5, JSON.stringify(coach));
   await p2.evaluate(() => {
     const s = window.__WORMS__.scene.getScene('Game');
     s.hud.setHelp(false);

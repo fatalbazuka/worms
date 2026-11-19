@@ -47,7 +47,7 @@ export class Projectile {
       this.own = true;
       this.sprited = false;
       // Огненный шар нарисован с хвостом пламени — летит хвостом назад
-      this.pointed = ['bazooka', 'mole', 'mortar', 'airmissile', 'fireball', 'icicle', 'meteor'].includes(this.weapon.id);
+      this.pointed = ['bazooka', 'mole', 'mortar', 'airmissile', 'fireball', 'icicle', 'meteor', 'homing', 'splitlet'].includes(this.weapon.id);
       // Авиаракета нарисована носом вниз-вправо, комета ☄️ — вниз-влево, остальные — вправо
       this.tilt = { airmissile: -Math.PI / 4, meteor: (-3 * Math.PI) / 4 }[this.weapon.id] ?? 0;
       const size = Math.max(14, (meta(key)?.frameWidth ?? p.radius * 4) * 1.35);
@@ -96,6 +96,10 @@ export class Projectile {
     const p = this.weapon.projectile;
 
     if (this.digging) { this._digStep(dt); return; }
+    if (p.boomerang) { this._boomerangStep(dt, p); return; }
+    // Сплит по сети: соперник разделил ракету в этот момент полёта
+    if (this.splitAt != null && this.age >= this.splitAt) { this.split(); return; }
+    if (p.homing && this.age >= p.homeDelay) this._steer(dt, p);
 
     if (this.stuck) {
       // Прилипла. Стену под ней снесли — отваливается и липнет заново
@@ -111,9 +115,11 @@ export class Projectile {
       }
     }
 
-    // Интегрирование скорости: гравитация + ветер как горизонтальное ускорение
-    this.vx += this.scene.wind * p.windScale * dt;
-    this.vy += CFG.GRAVITY * p.gravityScale * dt;
+    // Интегрирование скорости: гравитация + ветер как горизонтальное ускорение.
+    // Самонаводка после захвата цели летит ровно — сама держит курс
+    const locked = p.homing && this.age >= p.homeDelay;
+    this.vx += this.scene.wind * p.windScale * (locked ? 0.2 : 1) * dt;
+    this.vy += CFG.GRAVITY * p.gravityScale * (locked ? 0 : 1) * dt;
     if (p.drag > 0) {
       const f = Math.exp(-p.drag * dt);
       this.vx *= f; this.vy *= f;
@@ -162,6 +168,15 @@ export class Projectile {
     }
 
     // --- касание земли ---
+    // Магнитная мина: легла — стала миной, без взрыва
+    if (p.deploy === 'mine') {
+      this.x = ray.freeX; this.y = ray.freeY;
+      this.alive = false;
+      this._cleanupView();
+      this.scene.addMine(this.x, this.y, this.weapon, this.owner, { magnetic: true });
+      this.scene.fx?.sound('thunk');
+      return;
+    }
     if (p.sticky) {
       this.x = ray.freeX; this.y = ray.freeY;
       this.vx = 0; this.vy = 0;
@@ -224,6 +239,16 @@ export class Projectile {
     ry = tvn * n.y + ty * friction;
 
     this.vx = rx; this.vy = ry;
+    // Попрыгунчик: на N-м отскоке рвётся сам
+    if (p.maxBounces > 0) {
+      this.bounces = (this.bounces ?? 0) + 1;
+      this.scene.fx?.sound('jump');
+      if (this.bounces >= p.maxBounces) {
+        this.x = ray.freeX; this.y = ray.freeY;
+        this.detonate(this.x, this.y);
+        return;
+      }
+    }
     // Отодвигаем от поверхности, чтобы не залипнуть внутри пикселя
     this.x = ray.freeX + n.x * 1.5;
     this.y = ray.freeY + n.y * 1.5;
@@ -232,6 +257,98 @@ export class Projectile {
       this.vx = 0; this.vy = 0;
       this.resting = true;
     }
+  }
+
+  /**
+   * Сплит-ракета: тап в полёте — три ракеты веером по текущему курсу.
+   * Не разделил — рвётся при ударе, как обычная.
+   */
+  split() {
+    if (!this.alive || !this.weapon.projectile.split) return false;
+    this.alive = false;
+    const child = this.weapon.projectile.split;
+    const speed = Math.hypot(this.vx, this.vy) || 1;
+    const a0 = Math.atan2(this.vy, this.vx);
+    const kids = [-0.24, 0, 0.24].map((da) => new Projectile(this.scene, this.x, this.y,
+      Math.cos(a0 + da) * speed, Math.sin(a0 + da) * speed, child, this.owner));
+    for (const k of kids) { k.insideGround = false; k.ownerGrace = 0; }
+    this.scene.projectiles.push(...kids);
+    this.scene.fx?.dust(this.x, this.y, 6);
+    this.scene.fx?.sound('shot');
+    this._cleanupView();
+    return true;
+  }
+
+  /** Самонаводка: доворот курса к ближайшему врагу стрелка, скорость не меньше 380. */
+  _steer(dt, p) {
+    const foe = this._nearestFoe(700);
+    if (!foe) return;
+    const want = Math.atan2(foe.centerY - this.y, foe.x - this.x);
+    const cur = Math.atan2(this.vy, this.vx);
+    let d = want - cur;
+    while (d > Math.PI) d -= Math.PI * 2;
+    while (d < -Math.PI) d += Math.PI * 2;
+    const turn = Math.max(-p.homing * dt, Math.min(p.homing * dt, d));
+    const speed = Math.max(380, Math.hypot(this.vx, this.vy));
+    this.vx = Math.cos(cur + turn) * speed;
+    this.vy = Math.sin(cur + turn) * speed;
+  }
+
+  _nearestFoe(range) {
+    let best = null, bd = range;
+    for (const w of this.scene.worms) {
+      if (!w.alive || (this.owner && w.team === this.owner.team)) continue;
+      const d = Math.hypot(w.x - this.x, w.centerY - this.y);
+      if (d < bd) { bd = d; best = w; }
+    }
+    return best;
+  }
+
+  /**
+   * Бумеранг: летит по прицелу, тормозит и возвращается к хозяину. Бьёт
+   * каждого, кого заденет, — по разу туда и по разу обратно. Стена его
+   * ловит; вернулся к бросившему — пойман.
+   */
+  _boomerangStep(dt, p) {
+    if (!this.dir) {
+      const s = Math.hypot(this.vx, this.vy) || 1;
+      this.dir = { x: this.vx / s, y: this.vy / s };
+      this.hitOut = new Set();
+      this.hitBack = new Set();
+    }
+    this.vx -= this.dir.x * p.boomerang * dt;
+    this.vy -= this.dir.y * p.boomerang * dt;
+    this.vy += CFG.GRAVITY * p.gravityScale * dt;
+    this.vx += this.scene.wind * p.windScale * dt;
+    const nx = this.x + this.vx * dt, ny = this.y + this.vy * dt;
+    const back = this.vx * this.dir.x + this.vy * this.dir.y < 0;
+    const hit = back ? this.hitBack : this.hitOut;
+    for (const w of this.scene.worms) {
+      if (!w.alive || hit.has(w) || (w === this.owner && !back)) continue;
+      if (w === this.owner && back) continue;
+      if (Math.hypot(w.x - nx, w.centerY - ny) > 22) continue;
+      hit.add(w);
+      this.scene.boomerangHit?.(w, p.hitDamage, this.vx, this.vy, this.owner);
+    }
+    // Вернулся к бросившему — пойман
+    if (back && this.owner?.alive && this.age > 0.4 && Math.hypot(this.owner.x - nx, this.owner.centerY - ny) < 24) {
+      this.destroy();
+      return;
+    }
+    if (this.insideGround) {
+      this.x = nx; this.y = ny;
+      if (!this.terrain.solidAt(nx, ny)) this.insideGround = false;
+      return;
+    }
+    const ray = this.terrain.raycast(this.x, this.y, nx, ny);
+    if (ray.hit || ny > this.terrain.height + 60 || nx < -120 || nx > this.terrain.width + 120 || this.age > 4.5) {
+      this.scene.fx?.dust(this.x, this.y, 5);
+      this.scene.fx?.sound('thunk');
+      this.destroy();
+      return;
+    }
+    this.x = nx; this.y = ny;
+    this._pushTrail();
   }
 
   _digStep(dt) {
@@ -304,6 +421,7 @@ export class Projectile {
 
   _syncView() {
     this.view.setPosition(this.x, this.y);
+    if (this.weapon.projectile.boomerang) this.view.rotation += 0.45;
     if (this.own && !this.resting && !this.stuck && (this.vx || this.vy)) {
       if (this.pointed) this.view.setRotation(Math.atan2(this.vy, this.vx) + this.tilt);
       else this.view.rotation += (this.vx >= 0 ? 1 : -1) * 0.14;

@@ -1,5 +1,5 @@
 import { CFG, DEPTH, TEAM_COLORS, TEAM_NAMES } from '../config.js';
-import { WEAPONS } from '../weapons/index.js';
+import { WEAPONS, WEAPON_RARITY } from '../weapons/index.js';
 import { has as hasAsset, weaponIcon, fitScale } from '../core/assets.js';
 import { UI, font, ensureButton, ensureRoundButton, ensureIcon } from './theme.js';
 import { Inventory } from './Inventory.js';
@@ -432,7 +432,7 @@ export class Hud {
     const g = this.padGfx, p = this.slingPad;
     g.clear();
     const w = scene.turn.activeWorm;
-    const ready = scene.canPlayerAct() && w && !w.zip && !scene.turn.retreating;
+    const ready = scene.canPlayerAct() && w && !w.zip && !scene.turn.retreating && !scene.coach?.lockShot;
     // Палец на рычаге — показываем его; иначе подсказка тянет сама
     let pull = this.padPull;
     if (!pull && ready && scene.aim?.padHint) pull = scene.aim.padHint;
@@ -677,17 +677,29 @@ export class Hud {
     st.more.setVisible(st.shown);
     st.more.iconImage?.setVisible(st.shown);
     const list = st.shown ? this._stripWeapons(turn) : [];
+    // Сменили оружие — выбранный кружок подпрыгивает
+    const bump = st.lastIdx !== undefined && st.lastIdx !== turn.weaponIndex;
+    st.lastIdx = turn.weaponIndex;
     st.chips.forEach((c, i) => {
       const idx = list[i];
       c.index = idx ?? null;
       if (idx == null) { c.icon.setVisible(false); c.badge.setVisible(false); return; }
       const on = idx === turn.weaponIndex;
       g.fillStyle(on ? 0xffd166 : 0x10131a, on ? 1 : 0.78).fillCircle(c.cx, st.y, st.r);
-      g.lineStyle(on ? 4 : 2, on ? 0x1a1410 : 0xffffff, on ? 1 : 0.3).strokeCircle(c.cx, st.y, st.r);
+      // Ободок — цвет редкости оружия
+      const rc = WEAPON_RARITY[WEAPONS[idx].rarity]?.color ?? 0xffffff;
+      const plain = WEAPONS[idx].rarity === 'common' || !WEAPONS[idx].rarity;
+      g.lineStyle(on ? 4 : 3, on ? 0x1a1410 : plain ? 0xffffff : rc, on ? 1 : plain ? 0.3 : 0.95).strokeCircle(c.cx, st.y, st.r);
       const key = weaponIcon(scene, WEAPONS[idx]);
       if (key) {
         if (c.icon.texture.key !== key) c.icon.setTexture(key);
-        c.icon.setScale(fitScale(scene, key, st.r * 1.5)).setVisible(true);
+        const k = fitScale(scene, key, st.r * 1.5);
+        if (on && bump) {
+          c.popUntil = scene.time.now + 260;
+          scene.haptic?.('select');
+        }
+        const pop = Math.max(0, (c.popUntil ?? 0) - scene.time.now) / 260;
+        c.icon.setScale(k * (1 + Math.sin(pop * Math.PI) * 0.35)).setVisible(true);
       } else c.icon.setVisible(false);
       const n = turn.ammoOf ? turn.ammoOf(idx) : Infinity;
       c.badge.setText(Number.isFinite(n) ? String(n) : '∞').setVisible(true);
@@ -802,7 +814,11 @@ export class Hud {
     img.setScale(0.94).setTint(0xc9c9c9);
     this.scene.haptic?.('tap');
   }
-  _unpress(img) { img.setScale(1).clearTint(); }
+  /** Отпустили — кнопка пружинит обратно, а не встаёт на место рывком. */
+  _unpress(img) {
+    img.clearTint();
+    this.scene.tweens.add({ targets: img, scale: { from: 1.08, to: 1 }, duration: 180, ease: 'Back.easeOut' });
+  }
   /**
    * Глобальное отпускание: палец мог уйти с кнопки до того, как его подняли,
    * и тогда своего события кнопка не получит. Отпускаем только то, что
@@ -1085,10 +1101,13 @@ export class Hud {
       const sling = !!scene.slingHint;
       // Батут ведёт себя не как снаряд — подсказка, пока он в руках
       const spring = scene.slingAim && scene.turn.weapon?.id === 'spring';
-      const show = !this.helpVisible && scene.canPlayerAct()
-        && (spring || sling || (scene.hookHint && scene.hooksLeft > 0));
+      // На тренировке своя панель с шагами — строка подсказки не нужна
+      const splitting = !scene.replaying && !scene.isBotTurn?.() && scene.isLocalTeam?.(scene.turn.currentTeam)
+        && scene.projectiles?.some((p) => p.alive && p.weapon.projectile.split);
+      const show = splitting || (!this.helpVisible && scene.canPlayerAct() && !scene.coach
+        && (spring || sling || (scene.hookHint && scene.hooksLeft > 0)));
       if (show) {
-        this.hintText.setText(spring
+        this.hintText.setText(splitting ? 'тапни по экрану — ракета разделится на три' : spring
           ? 'батут: тяни рычаг — полетишь сам по дуге, пружина останется'
           : sling
             ? 'тяни жёлтый рычаг от цели и отпусти'

@@ -79,6 +79,8 @@ export class AimController {
 
   onDown(pointer) {
     if (this.scene.hud.isOverUI(pointer) || this.scene.rig.pinching) return;
+    // Своя сплит-ракета в полёте: тап по полю делит её
+    if (this.scene.trySplit?.()) return;
     if (this.desktop) { this._mouseDown(pointer); return; }
 
     const w = this.worm;
@@ -89,8 +91,10 @@ export class AimController {
 
     if (this.scene.slingAim) {
       // Рычаг: касание в нём — всегда натяжение, без угадывания по скорости
+      // Тренировка: до шага «Выстрел» рычаг заперт
+      const locked = Boolean(this.scene.coach?.lockShot);
       if (this.scene.hud.padHit?.(pointer)) {
-        if (canAim && !w.zip && !this.scene.turn.retreating) {
+        if (canAim && !locked && !w.zip && !this.scene.turn.retreating) {
           this.mode = 'aim';
           this.pad = true;
           this._lastStep = 0;
@@ -107,7 +111,7 @@ export class AimController {
       // Рогатка: хват и натяжение — в экранных пикселях, зум не мешает
       const rig = this.scene.rig;
       const sx = (o.x - rig.viewLeft) * rig.zoom, sy = (o.y - rig.viewTop) * rig.zoom;
-      const grab = canAim && !w.zip && !this.scene.turn.retreating
+      const grab = canAim && !locked && !w.zip && !this.scene.turn.retreating
         && Math.hypot(pointer.x - sx, pointer.y - sy) <= CFG.SLING_GRAB;
       if (grab) {
         this.mode = 'aim';

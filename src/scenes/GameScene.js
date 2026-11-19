@@ -17,7 +17,7 @@ import { Hud, TOP_H } from '../ui/Hud.js';
 import { Fx } from '../ui/Fx.js';
 import { AimController } from '../ui/AimController.js';
 import { font, UI, ensureButton } from '../ui/theme.js';
-import { WEAPONS } from '../weapons/index.js';
+import { WEAPONS, WEAPON_RARITY } from '../weapons/index.js';
 import { captureCommand, captureMove } from '../net/protocol.js';
 import { NetSession } from '../net/session.js';
 import { knock } from '../net/lobby.js';
@@ -51,6 +51,7 @@ import { CHALLENGES, CHALLENGE_BY_ID, starsFor } from '../campaign/challenges.js
 import { saveChallenge } from '../platform/challenges.js';
 import { grantCoins } from '../platform/daily.js';
 import { CameraRig } from '../ui/CameraRig.js';
+import { Coach } from '../ui/Coach.js';
 import { voice } from '../audio/Voice.js';
 import { askText, closeOverlay } from '../ui/Overlay.js';
 import { isDesktop, aimScheme } from '../platform/device.js';
@@ -153,6 +154,8 @@ export default class GameScene extends Phaser.Scene {
     this.turn = new TurnManager(this);
     this.aim = new AimController(this);
     this.offscreen = new OffscreenMarkers(this);
+    // Новичок: пошаговая тренировка поверх «Первого выстрела»
+    this.coach = this.match.tutorial && this.slingAim && !isDesktop() ? new Coach(this) : null;
 
     this._spawnWorms();
     this._spawnMonsters();
@@ -406,6 +409,7 @@ export default class GameScene extends Phaser.Scene {
    * две подсказки разом на первом ходу только путают.
    */
   get slingHint() {
+    if (this.coach) return this.coach.wantsSlingHint;
     if (!this.slingAim) return false;
     if (this._slingUses == null) {
       try { this._slingUses = Number(localStorage.getItem('worms.slingUses')) || 0; } catch { this._slingUses = 0; }
@@ -414,6 +418,7 @@ export default class GameScene extends Phaser.Scene {
   }
 
   get hookHint() {
+    if (this.coach) return this.coach.wantsHookHint;
     if (!this.sling || this.slingHint) return false;
     if (this._hookUses == null) {
       try { this._hookUses = Number(localStorage.getItem('worms.hookUses')) || 0; } catch { this._hookUses = 0; }
@@ -989,7 +994,9 @@ export default class GameScene extends Phaser.Scene {
     let dt = Math.min(delta / 1000, CFG.MAX_DT);
     // Замедление на добивании: мир на полсекунды вязнет, интерфейс и часы
     // хода идут как шли
-    if (this._slow && performance.now() < this._slow.until) dt *= this._slow.k;
+    // Стоп-кадр попадания — короче и сильнее замедления
+    if (this._stop && performance.now() < this._stop) dt *= 0.04;
+    else if (this._slow && performance.now() < this._slow.until) dt *= this._slow.k;
 
     // Таймер хода, набор силы и поворот прицела считаются по системным часам.
     // Дельта Phaser для этого не годится: он её сглаживает и под нагрузкой
@@ -1015,6 +1022,10 @@ export default class GameScene extends Phaser.Scene {
     }
     this.props?.update(dt);
     this._scrollBg();
+    if (this.coach) {
+      this.coach.update();
+      if (this.coach.finished) this.coach = null;
+    }
     this.ambience?.update(dt);
     for (const m of this.monsters) m.update(dt);
     if (this.monsters.some((m) => !m.alive)) this.monsters = this.monsters.filter((m) => m.alive);
@@ -1305,17 +1316,30 @@ export default class GameScene extends Phaser.Scene {
 
   /** Сброс ящика в начале хода. */
   maybeDropCrate() {
-    if (this.crates.length >= CFG.CRATE_MAX) return;
-    if (this.turnRng() > (this.rules.crateChance ?? CFG.CRATE_CHANCE)) return;
-
+    const chance = this.rules.crateChance ?? CFG.CRATE_CHANCE;
+    if (chance <= 0) return;
     const spots = [];
-    for (let x = 200; x < CFG.WORLD_W - 200; x += 24) {
+    const edge = Math.min(200, CFG.WORLD_W * 0.12);
+    for (let x = edge; x < CFG.WORLD_W - edge; x += 24) {
       if (this.terrain.isSpawnable(x)) spots.push(x);
     }
     if (!spots.length) return;
+    const drop = (kind) => {
+      const pick = kind === 'weapon' ? this._crateWeapon() : null;
+      const crate = new Crate(this, this.turnRng.pick(spots), kind, pick?.index ?? null, pick?.rarity ?? null);
+      this.crates.push(crate);
+      if (pick?.rarity === 'legendary') this.fx.banner('Легендарный ящик!', '#ffd166', 1600);
+    };
 
-    const kind = this.turnRng() < CFG.CRATE_HEALTH_CHANCE ? 'health' : 'weapon';
-    this.crates.push(new Crate(this, this.turnRng.pick(spots), kind));
+    // Оружейный дождь: каждый шестой ход — три оружейных ящика разом
+    if (this.turn.turnNumber > 0 && this.turn.turnNumber % 6 === 0) {
+      this.fx.banner('Оружейный дождь!', '#8cc8ff', 1600);
+      for (let i = 0; i < 3 && this.crates.length < CFG.CRATE_MAX + 3; i++) drop('weapon');
+      return;
+    }
+    if (this.crates.length >= CFG.CRATE_MAX) return;
+    if (this.turnRng() > chance) return;
+    drop(this.turnRng() < CFG.CRATE_HEALTH_CHANCE ? 'health' : 'weapon');
   }
 
   /** Боец, наступивший на ящик, забирает его. */
@@ -1337,10 +1361,14 @@ export default class GameScene extends Phaser.Scene {
       worm.heal(CFG.CRATE_HEALTH);
       this.fx.pickup(crate.x, crate.y, `+${CFG.CRATE_HEALTH} здоровья`, '#7de07d');
     } else {
-      const i = this.turn.randomCrateWeapon(this.turnRng);
+      const i = crate.weaponIndex ?? this.turn.randomCrateWeapon(this.turnRng);
       const w = WEAPONS[i];
       this.turn.addAmmo(i, w.crateAmmo, worm.team);
-      this.fx.pickup(crate.x, crate.y, `${w.name} +${w.crateAmmo}`, '#ffd166');
+      const rar = WEAPON_RARITY[w.rarity] ?? WEAPON_RARITY.common;
+      this.fx.pickup(crate.x, crate.y, `${w.name} +${w.crateAmmo}`, rar.text);
+      if (w.rarity === 'legendary' || w.rarity === 'epic') {
+        this.fx.callout(crate.x, crate.y - 40, w.rarity === 'legendary' ? 'Легенда!' : 'Эпик!', rar.text, 34);
+      }
     }
   }
 
@@ -1407,6 +1435,8 @@ export default class GameScene extends Phaser.Scene {
     // по тросу тоже: сначала долети.
     if (!allowed || this.turn.retreating || !w || !w.alive || (w.zip && !this.replaying)) return;
 
+    // Выстрел с уроном — потом посмотрим, попал ли (дразнилка на промах)
+    if (!this.replaying && (this.turn.weapon?.explosion?.damage ?? 0) > 0) this._turnShot = { team: this.turn.currentTeam, hits: 0 };
     const len = Math.hypot(vx, vy) || 1;
     const nx = vx / len, ny = vy / len;
 
@@ -1509,10 +1539,14 @@ export default class GameScene extends Phaser.Scene {
 
     let felt = 0;
     let ouch = null, ouchDmg = 0;
+    const shooter = owner?.team ?? this.turn.currentTeam;
+    let foesHit = 0;
     for (const w of this.worms) {
       if (!w.alive) continue;
       const wx = w.x, wy = w.centerY;
       const d = Math.hypot(wx - x, wy - y);
+      // Мимо, но рядом — подпрыгнул от испуга
+      if (d > cfg.damageRadius && d < cfg.damageRadius + 130) w.startle();
       if (d > cfg.damageRadius) continue;
 
       const f = 1 - d / cfg.damageRadius;      // линейный спад от центра
@@ -1525,14 +1559,33 @@ export default class GameScene extends Phaser.Scene {
       w.damage(dmg, 'взрыв');
       if (dmg > 0) felt = Math.max(felt, this.isLocalTeam(w.team) ? 2 : 1);
       if (dmg > 0) this._countHit(w, dmg);
+      if (dmg > 0 && w.team !== shooter) {
+        foesHit++;
+        if (this._turnShot) this._turnShot.hits++;
+      }
       if (dmg > ouchDmg) { ouch = w; ouchDmg = dmg; }
     }
+    this._impact(x, y, ouchDmg, foesHit);
     // Сильно досталось — боец вскрикивает. Царапины молча, иначе «ой» на каждый чих
     if (ouch && ouchDmg >= 25 && !this.gameOverUi) voice.say('hurt', { team: ouch.team });
     // Отдача в руку: задели своего — сильно, чужого — коротко
     if (felt === 2) haptic('hurt');
     else if (felt === 1) haptic('hit');
     if (felt) this._botReact(felt === 2);
+  }
+
+  /**
+   * Попадание должно чувствоваться: мир на миг замирает (стоп-кадр), по
+   * силе удара — выкрик. Двоих-троих разом — «Дуплет!»/«Тройной!».
+   */
+  _impact(x, y, dmg, foesHit) {
+    if (dmg >= 15) {
+      this._stop = performance.now() + (dmg >= 45 ? 120 : 70);
+      this.rig.punch(dmg >= 45 ? 0.05 : 0.03, 170);
+    }
+    if (foesHit >= 3) this.fx.callout(x, y - 50, 'Тройной!', '#ff8ad4', 40);
+    else if (foesHit === 2) this.fx.callout(x, y - 50, 'Дуплет!', '#8ad4ff', 38);
+    else if (dmg >= 45) this.fx.callout(x, y - 50, 'Бабах!', '#ffd166', 36);
   }
 
   /**
@@ -1549,8 +1602,61 @@ export default class GameScene extends Phaser.Scene {
   }
 
   /** Поставить мину. Оружие само её не хранит — предмет живёт в сцене. */
-  addMine(x, y, weapon, owner) {
-    this.mines.push(new Mine(this, x, y, weapon, owner));
+  addMine(x, y, weapon, owner, opts = {}) {
+    this.mines.push(new Mine(this, x, y, weapon, owner, opts));
+  }
+
+  /**
+   * Бумеранг задел бойца: урон и отброс по ходу полёта. При показе чужого
+   * хода — только картинка: урон придёт снимком.
+   */
+  boomerangHit(w, dmg, vx, vy, owner) {
+    this.fx.dust(w.x, w.centerY, 6);
+    this.fx.sound('thunk');
+    if (this.replaying) return;
+    w.applyImpulse(Math.sign(vx || 1) * 170, -150);
+    w.damage(dmg, 'бумеранг');
+    this._countHit(w, dmg);
+    if (owner && w.team !== owner.team) this._impact(w.x, w.centerY, dmg, 1);
+  }
+
+  /** Тап в полёте: своя сплит-ракета делится. @returns {boolean} поймали ли тап */
+  trySplit() {
+    if (this.replaying || this.isBotTurn() || !this.isLocalTeam(this.turn.currentTeam)) return false;
+    const p = this.projectiles.find((x) => x.alive && x.weapon.projectile.split
+      && x.owner === this.turn.activeWorm);
+    if (!p) return false;
+    const t = p.age;
+    if (!p.split()) return false;
+    haptic('shot');
+    this.net?.sendSplit?.({ turn: this.turn.turnNumber, t });
+    return true;
+  }
+
+  /** Соперник разделил ракету: делим нашу копию в тот же момент полёта. */
+  remoteSplit(msg) {
+    if (msg.turn !== this.turn.turnNumber) return;
+    const p = this.projectiles.find((x) => x.alive && x.weapon.projectile.split);
+    if (!p) return;
+    if (p.age >= msg.t) p.split();
+    else p.splitAt = msg.t;
+  }
+
+  /** Что в оружейном ящике: сначала редкость по шансам, потом оружие этой редкости. */
+  _crateWeapon() {
+    const rng = this.turnRng;
+    const pool = (rar) => WEAPONS.map((w, i) => ({ w, i }))
+      .filter(({ w }) => w.startAmmo !== null && w.rarity === rar && this.turn.allowed?.(w) !== false);
+    let r = rng() * Object.values(WEAPON_RARITY).reduce((a, x) => a + x.odds, 0);
+    let rarity = 'common';
+    for (const [k, v] of Object.entries(WEAPON_RARITY)) {
+      r -= v.odds;
+      if (r < 0) { rarity = k; break; }
+    }
+    let list = pool(rarity);
+    if (!list.length) { list = pool('common'); rarity = 'common'; }
+    if (!list.length) return { index: this.turn.randomCrateWeapon(rng), rarity: 'common' };
+    return { index: list[rng.int(0, list.length - 1)].i, rarity };
   }
 
   addSpring(x, y, owner, launch = null) {
@@ -1636,13 +1742,27 @@ export default class GameScene extends Phaser.Scene {
 
   /** Ход отыгран и очередь передана — отдаём второму игроку итог. */
   onTurnResolved(actedTeam) {
+    // Соперник стрелял и никого не задел — над ним смеются
+    const shot = this._turnShot;
+    this._turnShot = null;
+    if (shot && shot.team === actedTeam && shot.hits === 0 && !this.gameOverUi) {
+      const mockers = this.worms.filter((w) => w.alive && w.team !== actedTeam);
+      for (const w of mockers) w.taunt();
+      if (mockers.length) voice.say('laugh', { team: mockers[0].team });
+    }
     this.net?.sendState(actedTeam);
     this.explosionLog = [];
   }
 
   onWormDied(worm) {
-    // Добивание — главное событие хода: мир замирает на полсекунды
-    if (!this.replaying) this._slow = { until: performance.now() + 520, k: 0.28 };
+    // Добивание — главное событие хода: мир замирает на полсекунды. Решающее
+    // (команда выбита) — дольше, с наездом камеры и выкриком
+    const decisive = this.checkVictory() !== null;
+    if (!this.replaying) this._slow = decisive ? { until: performance.now() + 1500, k: 0.2 } : { until: performance.now() + 520, k: 0.28 };
+    if (decisive) {
+      this.rig.punch(0.14, 900);
+      this.fx.callout(worm.x, worm.centerY - 70, 'Решающий!', '#ffd166', 44);
+    }
     if (this._myStrike() && worm.team !== this.myTeamIndex) this.battleStats.kills++;
     this.fx.explosion(worm.x, worm.centerY, 26);
     // Тоже по целым: у соперника гибель приходит снимком с целыми координатами
