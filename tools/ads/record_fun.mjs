@@ -37,16 +37,16 @@ const SCENES = {
     ['ready'], ['aim', 'grenade', 0, -640], ['flight'], ['wait', 45]] },
   bouncer: { seed: 777, steps: [['ready'], ['place', 'near'], ['aim', 'banana', 'bounce'], ['flight'], ['wait', 30],
     ['ready'], ['place', 'near'], ['aim', 'banana', 'solve'], ['flight'], ['wait', 30],
-    ['ready'], ['aim', 'banana', 'bounce'], ['flight'], ['wait', 30]] },
+    ['ready'], ['place', 'near'], ['aim', 'banana', 'solve'], ['flight'], ['wait', 30]], filler: 'banana' },
   spring: { seed: 4242, steps: [['ready'], ['place', 'same'], ['aim', 'spring', 'leap'], ['wait', 75],
     ['ready'], ['place', 'same'], ['aim', 'bazooka', 'solve'], ['flight'], ['wait', 30],
     ['ready'], ['aim', 'spring', 'leap'], ['wait', 75]] },
   magnet: { seed: 4242, steps: [['ready'], ['place', 'close'], ['aim', 'mine', 'drop'], ['flight'], ['boom', 260], ['wait', 30],
     ['ready'], ['place', 'same'], ['aim', 'bazooka', 'solve'], ['flight'], ['wait', 30]] },
-  weight: { seed: 4242, steps: [['ready'], ['place', 'below'], ['aim', 'weight', 'drop'], ['flight'], ['wait', 35],
+  weight: { seed: 4242, filler: 'weight', steps: [['ready'], ['place', 'below'], ['aim', 'weight', 'drop'], ['flight'], ['wait', 35],
     ['ready'], ['place', 'below'], ['aim', 'weight', 'drop'], ['flight'], ['wait', 35],
     ['ready'], ['place', 'below'], ['aim', 'weight', 'drop'], ['flight'], ['wait', 35]] },
-  holy: { seed: 777, steps: [['ready'], ['place', 'same'], ['gather'], ['aim', 'holy', 'solve'], ['flight'], ['wait', 50],
+  holy: { seed: 777, filler: 'cluster', steps: [['ready'], ['place', 'same'], ['gather'], ['aim', 'holy', 'solve'], ['flight'], ['wait', 50],
     ['ready'], ['place', 'same'], ['gather'], ['aim', 'cluster', 'solve'], ['flight'], ['wait', 40]] },
 };
 
@@ -159,7 +159,11 @@ async function record(name) {
         this.pending = { vx, vy };
         return true;
       },
-      shoot() { s.fireActiveWorm(this.pending.vx, this.pending.vy); },
+      shoot() {
+        const before = { ok: s.canAct(), st: s.turn.state, team: s.turn.currentTeam, retreat: s.turn.retreating, zip: Boolean(me()?.zip), w: s.turn.weapon?.id, ammo: s.turn.ammoOf(s.turn.weaponIndex) };
+        s.fireActiveWorm(this.pending.vx, this.pending.vy);
+        return { ...before, flying: s.projectiles.length, after: s.turn.state };
+      },
     };
     const impact = s._impact.bind(s);
     s._impact = (...a) => { ad.booms++; return impact(...a); };
@@ -194,9 +198,23 @@ async function record(name) {
       await step(8);
       await page.evaluate((a) => window.__ad.aim(...a), args);
       await step(12);
-      await page.evaluate(() => window.__ad.shoot());
+      const r = await page.evaluate(() => window.__ad.shoot());
+      if (process.env.FUN_DEBUG) console.log(args[0], JSON.stringify(r));
     } else if (act === 'flight') await until(() => !window.__ad.flying(), 250);
     else if (act === 'wait') await step(args[0]);
+  }
+  // Дубль кончился раньше 15 секунд — не стоячие кадры, а ещё выстрелы
+  const filler = scene.filler ?? 'bazooka';
+  for (let k = 0; k < 6 && frames < LEN - 20; k++) {
+    for (let i = 0; i < 200 && !(await page.evaluate(() => window.__ad.ready())); i++) await page.evaluate(() => window.__ad.skip(6));
+    await page.evaluate(() => window.__ad.calm());
+    await page.evaluate(() => window.__ad.place('same'));
+    await step(8);
+    await page.evaluate((id) => window.__ad.aim(id, 'solve'), filler);
+    await step(12);
+    await page.evaluate(() => window.__ad.shoot());
+    await until(() => !window.__ad.flying(), 250);
+    await step(30);
   }
   await step(LEN - frames);
   await page.close();
