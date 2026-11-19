@@ -433,7 +433,8 @@ export function createApp({
     try { url = new URL(req.url, 'http://x'); } catch { res.writeHead(400).end(); return; }
     if (url.pathname === '/api/admin/backup' && req.method === 'GET') { adminBackup(req, res); return; }
     if (url.pathname.startsWith('/api/media/') && (req.method === 'GET' || req.method === 'HEAD')) {
-      if (!media.serve(url.pathname.slice('/api/media/'.length), req, res)) res.writeHead(404).end('not found');
+      const download = url.searchParams.get('dl') === '1';
+      if (!media.serve(url.pathname.slice('/api/media/'.length), req, res, { download })) res.writeHead(404).end('not found');
       return;
     }
     if (url.pathname.startsWith('/api/')) {

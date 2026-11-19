@@ -538,6 +538,23 @@ check('«твой ход» бот не пишет', !calls('sendMessage').some((
       && html.status === 415 && anon.status === 401, `${up.status} ${JSON.stringify(r)} ${got?.status} ${html.status} ${anon.status}`);
 }
 
+// Клип из Android приходит WebM — сервер с ffmpeg отдаёт MP4 (Telegram берёт в сторис только его)
+{
+  const { spawnSync } = await import('node:child_process');
+  const { readFileSync } = await import('node:fs');
+  const src = `${mediaDir}/in.webm`;
+  const made = spawnSync('ffmpeg', ['-v', 'error', '-y', '-f', 'lavfi', '-i', 'testsrc=size=160x120:rate=15', '-t', '0.6', '-c:v', 'libvpx', src]);
+  if (made.status === 0) {
+    const T = (await call('POST', '/api/telegram', { initData: await signed({ id: 4243, first_name: 'Клип' }) })).data?.token;
+    const up = await fetch(`${base}/api/media`, { method: 'POST', headers: { authorization: `Bearer ${T}`, 'content-type': 'video/webm' }, body: readFileSync(src) });
+    const r = await up.json();
+    const got = await fetch(`${base}${r.path}?dl=1`);
+    check('клип: WebM перекодирован в MP4 и отдаётся на скачивание',
+      r.ext === 'mp4' && got.status === 200 && got.headers.get('content-type') === 'video/mp4'
+        && /attachment/.test(got.headers.get('content-disposition')), JSON.stringify(r));
+  }
+}
+
 server.close();
 fakeTg.close();
 db.close();

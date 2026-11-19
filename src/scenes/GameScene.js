@@ -29,6 +29,7 @@ import {
   refLink, shareLink, telegramConfig,
 } from '../platform/telegram.js';
 import { canStory, snapshot as frameShot, fighterFrame, drawStory, shareStory } from '../platform/story.js';
+import { ClipRecorder, canClip, saveClip, clipToStory } from '../platform/clip.js';
 import { HOTSEAT, towerMatch, challengeMatch, ascentMatch } from '../core/match.js';
 import { ASCENT } from '../campaign/ascent.js';
 import { markAscentDone } from '../platform/ascent.js';
@@ -193,6 +194,8 @@ export default class GameScene extends Phaser.Scene {
     // интерфейс надо разложить заново.
     this.game.events.on('worms-resize', this.relayout, this);
     this.events.once('shutdown', this._shutdown, this);
+    // Клип своего красивого выстрела — для шортсов и сторис
+    this.clip = canClip() ? new ClipRecorder(this.game.canvas) : null;
 
     // Обычный бой ландшафтный: в портрете страница показывает «поверни
     // телефон», а Telegram держит ландшафт. Арена с крюком играется как
@@ -1438,6 +1441,8 @@ export default class GameScene extends Phaser.Scene {
 
     // Выстрел с уроном — потом посмотрим, попал ли (дразнилка на промах)
     if (!this.replaying && (this.turn.weapon?.explosion?.damage ?? 0) > 0) this._turnShot = { team: this.turn.currentTeam, hits: 0 };
+    // Свой выстрел — пишем: вдруг выйдет красиво
+    if (!this.replaying && !this.isBotTurn() && this.isLocalTeam(this.turn.currentTeam)) this.clip?.start();
     const len = Math.hypot(vx, vy) || 1;
     const nx = vx / len, ny = vy / len;
 
@@ -1588,12 +1593,26 @@ export default class GameScene extends Phaser.Scene {
     else if (foesHit === 2) this.fx.callout(x, y - 50, 'Дуплет!', '#8ad4ff', 38);
     else if (dmg >= 45) this.fx.callout(x, y - 50, 'Бабах!', '#ffd166', 36);
     if (dmg >= 45 || foesHit >= 2) this.time.delayedCall(120, () => this._grabHighlight(false));
+    if (dmg >= 45 || foesHit >= 2) this.clip?.mark(foesHit >= 2 ? 3 : 2);
   }
 
   /** Запомнить кадр боя для сторис. Решающий удар важнее любого «Бабах!». */
   _grabHighlight(decisive) {
     if (!canStory() || (this._highlight && !decisive)) return;
     frameShot(this).then((img) => { if (img && (decisive || !this._highlight)) this._highlight = img; });
+  }
+
+  /** Клип: в сторис (если MP4 и Telegram умеет), иначе — сохранить. */
+  async _clipMenu(sub) {
+    const best = this.clip?.best;
+    if (!best) return;
+    sub?.setText('загружаю клип…');
+    if (canStory()) {
+      const r = await clipToStory(best);
+      if (r === 'ok') { sub?.setText('клип в сторис — осталось опубликовать'); return; }
+    }
+    const r = await saveClip(best);
+    sub?.setText(r.ok ? 'клип сохранён — выкладывай в TikTok, Reels или Shorts' : 'не вышло загрузить клип — попробуй ещё раз');
   }
 
   /** Карточка победы — в сторис Telegram, со ссылкой-рефералкой. */
@@ -1776,6 +1795,7 @@ export default class GameScene extends Phaser.Scene {
     // Соперник стрелял и никого не задел — над ним смеются
     const shot = this._turnShot;
     this._turnShot = null;
+    this.clip?.finish();
     if (shot && shot.team === actedTeam && shot.hits === 0 && !this.gameOverUi) {
       const mockers = this.worms.filter((w) => w.alive && w.team !== actedTeam);
       for (const w of mockers) w.taunt();
@@ -1795,8 +1815,12 @@ export default class GameScene extends Phaser.Scene {
       this.fx.callout(worm.x, worm.centerY - 70, 'Решающий!', '#ffd166', 44);
       // Лучший кадр боя — для сторис: чуть позже, чтобы выкрик успел вырасти
       this.time.delayedCall(140, () => this._grabHighlight(true));
+      this.clip?.mark(5);
     }
-    if (this._myStrike() && worm.team !== this.myTeamIndex) this.battleStats.kills++;
+    if (this._myStrike() && worm.team !== this.myTeamIndex) {
+      this.battleStats.kills++;
+      this.clip?.mark(3);
+    }
     this.fx.explosion(worm.x, worm.centerY, 26);
     // Тоже по целым: у соперника гибель приходит снимком с целыми координатами
     this.terrain.destroyCircle(Math.round(worm.x), Math.round(worm.centerY), 22);
@@ -2038,6 +2062,12 @@ export default class GameScene extends Phaser.Scene {
       if (story) {
         this.gameOverUi.push(this._overButton(-140, 'В сторис', () => this._shareStory(sub), 'story', 92));
       }
+      // Клип лучшего выстрела: дописывается чуть позже экрана итога
+      this.clip?.finish();
+      this.time.delayedCall(1300, () => {
+        if (!this.gameOverUi || !this.clip?.best) return;
+        this.gameOverUi.push(this._overButton(0, '🎬 Клип', () => this._clipMenu(sub), 'clip', 184));
+      });
       if (link && this.match.mode !== 'hotseat' && solo) {
         this.gameOverUi.push(this._overButton(story ? 140 : 0, 'Позвать друга', () => {
           trackStep('invite');
@@ -2179,6 +2209,8 @@ export default class GameScene extends Phaser.Scene {
   }
 
   _shutdown() {
+    this.clip?.destroy();
+    this.clip = null;
     this.game.events.off('worms-resize', this.relayout, this);
     globalThis.document?.body.classList.remove('in-battle');
     setBattle(false);

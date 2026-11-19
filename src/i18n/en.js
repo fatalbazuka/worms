@@ -805,5 +805,11 @@ export const EN = {
  "слишком много попыток, подожди минуту": "too many attempts, wait a minute",
  "аккаунт заблокирован": "account banned",
  "нет такого адреса": "no such address",
- "ошибка сервера": "server error"
+ "ошибка сервера": "server error",
+ "Мой выстрел в Smiles 💥 Сыграй со мной!": "My shot in Smiles 💥 Play with me!",
+ "загружаю клип…": "uploading the clip…",
+ "клип в сторис — осталось опубликовать": "clip ready for your story — just publish it",
+ "клип сохранён — выкладывай в TikTok, Reels или Shorts": "clip saved — post it to TikTok, Reels or Shorts",
+ "не вышло загрузить клип — попробуй ещё раз": "couldn't upload the clip — try again",
+ "🎬 Клип": "🎬 Clip"
 };

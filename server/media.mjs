@@ -108,7 +108,7 @@ export function createMedia({ dir, now = () => Date.now() }) {
   }
 
   /** Отдать файл. @returns {boolean} нашёлся ли */
-  function serve(name, req, res) {
+  function serve(name, req, res, { download = false } = {}) {
     const m = /^([0-9a-f]{24})\.(jpg|png|webm|mp4)$/.exec(name);
     if (!dir || !m) return false;
     const file = join(dir, name);
@@ -119,8 +119,10 @@ export function createMedia({ dir, now = () => Date.now() }) {
       'Cache-Control': 'public, max-age=86400',
       'X-Content-Type-Options': 'nosniff',
       'Accept-Ranges': 'bytes',
-      // «Сохранить» в Telegram берёт имя отсюда
-      'Content-Disposition': `inline; filename="smiles-${m[1].slice(0, 6)}.${m[2]}"`,
+      // «Сохранить» в Telegram (downloadFile) берёт имя отсюда; Telegram Web
+      // качает файл сам из браузера — ему нужен CORS
+      'Content-Disposition': `${download ? 'attachment' : 'inline'}; filename="smiles-${m[1].slice(0, 6)}.${m[2]}"`,
+      'Access-Control-Allow-Origin': '*',
     };
     // Видео в WebView просит кусками
     const range = /^bytes=(\d*)-(\d*)$/.exec(String(req.headers.range ?? ''));
