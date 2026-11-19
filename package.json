@@ -11,7 +11,8 @@
     "test": "node tests/run.mjs",
     "backup": "node --disable-warning=ExperimentalWarning server/backup.mjs",
     "assets": "python3 tools/build_assets.py",
-    "docker:up": "docker compose up -d --build"
+    "docker:up": "docker compose up -d --build",
+    "test:quick": "node tests/run.mjs quick"
   },
   "devDependencies": {
     "playwright": "^1.47.0"
