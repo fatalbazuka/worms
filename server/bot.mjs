@@ -17,7 +17,7 @@
  * Полезная нагрузка счёта: «donate:<сумма>:<игрок>» или
  * «tour:<турнир>:<игрок>» — не длиннее 128 байт.
  */
-import { createHash } from 'node:crypto';
+import { createHash, randomInt } from 'node:crypto';
 import { shopItem } from './shop.mjs';
 import { hashPassword, newPassword } from './lib/accounts.js';
 
@@ -29,7 +29,7 @@ export function webhookSecret(token, explicit = '') {
 }
 
 export function createBot({ db, api, players, tournaments, analytics = null, admin: adminPanel = null, adminIds = new Set(), publicUrl = '',
-  tz = 'Europe/Moscow', now = () => Date.now(), log = console }) {
+  tz = 'Europe/Moscow', now = () => Date.now(), log = console, appName = '' }) {
   const q = {
     payAdd: db.prepare(`insert or ignore into payment (charge_id, player_id, tg_id, amount, purpose, ref, created_at)
                         values (?, ?, ?, ?, ?, ?, ?)`),
@@ -326,11 +326,79 @@ export function createBot({ db, api, players, tournaments, analytics = null, adm
     }
   }
 
+  // ------------------------------------------------------- инлайн-вызов
+
+  /** Ссылка в мини-приложение с кодом: t.me/бот/приложение?startapp=… */
+  function startLink(param) {
+    if (!username) return '';
+    const base = appName ? `https://t.me/${username}/${appName}` : `https://t.me/${username}`;
+    return `${base}?startapp=${encodeURIComponent(param)}`;
+  }
+
+  /** Комната башни без рейтинга — как randomRoom(true, true) в игре. */
+  function towerRoom() {
+    const abc = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+    let out = 'ZW';
+    while (out.length < 6) out += abc[randomInt(abc.length)];
+    return out;
+  }
+
+  /**
+   * @бот в любом чате: карточка «вызов на дуэль». Кнопка ведёт в одну и ту
+   * же комнату башни — кто нажал первым, тот хозяин, второй садится к нему.
+   * Вторая карточка — просто «позвать в игру» по рефералке.
+   */
+  async function onInline(iq) {
+    const name = String(iq.from?.first_name ?? 'Друг').slice(0, 40);
+    const en = /^en/i.test(String(iq.from?.language_code ?? '')) && !/^ru|^uk|^be|^kk/i.test(String(iq.from?.language_code ?? ''));
+    const room = towerRoom();
+    const duel = startLink(room);
+    const ref = startLink(`ref_${iq.from?.id}`);
+    if (!duel) return api.call('answerInlineQuery', { inline_query_id: iq.id, results: [], cache_time: 0 });
+    const t = en ? {
+      duelTitle: '⚔️ Challenge to a duel', duelDesc: 'A tower duel — tap to fight',
+      duelText: `⚔️ ${name} challenges you to a duel in Smiles!
+Tower, grappling hook, slingshot and smileys. Tap the button — you both land in the same battle.`,
+      duelBtn: '⚔️ Accept the challenge',
+      inviteTitle: '🎮 Invite to Smiles', inviteDesc: 'You both get a skin box',
+      inviteText: `🎮 ${name} invites you to Smiles — smiley artillery in Telegram.
+Join via this link and you both get a skin box 🎁`,
+      inviteBtn: '🎮 Play',
+    } : {
+      duelTitle: '⚔️ Вызвать на дуэль', duelDesc: 'Бой на башне — жми и в бой',
+      duelText: `⚔️ ${name} вызывает на дуэль в Smiles!
+Башня, трос, рогатка и смайлики. Жми кнопку — окажетесь в одном бою.`,
+      duelBtn: '⚔️ Принять вызов',
+      inviteTitle: '🎮 Позвать в Smiles', inviteDesc: 'Обоим — коробка со скином',
+      inviteText: `🎮 ${name} зовёт в Smiles — артиллерию смайликов в Telegram.
+По этой ссылке вам обоим по коробке со скином 🎁`,
+      inviteBtn: '🎮 Играть',
+    };
+    return api.call('answerInlineQuery', {
+      inline_query_id: iq.id,
+      cache_time: 0,
+      is_personal: true,
+      results: [
+        {
+          type: 'article', id: `duel-${room}`, title: t.duelTitle, description: t.duelDesc,
+          input_message_content: { message_text: t.duelText },
+          reply_markup: { inline_keyboard: [[{ text: t.duelBtn, url: duel }]] },
+        },
+        {
+          type: 'article', id: `ref-${iq.from?.id}`.slice(0, 64), title: t.inviteTitle, description: t.inviteDesc,
+          input_message_content: { message_text: t.inviteText },
+          reply_markup: { inline_keyboard: [[{ text: t.inviteBtn, url: ref }]] },
+        },
+      ],
+    });
+  }
+
   // ------------------------------------------------------------- вебхук
 
   async function handleUpdate(update) {
     try {
       if (update.pre_checkout_query) return await onPreCheckout(update.pre_checkout_query);
+      if (update.inline_query) return await onInline(update.inline_query);
       const msg = update.message;
       if (!msg?.from || msg.chat?.type !== 'private') return null;
       if (msg.successful_payment) return await onPaid(msg);
@@ -383,7 +451,7 @@ export function createBot({ db, api, players, tournaments, analytics = null, adm
     }
     const hooked = await api.call('setWebhook', {
       url: `${publicUrl.replace(/\/+$/, '')}/api/bot/webhook`, secret_token: secret,
-      allowed_updates: ['message', 'pre_checkout_query'], drop_pending_updates: false,
+      allowed_updates: ['message', 'pre_checkout_query', 'inline_query'], drop_pending_updates: false,
     });
     await api.call('setChatMenuButton', { menu_button: { type: 'web_app', text: 'Играть', web_app: { url: appUrl() } } });
     const base = [

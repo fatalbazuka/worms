@@ -41,6 +41,8 @@ services:
       ADMIN_TG_IDS: ${ADMIN_TG_IDS:-}
       PUBLIC_URL: ${PUBLIC_URL:-}
       BOT_TZ: ${BOT_TZ:-Europe/Moscow}
+      # Ссылки инлайн-вызова ведут в мини-приложение t.me/бот/TELEGRAM_APP
+      TELEGRAM_APP: ${TELEGRAM_APP:-}
     volumes:
       - worms_data:/data
 

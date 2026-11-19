@@ -504,6 +504,19 @@ check('«твой ход» бот не пишет', !calls('sendMessage').some((
     res.status === 200 && buf.subarray(0, 15).toString() === 'SQLite format 3' && noAuth.status === 401, `${res.status} ${buf.length} байт`);
 }
 
+// @бот в любом чате: карточка дуэли с общей комнатой башни и «позвать» по рефералке
+{
+  await hook({ update_id: 9001, inline_query: { id: 'iq1', from: { id: 555, first_name: 'Вася', language_code: 'ru' }, query: '' } });
+  const a = calls('answerInlineQuery').at(-1)?.params;
+  const duel = a?.results?.[0]?.reply_markup?.inline_keyboard?.[0]?.[0]?.url ?? '';
+  const ref = a?.results?.[1]?.reply_markup?.inline_keyboard?.[0]?.[0]?.url ?? '';
+  check('инлайн: карточка дуэли ведёт в комнату башни, вторая — по рефералке',
+    /startapp=ZW[A-Z2-9]{4}$/.test(duel) && ref.endsWith('startapp=ref_555') && a.results[0].input_message_content.message_text.includes('Вася'),
+    JSON.stringify(a)?.slice(0, 300));
+  check('при запуске: вебхук принимает инлайн-запросы',
+    calls('setWebhook').at(-1)?.params.allowed_updates?.includes('inline_query'));
+}
+
 // Сторис и клипы: картинка ложится на сервер и отдаётся по ссылке; чужое — нет
 {
   const T = (await call('POST', '/api/telegram', { initData: await signed({ id: 4242, first_name: 'Сторис' }) })).data?.token;

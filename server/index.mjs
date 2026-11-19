@@ -20,6 +20,8 @@
  *   BOT_WEBHOOK_SECRET  — свой секрет вебхука (по умолчанию выводится из токена)
  *   TRUST_PROXY         — 1, если впереди nginx/Caddy: IP клиента из X-Real-IP
  *   STATIC_DIR          — папка с игрой, если раздавать её этим же процессом
+ *   TELEGRAM_APP        — короткое имя мини-приложения (t.me/бот/ИМЯ) для ссылок инлайн-вызова
+ *   MEDIA_DIR           — куда класть картинки сторис и клипы (рядом с базой, папка media)
  *
  * API (JSON; вход — заголовок Authorization: Bearer <токен>):
  *   POST /api/telegram {initData}         → {token, player}  вход по подписи Telegram
@@ -68,7 +70,7 @@ import { createMedia } from './media.mjs';
 export function createApp({
   db, botToken = '', trustProxy = false, staticDir = null, now = () => Date.now(),
   adminIds = [], publicUrl = '', telegramApiBase = 'https://api.telegram.org', secret = '', tz = 'Europe/Moscow',
-  log = console, mediaDir = null,
+  log = console, mediaDir = null, appName = '',
 }) {
   const admins = new Set(adminIds.map(Number).filter(Boolean));
   // login — подбор пароля: не больше 10 попыток в минуту с одного адреса
@@ -89,7 +91,7 @@ export function createApp({
   const saves = createSaves({ db, now });
   const daily = createDailyTower({ db, players, dayOf: () => analytics.dayOf(), now });
   const admin = createAdmin({ db, players, analytics, tournaments, shop, saves, api, now, log });
-  bot = createBot({ db, api, players, tournaments, analytics, admin, adminIds: admins, publicUrl, tz, now, log });
+  bot = createBot({ db, api, players, tournaments, analytics, admin, adminIds: admins, publicUrl, tz, now, log, appName });
   const hookSecret = botToken ? webhookSecret(botToken, secret) : '';
 
   const q = {
@@ -476,6 +478,7 @@ if (isMain) {
     telegramApiBase: env.TELEGRAM_API_BASE || 'https://api.telegram.org',
     secret: env.BOT_WEBHOOK_SECRET || '',
     tz: env.BOT_TZ || 'Europe/Moscow',
+    appName: env.TELEGRAM_APP || '',
     mediaDir: env.MEDIA_DIR || join(dirname(resolve(env.DB_PATH || './data/worms.db')), 'media'),
   });
   const server = createServer(handle);
