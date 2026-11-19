@@ -417,6 +417,7 @@ export default class MenuScene extends Phaser.Scene {
     const tabs = [
       ['battle', 'Бой', 'battle', () => this.showRoot()],
       ['tasks', 'Задания', 'tasks', () => this.showTasks()],
+      ['shop', 'Магазин', 'shop', () => this.showShop()],
       ['tournaments', 'Турниры', 'trophy', () => this.openTournaments()],
       ['top', 'Топ', 'podium', () => { this.topFrom = 'tab'; this.showTop(); }],
       ['account', 'Профиль', 'profile', () => this.openAccount()],
@@ -432,9 +433,9 @@ export default class MenuScene extends Phaser.Scene {
         .setAlpha(on ? 1 : 0.6);
       if (on) glyph.setTint(0xffc247);
       const text = this.add.text(x, y0 + h * 0.76, label,
-        font(this.portrait ? 18 : 18, 800, on ? UI.accent : UI.textDim)).setOrigin(0.5);
+        font(this.portrait && W < 640 ? 16 : 18, 800, on ? UI.accent : UI.textDim)).setOrigin(0.5);
       // Есть что забрать — красная точка на «Заданиях»
-      if (key === 'tasks' && !on && rewardWaiting()) {
+      if (!on && ((key === 'tasks' && rewardWaiting()) || (key === 'shop' && skinState().boxes > 0))) {
         this.items.push(this.add.circle(x + size * 0.55, y0 + h * 0.36 - size * 0.45, 9, 0xff4d4d)
           .setStrokeStyle(3, 0x0b1018));
       }
@@ -470,6 +471,7 @@ export default class MenuScene extends Phaser.Scene {
    */
   showRoot() {
     this.section = this.showRoot;
+    this.fromShop = false;
     this._clear();
     const W = this.W, cx = W / 2;
     const portrait = this.portrait;
@@ -496,7 +498,10 @@ export default class MenuScene extends Phaser.Scene {
     this.items.push(this.add.text(W - pad - 76, top + 18,
       `${me.rating}${me.rank ? ` · место ${me.rank}` : ''}`, font(28, 800, UI.accent)).setOrigin(1, 0));
     this._leagueBar(cx, top + 84, me.rating, Math.min(W - pad * 2, 760), 18);
-    this._coinBadge(W - pad - 76, top + 156, true);
+    // Монеты — вход в магазин: плашка с «+», как в любой игре. На узком
+    // экране ряд плашек слева её бы накрыл — тогда она строкой ниже
+    const coinY = W < 900 ? top + 222 : top + 156;
+    this._coinShopLink(W - pad, coinY);
 
     // Редкое — мелкими плашками под лигой: иконка на экран Домой (пока
     // Telegram говорит, что её нет) и схема управления (вне Telegram)
@@ -553,7 +558,7 @@ export default class MenuScene extends Phaser.Scene {
     }
 
     // --- твой боец ---
-    const areaTop = top + 196;
+    const areaTop = coinY + 40;
     const areaH = areaBottom - areaTop;
     // Первый вход за день — бонус серии, одним окном поверх экрана
     if (streakReady(dailyState(), dayKey()) && !this.streakShown) {
@@ -707,6 +712,7 @@ export default class MenuScene extends Phaser.Scene {
    * монеты.
    */
   showTasks() {
+    this.fromShop = false;
     this.section = this.showTasks;
     this._clear();
     const st = dailyState();
@@ -786,6 +792,118 @@ export default class MenuScene extends Phaser.Scene {
     this._tabs('tasks');
   }
 
+  // -------------------------------------------------------------- магазин
+
+  /** Монеты на главном — кнопка магазина: плашка с монетами и «+». right — правый край. */
+  _coinShopLink(right, y) {
+    const w = 300, h = 58, x = right - w / 2;
+    const plate = this.add.graphics();
+    plate.fillStyle(0x1c1440, 0.95).fillRoundedRect(x - w / 2, y - h / 2, w, h, h / 2);
+    plate.lineStyle(3, 0xffc247, 0.9).strokeRoundedRect(x - w / 2, y - h / 2, w, h, h / 2);
+    this.items.push(plate);
+    const left = right - w;
+    this.items.push(this.add.image(left + 32, y, ensureIcon(this, 'shop', 34)).setTint(0xffc247));
+    this.items.push(this.add.text(left + 56, y, 'Магазин', font(21, 800, '#ffe27a')).setOrigin(0, 0.5));
+    const coin = this._coinBadge(right - 62, y, true);
+    const plus = this.add.circle(right - 28, y, 21, 0xffc247).setStrokeStyle(3, 0x5a2a08);
+    const sign = this.add.text(right - 28, y - 1, '+', font(34, 900, '#2a1c06')).setOrigin(0.5);
+    this.tweens.add({ targets: [plus, sign], scale: 1.12, duration: 600, yoyo: true, repeat: -1, ease: 'Sine.easeInOut' });
+    this.items.push(plus, sign);
+    const zone = this.add.zone(x, y, w, h).setInteractive({ useHandCursor: true });
+    zone.on('pointerdown', () => { haptic('tap'); coin.icon.setScale(0.8); });
+    zone.on('pointerout', () => coin.icon.setScale(0.9));
+    zone.on('pointerup', () => this.showShop());
+    this.items.push(zone);
+    this.buttons['coins-shop'] = { x, y: y + this.oy, w, h, enabled: true };
+  }
+
+  /**
+   * Магазин: всё, на что тратятся монеты, в одном месте. Сверху кошелёк,
+   * главная витрина — коробка-сюрприз (светится и покачивается, рядом шансы),
+   * ниже — скины поштучно, украшения и промокод. Купил коробку — она
+   * открывается сразу, без перехода в другой раздел.
+   */
+  showShop() {
+    this.section = this.showShop;
+    this.fromShop = true;
+    this._clear();
+    trackStep('shop_open');
+    this._fxTextures();
+    const W = this.W;
+    const wide = !this.portrait;
+    const st = skinState();
+    const coins = dailyState().coins;
+    const full = BOX_SKINS.every((s) => st.owned.includes(s.id));
+    this._title('Магазин', 'монеты — за бои, задания дня и серию дней');
+
+    // Кошелёк
+    const wy = 160;
+    const n = this.add.text(W / 2 + 26, wy, `${coins}`, font(46, 900, '#ffe27a')).setOrigin(0.5).setStroke('#5a2a08', 6);
+    const ic = this.add.image(n.x - n.width / 2 - 30, wy, this._coinTexture()).setScale(1.3);
+    this.items.push(n, ic);
+
+    // Витрина: коробка-сюрприз
+    const cardW = Math.min(W - 40, 560);
+    const cx = wide ? Math.max(cardW / 2 + 30, W * 0.3) : W / 2;
+    const cardTop = wide ? 212 : 216;
+    const cardH = 400;
+    const card = this.add.graphics();
+    card.fillStyle(0x1c1440, 0.92).fillRoundedRect(cx - cardW / 2, cardTop, cardW, cardH, 28);
+    card.lineStyle(4, 0xffc247, 0.85).strokeRoundedRect(cx - cardW / 2, cardTop, cardW, cardH, 28);
+    this.items.push(card);
+    const by = cardTop + 130;
+    const rays = this.add.image(cx, by, 'fx-rays').setTint(0xffc247).setAlpha(0.32).setScale(0.85);
+    this.tweens.add({ targets: rays, angle: 360, duration: 12000, repeat: -1 });
+    const glow = this.add.circle(cx, by, 80, 0xffc247, 0.22);
+    this.tweens.add({ targets: glow, scale: 1.2, alpha: 0.1, duration: 900, yoyo: true, repeat: -1, ease: 'Sine.easeInOut' });
+    this.items.push(rays, glow);
+    if (this.textures.exists('shot_crate_weapon')) {
+      const box = this.add.image(cx, by, 'shot_crate_weapon').setScale(fitScale(this, 'shot_crate_weapon', 150));
+      this.tweens.add({ targets: box, y: by - 10, angle: { from: -4, to: 4 }, duration: 1100, yoyo: true, repeat: -1, ease: 'Sine.easeInOut' });
+      box.setInteractive({ useHandCursor: true }).on('pointerup', () => {
+        if (this._dragging) return;
+        if (st.boxes > 0) this._openBox(() => this.showShop()); else this._buyBox();
+      });
+      this.items.push(box);
+      if (st.boxes > 0) {
+        this.items.push(this.add.text(cx + 70, by - 70, `×${st.boxes}`, font(28, 900, '#1a1408'))
+          .setOrigin(0.5).setPadding(10, 2, 10, 2).setBackgroundColor('#ffe27a'));
+      }
+    }
+    this.items.push(this.add.text(cx, cardTop + 240, 'Коробка-сюрприз', font(32, 900, '#ffffff'))
+      .setOrigin(0.5).setStroke('#140a20', 6));
+    // Шансы — цветом редкости, в строку
+    const parts = RARITY_ORDER.map((k) => this.add.text(0, 0, `${RARITY[k].name} ${RARITY[k].odds}%`, font(17, 800, RARITY[k].color)));
+    const gap = 14;
+    const total = parts.reduce((a, t) => a + t.width, 0) + gap * (parts.length - 1);
+    let px = cx - total / 2;
+    for (const t of parts) { t.setPosition(px, cardTop + 280).setOrigin(0, 0.5); px += t.width + gap; this.items.push(t); }
+    const bw = cardW - 60;
+    if (st.boxes > 0) {
+      this._button('shop-open', cx, cardTop + 342, `Открыть коробку${st.boxes > 1 ? ` · ×${st.boxes}` : ''}`, '',
+        () => this._openBox(() => this.showShop()), { w: bw, h: 76, variant: 'primary', titleSize: 27 });
+    } else {
+      const can = coins >= BOX_PRICE && !full;
+      this._button('shop-box', cx, cardTop + 342, `Купить · ${BOX_PRICE} 🪙`,
+        full ? 'все скины уже собраны' : can ? 'повтор — монеты назад' : `не хватает ${BOX_PRICE - coins}`,
+        () => this._buyBox(), { w: bw, h: 76, variant: 'primary', titleSize: 27, hintSize: 15, enabled: can });
+    }
+
+    // Остальное: скины поштучно, украшения, промокод
+    const lx = wide ? Math.min(W - 250, W * 0.72) : W / 2;
+    const lw = wide ? Math.min(420, W - cx - cardW / 2 - 60) : cardW;
+    let y = wide ? 250 : cardTop + cardH + 66;
+    const row = (key, title, hint, onTap, variant) => {
+      this._button(key, lx, y, title, hint, onTap, { w: lw, h: 90, titleSize: 25, hintSize: 16, variant });
+      y += 106;
+    };
+    row('shop-skins', 'Скины', `собрано ${st.owned.length} из ${SKINS.length} · любой — поштучно`, () => this.showSkins());
+    row('shop-cosmetics', 'Украшения', 'трос, след, надгробие · заморозка серии', () => this.showCosmetics());
+    row('shop-promo', '🎟 Промокод', 'подарок от друга или из канала', () => this._askPromo());
+    this._tabs('shop');
+    this._scrollable(y + 20);
+  }
+
   // ------------------------------------------------------------ украшения
 
   /**
@@ -844,22 +962,23 @@ export default class MenuScene extends Phaser.Scene {
         if (buyStreakFreeze()) { haptic('win'); sfx.play('pickup'); this.showCosmetics(); toast('заморозка в запасе', '#8fe3ff'); return; }
         haptic('warn'); toast(full ? 'запас полон' : 'не хватает монет');
       }, { w: Math.min(W - 48, 620), h: 84, titleSize: 24, hintSize: 14, enabled: !full && d.coins >= FREEZE_PRICE });
-    this._back(() => this.showTasks());
+    this._back(() => (this.fromShop ? this.showShop() : this.showTasks()));
   }
 
-  /** Купить коробку и сразу перейти к скинам, где её можно открыть. */
+  /** Купить коробку и сразу открыть; назад — в раздел, откуда покупали. */
   _buyBox() {
+    const from = this.section ?? this.showSkins;
+    const back = () => from.call(this);
     const res = buyBox();
     if (res === 'ok') {
       haptic('win');
       sfx.play('pickup');
-      this.showSkins();
+      this._openBox(back);
       return;
     }
     haptic('warn');
-    this.showTasks();
-    const msg = res === 'full' ? 'все скины уже собраны' : 'не хватает монет';
-    const t = this.add.text(this.W / 2, 150, msg, font(22, 800, '#ff9a9a')).setOrigin(0.5);
+    const t = this.add.text(this.W / 2, 150, res === 'full' ? 'все скины уже собраны' : 'не хватает монет',
+      font(24, 800, '#ff9a9a')).setOrigin(0.5).setDepth(60).setStroke('#140a20', 6);
     this.items.push(t);
     this.tweens.add({ targets: t, alpha: 0, delay: 1400, duration: 400 });
   }
@@ -950,7 +1069,7 @@ export default class MenuScene extends Phaser.Scene {
       'монеты — за бои, задания дня, серию дней и первое прохождение кампании',
       font(16, 700, UI.textDim)).setOrigin(0.5, 0).setAlign('center').setWordWrapWidth(W - 48));
     // Ниже экрана на телефоне — крутится пальцем
-    this._back();
+    this._back(this.fromShop ? () => this.showShop() : undefined);
     this._scrollable(sy + 210);
     this._setScroll(keep);
   }
@@ -970,7 +1089,7 @@ export default class MenuScene extends Phaser.Scene {
       if (!got) return;
       if (got.owned) applyServerOwned(got.owned);
       haptic('win');
-      this.showSkins();
+      (this.section === this.showShop ? this.showShop : this.showSkins).call(this);
       const parts = [got.boxes && `коробок: ${got.boxes}`, got.coins && `монет: ${got.coins}`].filter(Boolean).join(' · ');
       const t = this.add.text(this.W / 2, 120, `🎁 ${parts}`, font(30, 800, UI.accent)).setOrigin(0.5).setScale(0.4);
       this.items.push(t);
@@ -1022,70 +1141,185 @@ export default class MenuScene extends Phaser.Scene {
    * Открытие коробки: она трясётся, лопается, из неё выскакивает скин.
    * Что выпадет, решается сразу; анимация только показывает.
    */
-  _openBox() {
+  /**
+   * Открытие коробки — маленькое шоу. Коробка трясётся всё сильнее и
+   * светится, перебирая цвета редкостей, пока не остановится на выпавшей:
+   * чем реже скин, тем дольше перебор. Потом вспышка цвета редкости,
+   * вращающиеся лучи, конфетти, скин выпрыгивает с прыжком, крупная
+   * надпись редкости. Легендарный — золотой дождь и тряска экрана;
+   * повтор — россыпь монет.
+   */
+  _openBox(back = () => this.showSkins()) {
     const res = openSkinBox();
-    if (!res.skin) { this.showSkins(); return; }
+    if (!res.skin) { back(); return; }
     const skin = SKIN_BY_ID[res.skin];
     this.scrollMax = 0;          // окно поверх — раздел под ним не крутится
     const W = this.W, H = this.H, cx = W / 2;
-    const cy = this.topY(H * 0.42);
+    // В альбомной экран низкий: всё окно чуть плотнее
+    const k = Math.min(1, (H - 120) / 680);
+    const cy = this.topY(H * (this.portrait ? 0.42 : 0.47));
     const layer = [];
-    const add = (o) => { o.setDepth(50); layer.push(o); this.items.push(o); return o; };
+    const add = (o, d = 50) => { o.setDepth(d); layer.push(o); this.items.push(o); return o; };
+    const hex = (c) => parseInt(String(c).slice(1), 16);
+    const rank = Math.max(0, RARITY_ORDER.indexOf(skin.rarity));
+    const rar = RARITY[skin.rarity] ?? RARITY.common;
+    const color = hex(rar.color);
+    this._fxTextures();
 
     // Затемнение ловит касания: под ним ничего нажать нельзя
-    const shade = add(this.add.rectangle(0, this.topY(0), W, H, 0x05070c, 0.82).setOrigin(0, 0));
+    const shade = add(this.add.rectangle(0, this.topY(0), W, H, 0x05070c, 0.86).setOrigin(0, 0));
     shade.setInteractive();
-    const box = add(this.add.image(cx, cy, 'shot_crate_weapon')
-      .setScale(fitScale(this, 'shot_crate_weapon', 190)));
+    // Лучи за коробкой: медленно вращаются, пока белые
+    const rays = add(this.add.image(cx, cy, 'fx-rays').setAlpha(0.18).setScale(1.6));
+    this.tweens.add({ targets: rays, angle: 360, duration: 9000, repeat: -1 });
+    // Свечение — перебирает цвета редкостей
+    const glow = add(this.add.circle(cx, cy, 120, hex(RARITY.common.color), 0.35));
+    this.tweens.add({ targets: glow, scale: 1.25, alpha: 0.15, duration: 260, yoyo: true, repeat: -1 });
+    const box = add(this.add.image(cx, cy, 'shot_crate_weapon').setScale(fitScale(this, 'shot_crate_weapon', 190)));
+    const base = box.scale;
     haptic('tap');
     sfx.play('crateDrop');
-    this.tweens.add({ targets: box, angle: { from: -9, to: 9 }, duration: 90, yoyo: true, repeat: 7 });
-    this.tweens.add({ targets: box, scale: box.scale * 1.18, duration: 1300, ease: 'Quad.easeIn' });
 
-    this.time.delayedCall(1350, () => {
+    // Нарастание: тряска сильнее, коробка разбухает, цвет ступенькой вверх
+    const steps = 3 + rank * 2;
+    const stepMs = 260;
+    for (let k = 0; k < steps; k++) {
+      this.time.delayedCall(k * stepMs, () => {
+        if (!box.active) return;
+        const lvl = Math.min(rank, Math.floor((k / (steps - 1)) * (rank + 0.999)));
+        const c = hex(RARITY[RARITY_ORDER[lvl]].color);
+        glow.setFillStyle(c, 0.4);
+        rays.setTint(c);
+        const amp = 5 + k * 2.2;
+        this.tweens.add({ targets: box, angle: { from: -amp, to: amp }, duration: 60, yoyo: true, repeat: 1 });
+        box.setScale(base * (1 + k * 0.035));
+        haptic('select');
+        if (k === steps - 1) sfx.play('tick');
+      });
+    }
+
+    this.time.delayedCall(steps * stepMs + 120, () => {
       if (!box.active) return;
       box.destroy();
       haptic('win');
       sfx.play('pickup');
-      sfx.play('explosion', { radius: 30 });
-      // Вспышка, лучи и конфетти
-      const flash = add(this.add.circle(cx, cy, 40, 0xffffff, 0.95));
-      this.tweens.add({ targets: flash, radius: 420, alpha: 0, duration: 500, ease: 'Cubic.easeOut' });
-      if (!this.textures.exists('fx-dot')) {
-        const tex = this.textures.createCanvas('fx-dot', 12, 12);
-        const c = tex.getContext();
-        c.fillStyle = '#ffffff';
-        c.beginPath(); c.arc(6, 6, 5.5, 0, Math.PI * 2); c.fill();
-        tex.refresh();
-      }
-      const em = add(this.add.particles(cx, cy, 'fx-dot', {
-        speed: { min: 160, max: 520 }, angle: { min: 0, max: 360 }, gravityY: 520,
-        lifespan: { min: 900, max: 1700 }, scale: { start: 1.3, end: 0.4 },
-        tint: [0xff5a5a, 0x5aa9ff, 0x6ee36e, 0xffd45a, 0xff8ad4, 0xffffff], emitting: false,
-      }));
-      em.explode(70);
+      sfx.play('explosion', { radius: 24 + rank * 14 });
+      this.uiCam.shake(180 + rank * 120, 0.004 + rank * 0.003);
+      glow.setFillStyle(color, 0.45);
+      rays.setTint(color);
+      this.tweens.add({ targets: rays, alpha: 0.3 + rank * 0.1, scale: 2.4, duration: 400, ease: 'Cubic.easeOut' });
 
+      // Вспышка цвета редкости и белая середина
+      const flash = add(this.add.circle(cx, cy, 40, color, 0.9));
+      this.tweens.add({ targets: flash, radius: 520, alpha: 0, duration: 600, ease: 'Cubic.easeOut' });
+      const core = add(this.add.circle(cx, cy, 30, 0xffffff, 1));
+      this.tweens.add({ targets: core, radius: 220, alpha: 0, duration: 380, ease: 'Cubic.easeOut' });
+      const ring = add(this.add.circle(cx, cy, 60).setStrokeStyle(10, color, 1));
+      this.tweens.add({ targets: ring, scale: 6, alpha: 0, duration: 700, ease: 'Cubic.easeOut' });
+
+      // Конфетти: цвет редкости, белый и золото — и звёздочки
+      const palette = [color, 0xffffff, 0xffd166, color, 0xff8ad4, 0x8ef0a0];
+      const em = add(this.add.particles(cx, cy, 'fx-dot', {
+        speed: { min: 200, max: 640 }, angle: { min: 0, max: 360 }, gravityY: 560,
+        lifespan: { min: 1000, max: 1900 }, scale: { start: 1.5, end: 0.3 }, rotate: { min: 0, max: 360 },
+        tint: palette, emitting: false,
+      }), 52);
+      em.explode(70 + rank * 40);
+      const stars = add(this.add.particles(cx, cy, 'fx-star', {
+        speed: { min: 80, max: 300 }, angle: { min: 0, max: 360 }, lifespan: { min: 700, max: 1300 },
+        scale: { start: 1.1, end: 0 }, rotate: { start: 0, end: 360 }, tint: [color, 0xffffff], emitting: false,
+      }), 52);
+      stars.explode(18 + rank * 10);
+      // Легендарный — золотой дождь сверху ещё полторы секунды
+      if (rank >= 3) {
+        const rain = add(this.add.particles(0, this.topY(-20), 'fx-star', {
+          x: { min: 0, max: W }, speedY: { min: 220, max: 420 }, speedX: { min: -40, max: 40 },
+          lifespan: 2400, scale: { start: 0.9, end: 0.4 }, rotate: { start: 0, end: 540 },
+          tint: [0xffd166, 0xffb347, 0xffffff], frequency: 30, quantity: 2,
+        }), 52);
+        this.time.delayedCall(1600, () => rain.active && rain.stop());
+      }
+
+      // Скин выпрыгивает и подпрыгивает
       const sheet = this.textures.exists(skin.sheet) ? skin.sheet : 'smiley';
-      const hero = add(this.add.sprite(cx, cy + 70, sheet, 0).setOrigin(0.5, 0.92).setScale(0.2).setFlipX(true));
+      const hero = add(this.add.sprite(cx, cy + 70 * k, sheet, 0).setOrigin(0.5, 0.92).setScale(0.2).setFlipX(true), 53);
       hero.play(`${sheet}_win`);
-      this.tweens.add({ targets: hero, scale: 3, duration: 520, ease: 'Back.easeOut' });
-      const rar = RARITY[skin.rarity] ?? RARITY.common;
-      add(this.add.text(cx, cy - 200, res.dup ? `Повтор · ${rar.name} · +${res.refund} монет` : `Новый скин · ${rar.name}!`,
-        font(26, 800, rar.color)).setOrigin(0.5));
-      const name = add(this.add.text(cx, cy + 120, skin.name, font(48, 800, UI.accent)).setOrigin(0.5).setScale(0.3));
+      this.tweens.add({ targets: hero, scale: 3 * k, duration: 560, ease: 'Back.easeOut' });
+      this.tweens.add({ targets: hero, y: cy + 50 * k, duration: 360, delay: 600, yoyo: true, repeat: -1, ease: 'Sine.easeInOut' });
+
+      // Редкость — крупно, с ударом; ниже имя
+      const tag = res.dup ? 'ПОВТОР' : `${rar.name.toUpperCase()}!`;
+      const head = add(this.add.text(cx, cy - 280 * k, tag, font(rank >= 2 ? 54 : 46, 900, rar.color))
+        .setOrigin(0.5).setStroke('#140a20', 10).setShadow(0, 6, '#000000', 12, true, true).setScale(2.4).setAlpha(0), 54);
+      this.tweens.add({ targets: head, scale: 1, alpha: 1, duration: 360, ease: 'Back.easeOut' });
+      this.tweens.add({ targets: head, scale: 1.08, duration: 520, delay: 400, yoyo: true, repeat: -1, ease: 'Sine.easeInOut' });
+      const name = add(this.add.text(cx, cy + 130 * k, skin.name, font(50, 900, '#ffffff'))
+        .setOrigin(0.5).setStroke('#140a20', 8).setScale(0.3), 54);
       this.tweens.add({ targets: name, scale: 1, duration: 420, delay: 180, ease: 'Back.easeOut' });
+      add(this.add.text(cx, cy + 180 * k, res.dup ? `уже есть — +${res.refund} монет назад` : 'новый скин в коллекции',
+        font(22, 800, res.dup ? '#ffe27a' : '#cfe8ff')).setOrigin(0.5).setStroke('#140a20', 6), 54);
+
+      // Повтор — монеты сыплются вверх
+      if (res.dup) {
+        const coins = add(this.add.particles(cx, cy + 40, this._coinTexture(), {
+          speed: { min: 260, max: 520 }, angle: { min: 230, max: 310 }, gravityY: 700,
+          lifespan: 1400, scale: { start: 0.8, end: 0.5 }, emitting: false,
+        }), 52);
+        coins.explode(18);
+        sfx.play('pickup');
+      }
 
       const btn = (key, dx, label, variant, onTap) => {
         const before = this.items.length;
-        this._button(key, cx + dx, cy + 230, label, '', onTap, { w: 250, h: 78, variant, titleSize: 26 });
-        for (const o of this.items.slice(before)) o.setDepth(51);
+        this._button(key, cx + dx, cy + 260 * k, label, '', onTap, { w: 250, h: 78, variant, titleSize: 26 });
+        for (const o of this.items.slice(before)) o.setDepth(56);
       };
-      this.time.delayedCall(600, () => {
-        if (this.section !== this.showSkins) return;
-        btn('skin-wear', -140, 'Надеть', 'primary', () => { equipSkin(skin.id); this.showSkins(); });
-        btn('skin-later', 140, 'Потом', 'normal', () => this.showSkins());
+      this.time.delayedCall(700, () => {
+        if (!shade.active) return;
+        if (res.dup) btn('skin-later', 0, 'Дальше', 'primary', back);
+        else {
+          btn('skin-wear', -140, 'Надеть', 'primary', () => { equipSkin(skin.id); back(); });
+          btn('skin-later', 140, 'Потом', 'normal', back);
+        }
       });
     });
+  }
+
+  /** Текстуры эффектов меню: точка конфетти, звёздочка, лучи. */
+  _fxTextures() {
+    if (!this.textures.exists('fx-dot')) {
+      const tex = this.textures.createCanvas('fx-dot', 12, 12);
+      const c = tex.getContext();
+      c.fillStyle = '#ffffff';
+      c.beginPath(); c.arc(6, 6, 5.5, 0, Math.PI * 2); c.fill();
+      tex.refresh();
+    }
+    if (!this.textures.exists('fx-star')) {
+      const tex = this.textures.createCanvas('fx-star', 28, 28);
+      const c = tex.getContext();
+      c.fillStyle = '#ffffff';
+      c.beginPath();
+      for (let k = 0; k < 10; k++) {
+        const r = k % 2 ? 5 : 13, a = -Math.PI / 2 + (k * Math.PI) / 5;
+        c.lineTo(14 + Math.cos(a) * r, 14 + Math.sin(a) * r);
+      }
+      c.closePath(); c.fill();
+      tex.refresh();
+    }
+    if (!this.textures.exists('fx-rays')) {
+      const S = 512, tex = this.textures.createCanvas('fx-rays', S, S);
+      const c = tex.getContext();
+      const g = c.createRadialGradient(S / 2, S / 2, 10, S / 2, S / 2, S / 2);
+      g.addColorStop(0, 'rgba(255,255,255,1)'); g.addColorStop(1, 'rgba(255,255,255,0)');
+      c.fillStyle = g;
+      for (let k = 0; k < 14; k++) {
+        const a = (k / 14) * Math.PI * 2, w = Math.PI / 22;
+        c.beginPath(); c.moveTo(S / 2, S / 2);
+        c.arc(S / 2, S / 2, S / 2, a - w, a + w);
+        c.closePath(); c.fill();
+      }
+      tex.refresh();
+    }
   }
 
   // -------------------------------------------------------------- режимы

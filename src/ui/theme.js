@@ -245,6 +245,18 @@ const ICONS = {
     ctx.fillRect(s * 0.18, s * 0.42, s * 0.2, s * 0.36);
     ctx.fillRect(s * 0.62, s * 0.52, s * 0.2, s * 0.26);
   },
+  // Сумка с ручкой: магазин
+  shop: (ctx, s) => {
+    stroke(ctx, s);
+    ctx.beginPath();
+    ctx.moveTo(s * 0.22, s * 0.38); ctx.lineTo(s * 0.78, s * 0.38);
+    ctx.lineTo(s * 0.72, s * 0.82); ctx.lineTo(s * 0.28, s * 0.82); ctx.closePath();
+    ctx.moveTo(s * 0.37, s * 0.38); ctx.lineTo(s * 0.37, s * 0.3);
+    ctx.quadraticCurveTo(s * 0.37, s * 0.16, s * 0.5, s * 0.16);
+    ctx.quadraticCurveTo(s * 0.63, s * 0.16, s * 0.63, s * 0.3);
+    ctx.lineTo(s * 0.63, s * 0.38);
+    ctx.stroke();
+  },
   // Голова и плечи: профиль
   profile: (ctx, s) => {
     stroke(ctx, s);
