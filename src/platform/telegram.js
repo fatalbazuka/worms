@@ -18,6 +18,8 @@
  * index.html через window.WORMS_TG = { bot: 'имя', app: 'короткое_имя' }:
  * app нужен, только если Mini App заведён через /newapp, а не как главный.
  */
+import { tr } from '../i18n/index.js';
+
 export const TELEGRAM = {
   bot: 'Cybercouch77bot',
   app: '',
@@ -294,7 +296,7 @@ export function shareLink(link, text) {
   const tg = tgApi();
   if (!tg?.openTelegramLink) return false;
   try {
-    tg.openTelegramLink(`https://t.me/share/url?url=${encodeURIComponent(link)}&text=${encodeURIComponent(text)}`);
+    tg.openTelegramLink(`https://t.me/share/url?url=${encodeURIComponent(link)}&text=${encodeURIComponent(tr(text))}`);
     return true;
   } catch {
     return false;
@@ -319,7 +321,7 @@ export function shareMessage(id) {
 export function shareRoom(room, link = inviteLink(room)) {
   const tg = tgApi();
   if (!tg?.openTelegramLink) return false;
-  const text = `Го в Smiles! Комната ${room}`;
+  const text = tr(`Го в Smiles! Комната ${room}`);
   try {
     const url = `https://t.me/share/url?url=${encodeURIComponent(link)}`
       + `&text=${encodeURIComponent(text)}`;

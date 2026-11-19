@@ -9,6 +9,7 @@
 import { tgApi, tgSupports, refLink, haptic } from './telegram.js';
 import { uploadMedia, loggedIn, trackStep } from '../net/server.js';
 import { UI } from '../ui/theme.js';
+import { tr } from '../i18n/index.js';
 
 export const STORY_W = 1080;
 export const STORY_H = 1920;
@@ -45,6 +46,7 @@ export function fighterFrame(scene, sheet, frame = 13) {
 }
 
 function strokeText(g, text, x, y, size, color, stroke = '#141821', weight = 900) {
+  text = tr(text);
   g.font = `${weight} ${size}px ${UI.fontFamily}`;
   g.lineJoin = 'round';
   g.lineWidth = Math.max(6, size / 6);
@@ -136,9 +138,9 @@ export function postStory(url, { text = '', button = 'Играть' } = {}) {
   const tg = tgApi();
   if (!canStory()) return 'unsupported';
   const link = refLink();
-  const opts = { text: text.slice(0, 200) };
+  const opts = { text: tr(text).slice(0, 200) };
   // Ссылка-виджет на сторис есть только у Premium; без Premium Telegram её молча опустит
-  if (link) opts.widget_link = { url: link, name: button.slice(0, 48) };
+  if (link) opts.widget_link = { url: link, name: tr(button).slice(0, 48) };
   try {
     tg.shareToStory(url, opts);
     haptic('win');

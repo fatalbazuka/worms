@@ -197,9 +197,15 @@ check('отмена турнира возвращает взнос', ref?.telegr
 
 // ------------------------------------------------------------------- бот
 await hook({ message: { from: { id: 3, first_name: 'Вика' }, chat: { id: 3, type: 'private' }, text: '/start' } });
-const hello = calls('sendMessage').at(-1)?.params;
-check('/start: приветствие и кнопка «Играть» в мини-приложение',
-  hello.reply_markup?.inline_keyboard?.[0]?.[0]?.web_app?.url === 'https://example.test/worms/');
+const hello = calls('sendAnimation').at(-1)?.params;
+check('/start: ролик с боем, приветствие и кнопка «Играть» в мини-приложение',
+  hello?.animation === 'https://example.test/worms/assets/promo/welcome.mp4' && hello.caption.includes('Вика')
+  && hello.reply_markup?.inline_keyboard?.[0]?.[0]?.web_app?.url === 'https://example.test/worms/');
+await hook({ message: { from: { id: 4, first_name: 'Ann', language_code: 'en' }, chat: { id: 4, type: 'private' }, text: '/start' } });
+check('/start по-английски: подпись, кнопка Play и своё меню',
+  calls('sendAnimation').at(-1)?.params.caption.startsWith('Hi, Ann!')
+  && calls('sendAnimation').at(-1)?.params.reply_markup.inline_keyboard[0][0].text === '🎮 Play'
+  && calls('setChatMenuButton').some((c) => c.params.chat_id === 4 && c.params.menu_button.text === 'Play'));
 await hook({ message: { from: { id: 1 }, chat: { id: 1, type: 'private' }, text: '/stats' } });
 check('/stats: статистика в чате', calls('sendMessage').at(-1)?.params.text
   .includes(`Рейтинг: ${app.players.byId('tg1').rating}`), calls('sendMessage').at(-1)?.params.text.split('\n')[1]);

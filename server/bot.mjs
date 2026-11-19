@@ -23,6 +23,31 @@ import { hashPassword, newPassword } from './lib/accounts.js';
 
 export const DONATE_AMOUNTS = [10, 50, 100];
 
+/**
+ * Описание бота. long — экран до «Старт» (до 512 знаков), short — профиль
+ * бота и превью ссылки (до 120). '' — по умолчанию (русский), en — английский.
+ */
+export const DESCRIPTIONS = {
+  '': {
+    short: 'Smiles — пошаговая артиллерия со смайликами: башня, трос, рогатка, 18 видов оружия, онлайн и турниры.',
+    long: '💥 Smiles — пошаговая артиллерия со смайликами прямо в Telegram.\n\n'
+      + '🏰 Бои на высокой башне: цепляйся тросом, стреляй рогаткой, роняй врагов с этажей.\n'
+      + '🎯 18 видов оружия: сплит-ракета, бумеранг, самонаводка, святая граната — и ящики с редкостью.\n'
+      + '🤝 Онлайн-дуэли, турниры, таблица дня. Вызови друга из любого чата.\n'
+      + '🎁 Задания каждый день, серия, скины и кампания с боссами.\n\n'
+      + 'Жми «Старт» — и в бой!',
+  },
+  en: {
+    short: 'Smiles — turn-based smiley artillery: a tower, a grappling rope, a slingshot, 18 weapons, online duels.',
+    long: '💥 Smiles — turn-based smiley artillery right in Telegram.\n\n'
+      + '🏰 Battle on a tall tower: swing on a rope, shoot with a slingshot, knock enemies off the floors.\n'
+      + '🎯 18 weapons: split rocket, boomerang, homing missile, holy grenade — plus crates with rarity.\n'
+      + '🤝 Online duels, tournaments, a daily leaderboard. Challenge a friend from any chat.\n'
+      + '🎁 Daily tasks, streaks, skins and a campaign with bosses.\n\n'
+      + 'Tap «Start» and fight!',
+  },
+};
+
 export function webhookSecret(token, explicit = '') {
   if (explicit) return explicit;
   return createHash('sha256').update(`worms-webhook:${token}`).digest('hex').slice(0, 48);
@@ -41,6 +66,13 @@ export function createBot({ db, api, players, tournaments, analytics = null, adm
   const appUrl = (params = '') => (publicUrl ? `${publicUrl.replace(/\/+$/, '')}/${params}` : '');
   const playButton = (text = '🎮 Играть', params = '') => (publicUrl
     ? { inline_keyboard: [[{ text, web_app: { url: appUrl(params) } }]] } : undefined);
+
+  /** Английский — тем, у кого Telegram не на русском и не на соседнем языке. */
+  const enOf = (from) => {
+    const c = String(from?.language_code ?? '');
+    return c !== '' && !/^(ru|uk|be|kk|ky|uz|tg|tt|ba|hy|az|ka|mn)\b/i.test(c);
+  };
+  const play = (en) => playButton(en ? '🎮 Play' : '🎮 Играть');
 
   async function send(chatId, text, markup) {
     return api.call('sendMessage', { chat_id: chatId, text, ...(markup ? { reply_markup: markup } : {}) });
@@ -153,8 +185,19 @@ export function createBot({ db, api, players, tournaments, analytics = null, adm
 
   // ------------------------------------------------------------ команды
 
-  function statsText(p) {
+  function statsText(p, en = false) {
     const v = players.view(p);
+    if (en) {
+      const out = [
+        `👤 ${v.name}`,
+        `Rating: ${v.rating}${v.rank ? ` · #${v.rank}` : ''}`,
+        `Wins ${v.wins} · losses ${v.losses}${v.winrate != null ? ` · ${v.winrate}%` : ''}`,
+        `Streak: ${v.streak} · best ${v.bestStreak}`,
+        `Tournaments won: ${v.tourneyWins}`,
+      ];
+      if (v.titles.length) out.push(`Titles: ${v.titles.slice(0, 3).map((t) => t.title).join(', ')}`);
+      return out.join('\n');
+    }
     const lines = [
       `👤 ${v.name}`,
       `Рейтинг: ${v.rating}${v.rank ? ` · место ${v.rank}` : ''}`,
@@ -166,15 +209,19 @@ export function createBot({ db, api, players, tournaments, analytics = null, adm
     return lines.join('\n');
   }
 
-  function topText() {
+  function topText(en = false) {
     const rows = players.top(10);
-    if (!rows.length) return 'Таблица пока пуста — сыграй первый бой по сети.';
-    return ['🏅 Топ-10 по рейтингу', ...rows.map((r, i) => `${i + 1}. ${r.name} — ${r.rating}`)].join('\n');
+    if (!rows.length) return en ? 'The leaderboard is empty — play the first online battle.' : 'Таблица пока пуста — сыграй первый бой по сети.';
+    return [en ? '🏅 Top 10 by rating' : '🏅 Топ-10 по рейтингу', ...rows.map((r, i) => `${i + 1}. ${r.name} — ${r.rating}`)].join('\n');
   }
 
-  function toursText() {
+  function toursText(en = false) {
     const list = tournaments.list(null).filter((t) => t.status !== 'finished');
-    if (!list.length) return 'Сейчас турниров нет. Следи за анонсами!';
+    if (!list.length) return en ? 'No tournaments right now. Stay tuned!' : 'Сейчас турниров нет. Следи за анонсами!';
+    if (en) {
+      return ['🏆 Tournaments', ...list.map((t) => `#${t.id} «${t.name}» — ${t.status === 'open'
+        ? `sign-up ${t.count}/${t.size}${t.fee ? `, fee ${t.fee} ⭐` : ''}` : 'in progress'}`)].join('\n');
+    }
     return ['🏆 Турниры', ...list.map((t) => `#${t.id} «${t.name}» — ${t.status === 'open'
       ? `запись ${t.count}/${t.size}${t.startsAt ? `, старт ${fmtTime(t.startsAt)}` : ''}${t.fee ? `, взнос ${t.fee} ⭐` : ''}`
       : 'идёт'}`)].join('\n');
@@ -216,6 +263,33 @@ export function createBot({ db, api, players, tournaments, analytics = null, adm
     '/newweb логин [имя] — отдельный аккаунт только для сайта, без Telegram',
   ].join('\n');
 
+  /**
+   * /start: ролик с боем, пара строк и кнопка «Играть». Ролик лежит у игры
+   * (assets/promo/welcome.mp4); не отправился — просто текст.
+   * Англоязычным — кнопка меню «Play» в их чате (у всех остальных «Играть»).
+   */
+  async function welcome(chat, me, en, from) {
+    const text = en
+      ? `Hi, ${me.name}! This is Smiles — turn-based smiley artillery right in Telegram.\n\n`
+        + 'Tower battles with a grappling rope and a slingshot, 18 weapons, daily tasks, skins, '
+        + 'online duels and tournaments.\n\n'
+        + 'Challenge a friend from any chat: type @' + (username || 'bot') + ' and pick «Challenge to a duel».'
+      : `Привет, ${me.name}! Это Smiles — пошаговая артиллерия со смайликами прямо в Telegram.\n\n`
+        + 'Бои на башне с тросом и рогаткой, 18 видов оружия, задания каждый день, скины, '
+        + 'онлайн-дуэли и турниры.\n\n'
+        + 'Вызвать друга можно из любого чата: напиши @' + (username || 'бот') + ' и выбери «Вызвать на дуэль».';
+    if (en && publicUrl) {
+      await api.call('setChatMenuButton', { chat_id: chat, menu_button: { type: 'web_app', text: 'Play', web_app: { url: appUrl() } } });
+    }
+    if (publicUrl) {
+      const sent = await api.call('sendAnimation', {
+        chat_id: chat, animation: appUrl('assets/promo/welcome.mp4'), caption: text, reply_markup: play(en),
+      });
+      if (sent) return sent;
+    }
+    return send(chat, text, play(en));
+  }
+
   async function onCommand(msg) {
     const text = String(msg.text ?? '').trim();
     const [rawCmd, ...args] = text.split(/\s+/);
@@ -224,30 +298,33 @@ export function createBot({ db, api, players, tournaments, analytics = null, adm
     const me = players.upsertTg(msg.from);
     const admin = players.isAdmin(me);
 
+    const en = enOf(msg.from);
     switch (cmd) {
       case '/start':
-        return send(chat, `Привет, ${me.name}! Это Smiles — пошаговая артиллерия со смайликами.\n\n`
-          + 'Жми «Играть»: бои на башне с тросом и рогаткой, задания каждый день, скины, '
-          + 'онлайн и турниры. /stats — твоя статистика, '
-          + '/top — лучшие, /tours — турниры.', playButton());
-      case '/stats': return send(chat, statsText(me), playButton());
-      case '/top': return send(chat, topText(), playButton());
-      case '/tours': return send(chat, toursText(), playButton('🏆 Турниры', '?tour=list'));
+        return welcome(chat, me, en, msg.from);
+      case '/stats': return send(chat, statsText(me, en), play(en));
+      case '/top': return send(chat, topText(en), play(en));
+      case '/tours': return send(chat, toursText(en), playButton(en ? '🏆 Tournaments' : '🏆 Турниры', '?tour=list'));
       case '/id':
-        return send(chat, `Твой id: ${msg.from.id}. Его спросит админ, чтобы выдать вход на сайт.`);
+        return send(chat, en ? `Your id: ${msg.from.id}. The admin needs it to give you a website login.`
+          : `Твой id: ${msg.from.id}. Его спросит админ, чтобы выдать вход на сайт.`);
       case '/help':
-        return send(chat, '/stats — статистика\n/top — топ-10\n/tours — турниры\n/id — твой id'
-          + '\n/mute — не напоминать о серии\n/unmute — снова напоминать'
-          + (admin ? `\n\n${ADMIN_HELP}` : ''), playButton());
+        return send(chat, (en
+          ? '/stats — your stats\n/top — top 10\n/tours — tournaments\n/id — your id\n/mute — no streak reminders\n/unmute — remind again'
+          : '/stats — статистика\n/top — топ-10\n/tours — турниры\n/id — твой id'
+          + '\n/mute — не напоминать о серии\n/unmute — снова напоминать')
+          + (admin ? `\n\n${ADMIN_HELP}` : ''), play(en));
       case '/mute':
         analytics?.setRemind(me.id, false);
-        return send(chat, 'Хорошо, больше не напоминаю о серии. /unmute — вернуть напоминания.');
+        return send(chat, en ? "OK, no more streak reminders. /unmute — turn them back on."
+          : 'Хорошо, больше не напоминаю о серии. /unmute — вернуть напоминания.');
       case '/unmute':
         analytics?.setRemind(me.id, true);
-        return send(chat, 'Буду напоминать вечером, если серия дней вот-вот сгорит.');
+        return send(chat, en ? "I'll remind you in the evening if your daily streak is about to burn."
+          : 'Буду напоминать вечером, если серия дней вот-вот сгорит.');
       default: break;
     }
-    if (!admin) return send(chat, 'Не знаю такой команды. /help — что я умею.', playButton());
+    if (!admin) return send(chat, en ? "I don't know that command. /help — what I can do." : 'Не знаю такой команды. /help — что я умею.', play(en));
 
     switch (cmd) {
       case '/admin': {
@@ -403,7 +480,10 @@ Join via this link and you both get a skin box 🎁`,
       if (!msg?.from || msg.chat?.type !== 'private') return null;
       if (msg.successful_payment) return await onPaid(msg);
       if (typeof msg.text === 'string' && msg.text.startsWith('/')) return await onCommand(msg);
-      if (typeof msg.text === 'string') return await send(msg.chat.id, 'Жми «Играть» 👇', playButton());
+      if (typeof msg.text === 'string') {
+        const en = enOf(msg.from);
+        return await send(msg.chat.id, en ? 'Tap «Play» 👇' : 'Жми «Играть» 👇', play(en));
+      }
     } catch (e) {
       log.error?.('[bot] обновление не обработано', e);
     }
@@ -462,6 +542,21 @@ Join via this link and you both get a skin box 🎁`,
       { command: 'mute', description: 'Не напоминать о серии' },
     ];
     await api.call('setMyCommands', { commands: base });
+    await api.call('setMyCommands', {
+      language_code: 'en',
+      commands: [
+        { command: 'start', description: 'Play' },
+        { command: 'stats', description: 'My stats' },
+        { command: 'top', description: 'Top 10 by rating' },
+        { command: 'tours', description: 'Tournaments' },
+        { command: 'mute', description: 'No streak reminders' },
+      ],
+    });
+    // Описание бота: видно до нажатия «Старт» и в каталогах
+    for (const [lang, d] of Object.entries(DESCRIPTIONS)) {
+      await api.call('setMyDescription', { description: d.long, ...(lang ? { language_code: lang } : {}) });
+      await api.call('setMyShortDescription', { short_description: d.short, ...(lang ? { language_code: lang } : {}) });
+    }
     for (const id of adminIds) {
       await api.call('setMyCommands', {
         scope: { type: 'chat', chat_id: id },
