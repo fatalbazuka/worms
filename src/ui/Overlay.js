@@ -175,10 +175,15 @@ export function askText({
       el('div', { class: 'acc-row' },
         el('button', { class: 'acc-btn primary', type: 'submit' }, okText),
         el('button', { class: 'acc-btn', type: 'button', onclick: closeOverlay }, 'Отмена')));
-    form.addEventListener('submit', (e) => {
+    let busy = false;
+    form.addEventListener('submit', async (e) => {
       e.preventDefault();
+      if (busy) return;
       const v = input.value.trim();
-      const problem = validate?.(v);
+      // Проверка может спросить сервер — тогда ждём её, окно не закрываем
+      busy = true;
+      let problem = null;
+      try { problem = await validate?.(v); } finally { busy = false; }
       if (problem) { err.textContent = problem; input.setAttribute('aria-invalid', 'true'); return; }
       finish(v);
       closeOverlay();

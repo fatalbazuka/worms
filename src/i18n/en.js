@@ -813,5 +813,21 @@ export const EN = {
  "не вышло загрузить клип — попробуй ещё раз": "couldn't upload the clip — try again",
  "🎬 Клип": "🎬 Clip",
  "добито: {0}": "knockouts: {0}",
- " · добито: {0}": " · knockouts: {0}"
+ " · добито: {0}": " · knockouts: {0}",
+ "🎟 Промокод": "🎟 Promo code",
+ "коробки и монеты по коду": "boxes and coins by code",
+ "Промокод": "Promo code",
+ "Код": "Code",
+ "например, SKIPPER77": "e.g. SKIPPER77",
+ "Активировать": "Activate",
+ "Один код — один раз на игрока.": "One code — once per player.",
+ "код — от 3 до 32 букв и цифр": "code — 3 to 32 letters and digits",
+ "🎁 {0}": "🎁 {0}",
+ "коробок: {0}": "boxes: {0}",
+ "нет такого промокода": "no such promo code",
+ "срок промокода истёк": "this promo code has expired",
+ "промокод закончился": "this promo code is used up",
+ "ты уже активировал этот промокод": "you've already used this promo code",
+ "промокоды работают после входа — открой игру через Telegram": "promo codes work after sign-in — open the game via Telegram",
+ "🎟 Код": "🎟 Code"
 };

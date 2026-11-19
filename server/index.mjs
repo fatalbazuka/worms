@@ -36,6 +36,7 @@
  *   POST /api/tournaments/:id/start       → {ok}             только админ
  *   POST /api/stars/donate {amount}       → {invoice}
  *   POST /api/event {name, props}         → {ok}             статистика: open | battle
+ *   POST /api/promo {code}                → {boxes, coins, skin, owned}  активировать промокод
  *   POST /api/media (JPEG/PNG/WebM/MP4)   → {id, ext, path}  картинка для сторис, клип; GET /api/media/<id>.<ext>
  *   GET  /api/shop                        → {items, skinStars, owned}  товары и что положено
  *   POST /api/shop/buy {item}             → {invoice}        box1 | box5 | skin-<id>
@@ -67,6 +68,7 @@ import { createSaves } from './saves.mjs';
 import { createAdmin } from './admin.mjs';
 import { createMedia } from './media.mjs';
 import { createWeekly } from './weekly.mjs';
+import { createPromos } from './promo.mjs';
 
 export function createApp({
   db, botToken = '', trustProxy = false, staticDir = null, now = () => Date.now(),
@@ -75,7 +77,7 @@ export function createApp({
 }) {
   const admins = new Set(adminIds.map(Number).filter(Boolean));
   // login — подбор пароля: не больше 10 попыток в минуту с одного адреса
-  const limits = { write: limiter(120, 60_000), login: limiter(10, 60_000), media: limiter(30, 3600_000) };
+  const limits = { write: limiter(120, 60_000), login: limiter(10, 60_000), media: limiter(30, 3600_000), promo: limiter(10, 60_000) };
   // Картинки для сторис и клипы: лежат несколько дней (server/media.mjs)
   const media = createMedia({ dir: mediaDir, now });
   const api = createTelegramApi({ token: botToken, base: telegramApiBase, log });
@@ -91,10 +93,11 @@ export function createApp({
   let weekly = null;
   const analytics = createAnalytics({ db, now, tz });
   const shop = createShop({ db, now });
+  const promos = createPromos({ db, now });
   const saves = createSaves({ db, now });
   const daily = createDailyTower({ db, players, dayOf: () => analytics.dayOf(), now });
   const admin = createAdmin({ db, players, analytics, tournaments, shop, saves, api, now, log });
-  bot = createBot({ db, api, players, tournaments, analytics, admin, adminIds: admins, publicUrl, tz, now, log, appName });
+  bot = createBot({ db, api, players, tournaments, analytics, admin, adminIds: admins, publicUrl, tz, now, log, appName, promos });
   weekly = createWeekly({ db, tournaments, shop, notify: (...a) => bot.notify(...a), tz, now, log });
   const hookSecret = botToken ? webhookSecret(botToken, secret) : '';
 
@@ -347,6 +350,14 @@ export function createApp({
         if (!link) throw new HttpError(503, 'оплата звёздами сейчас недоступна');
         return { invoice: link };
       }
+      case 'POST /api/promo': {
+        // Подбор кода: не больше 10 попыток в минуту на игрока
+        const me = auth(req);
+        if (!limits.promo.hit(me.id)) throw new HttpError(429, 'слишком много попыток, подожди минуту');
+        const r = promos.redeem(me.id, (await readJson(req)).code);
+        if (!r.ok) throw new HttpError(r.status, r.error);
+        return { ...r, owned: shop.owned(me.id) };
+      }
       case 'POST /api/media': {
         const me = auth(req);
         if (!limits.media.hit(me.id)) throw new HttpError(429, 'слишком много файлов, попробуй через час');
@@ -399,6 +410,9 @@ export function createApp({
           return { tournament: t };
         } catch (e) { throw new HttpError(400, e.message); }
       }
+      case 'GET /api/admin/promos': return { items: promos.list() };
+      case 'POST /api/admin/promos': return fail(promos.create(body), 409);
+      case 'POST /api/admin/promos/disable': return fail(promos.disable(body.code), 404);
       case 'POST /api/admin/tours/start': return fail(tournaments.start(Number(body.id)), 409);
       case 'POST /api/admin/tours/cancel': return fail(await tournaments.cancel(Number(body.id)), 409);
       case 'GET /api/admin/broadcast': return { audience: admin.audience().length, items: admin.broadcasts() };

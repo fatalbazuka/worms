@@ -141,14 +141,14 @@ function showLogin(err = '') {
 
 // ------------------------------------------------------------- вкладки
 
-const TABS = [['overview', 'Сводка'], ['players', 'Игроки'], ['tours', 'Турниры'], ['broadcast', 'Рассылка'], ['db', 'База']];
+const TABS = [['overview', 'Сводка'], ['players', 'Игроки'], ['tours', 'Турниры'], ['promos', 'Промокоды'], ['broadcast', 'Рассылка'], ['db', 'База']];
 let current = 'overview';
 function tabs() {
   const nav = clear(document.getElementById('tabs'));
   for (const [id, label] of TABS) {
     nav.append(h('button', { class: id === current ? 'on' : '', onclick: () => { current = id; tabs(); } }, label));
   }
-  ({ overview, players: playersTab, tours, broadcast, db: dbTab })[current]();
+  ({ overview, players: playersTab, tours, promos, broadcast, db: dbTab })[current]();
 }
 
 // -------------------------------------------------------------- сводка
@@ -382,6 +382,50 @@ async function tours() {
   clear(app).append(
     h('div', { class: 'card' }, h('h3', {}, 'Новый турнир'),
       h('div', { class: 'row' }, name, h('label', {}, 'мест', size), h('label', {}, 'взнос, ⭐', fee), h('label', {}, 'старт (пусто — вручную)', at),
+        h('button', { class: 'btn primary', onclick: create, style: 'align-self:flex-end' }, 'Создать')), msg),
+    h('section', {}, box));
+  load();
+}
+
+// ----------------------------------------------------------- промокоды
+
+async function promos() {
+  const box = h('div', { class: 'card' }, h('p', { class: 'muted' }, 'загружаю…'));
+  const msg = h('div', { class: 'msg' });
+  const code = h('input', { placeholder: 'КОД, например SKIPPER77', style: 'flex:1;min-width:180px;text-transform:uppercase' });
+  const boxes = h('input', { type: 'number', min: 0, value: 3, style: 'width:80px' });
+  const coins = h('input', { type: 'number', min: 0, value: 0, style: 'width:90px' });
+  const uses = h('input', { type: 'number', min: 0, value: 0, style: 'width:90px' });
+  const days = h('input', { type: 'number', min: 0, value: 0, style: 'width:80px' });
+  const create = async () => {
+    try {
+      const r = await call('POST', 'admin/promos', { code: code.value, boxes: Number(boxes.value), coins: Number(coins.value), maxUses: Number(uses.value), days: Number(days.value) });
+      msg.className = 'msg ok'; msg.textContent = `Промокод ${r.promo.code.toUpperCase()} создан`; code.value = ''; load();
+    } catch (e) { msg.className = 'msg err'; msg.textContent = e.message; }
+  };
+  const off = async (c) => {
+    if (!confirm(`Выключить промокод ${c.toUpperCase()}? Активированное у игроков останется.`)) return;
+    try { await call('POST', 'admin/promos/disable', { code: c }); load(); } catch (e) { msg.className = 'msg err'; msg.textContent = e.message; }
+  };
+  const load = async () => {
+    try {
+      const r = await call('GET', 'admin/promos');
+      clear(box).append(r.items.length ? h('table', {},
+        h('tr', {}, h('th', {}, 'Код'), h('th', {}, 'Даёт'), h('th', {}, 'Активаций'), h('th', {}, 'До'), h('th', {})),
+        r.items.map((p) => h('tr', {},
+          h('td', {}, p.code.toUpperCase(), p.disabled ? h('div', { class: 'sub' }, 'выключен') : null),
+          h('td', {}, [p.boxes && `${p.boxes} кор.`, p.coins && `${p.coins} мон.`, p.skin && `скин ${p.skin}`].filter(Boolean).join(', ')),
+          h('td', {}, `${p.uses}${p.maxUses ? ` / ${p.maxUses}` : ''}`),
+          h('td', { class: 'sub' }, p.expiresAt ? fmtDate(p.expiresAt) : 'бессрочно'),
+          h('td', {}, p.disabled ? null : h('button', { class: 'btn danger', onclick: () => off(p.code) }, 'Выключить')))))
+        : h('p', { class: 'muted' }, 'промокодов нет'));
+    } catch (e) { clear(box).append(h('div', { class: 'msg err' }, e.message)); }
+  };
+  clear(app).append(
+    h('div', { class: 'card' }, h('h3', {}, 'Новый промокод'),
+      h('p', { class: 'muted' }, 'Игрок вводит код в игре (Скины → Промокод) или пишет боту /promo КОД. Один раз на игрока. 0 — без лимита / бессрочно.'),
+      h('div', { class: 'row' }, code, h('label', {}, 'коробок', boxes), h('label', {}, 'монет', coins),
+        h('label', {}, 'активаций', uses), h('label', {}, 'дней', days),
         h('button', { class: 'btn primary', onclick: create, style: 'align-self:flex-end' }, 'Создать')), msg),
     h('section', {}, box));
   load();

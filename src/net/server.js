@@ -216,6 +216,15 @@ export async function uploadMedia(blob) {
   }
 }
 
+/**
+ * Активировать промокод. @returns {Promise<{boxes, coins, skin, owned}>}
+ * Ошибку сервера («нет такого», «уже активирован») — исключением с текстом.
+ */
+export async function redeemPromo(code) {
+  if (!token) throw new ApiError('промокоды работают после входа — открой игру через Telegram', 401);
+  return call('POST', '/promo', { code });
+}
+
 /** Карточка «вызов на бой» для комнаты башни. @returns {Promise<string|null>} id сообщения */
 export async function prepareChallenge(room, link) {
   if (!token) return null;

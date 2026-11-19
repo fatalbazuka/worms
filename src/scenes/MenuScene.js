@@ -18,7 +18,7 @@ import { Lobby } from '../net/lobby.js';
 import { pendingSession, forgetSession } from '../net/session.js';
 import {
   syncMe, fetchTop, myRank, loggedIn, onAccountChange, track,
-  trackStep, prepareChallenge, fetchDailyTower,
+  trackStep, prepareChallenge, fetchDailyTower, redeemPromo,
 } from '../net/server.js';
 import { openAccountDialog } from '../ui/AccountDialog.js';
 import { openTournaments } from '../ui/Tournaments.js';
@@ -35,7 +35,7 @@ import { isDesktop, setUiMode, aimScheme, setAimScheme } from '../platform/devic
 import { sfx } from '../audio/Sfx.js';
 import { SKINS, SKIN_BY_ID, BOX_SKINS, RARITY, RARITY_ORDER, skinPrice, rewardMissions } from '../core/skins.js';
 import {
-  skinState, equippedSkin, equipSkin, openSkinBox, syncCampaignBoxes, buySkin,
+  skinState, equippedSkin, equipSkin, openSkinBox, syncCampaignBoxes, buySkin, applyServerOwned,
 } from '../platform/skins.js';
 import {
   TASK_BY_ID, BOX_PRICE, STREAK_COINS, STREAK_BOX_DAY, streakReady, dayKey, claimStreak,
@@ -832,6 +832,9 @@ export default class MenuScene extends Phaser.Scene {
     this._title('Скины', `собрано ${st.owned.length} из ${SKINS.length}`);
     const W = this.W, cx = W / 2;
 
+    // Промокод — в шапке: низ раздела на телефоне за краем экрана
+    this._button('promo', W - 92, 80, '🎟 Код', '', () => this._askPromo(), { w: 150, h: 52, titleSize: 20 });
+
     // --- коробки ---
     const full = BOX_SKINS.every((s) => st.owned.includes(s.id));
     const coins = dailyState().coins;
@@ -898,6 +901,30 @@ export default class MenuScene extends Phaser.Scene {
       'монеты — за бои, задания дня, серию дней и первое прохождение кампании',
       font(16, 700, UI.textDim)).setOrigin(0.5, 0).setAlign('center').setWordWrapWidth(W - 48));
     this._back();
+  }
+
+  /** Ввести промокод: сервер проверяет, подарок сразу в коробки и кошелёк. */
+  _askPromo() {
+    let got = null;
+    askText({
+      title: 'Промокод', label: 'Код', placeholder: 'например, SKIPPER77',
+      maxLength: 32, upper: true, okText: 'Активировать',
+      note: 'Один код — один раз на игрока.',
+      validate: async (v) => {
+        if (!/^[A-Z0-9_-]{3,32}$/.test(v)) return 'код — от 3 до 32 букв и цифр';
+        try { got = await redeemPromo(v); return null; } catch (e) { return e.message || 'не вышло'; }
+      },
+    }).then(() => {
+      if (!got) return;
+      if (got.owned) applyServerOwned(got.owned);
+      haptic('win');
+      this.showSkins();
+      const parts = [got.boxes && `коробок: ${got.boxes}`, got.coins && `монет: ${got.coins}`].filter(Boolean).join(' · ');
+      const t = this.add.text(this.W / 2, 120, `🎁 ${parts}`, font(30, 800, UI.accent)).setOrigin(0.5).setScale(0.4);
+      this.items.push(t);
+      this.tweens.add({ targets: t, scale: 1, duration: 300, ease: 'Back.easeOut' });
+      this.tweens.add({ targets: t, alpha: 0, delay: 2200, duration: 500 });
+    });
   }
 
   /**
