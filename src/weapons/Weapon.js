@@ -186,7 +186,11 @@ export class PlacedWeapon extends Weapon {
   fire(scene, x, y, vx, vy, owner) {
     const px = owner ? owner.x : x;
     const py = owner ? owner.centerY : y;
-    return [new Projectile(scene, px, py, 0, 0, this, owner)];
+    const p = new Projectile(scene, px, py, 0, 0, this, owner);
+    // Лежит под самим бойцом — это не попадание в него: через 0.12 с защиты
+    // от своего снаряда заряд «попадал» в стрелка и рвался сразу, −81 hp
+    p.ownerGrace = Infinity;
+    return [p];
   }
 }
 
@@ -363,6 +367,9 @@ export class TeleportWeapon extends TargetedWeapon {
     owner.y = t.y;
     owner.vx = 0;
     owner.vy = 0;
+    // С потолка или стены — встаёт ногами вниз, а не висит на ровном месте
+    owner.hang = null;
+    owner.zip = null;
     owner.grounded = false;
     owner.fallStartY = t.y;      // встал на опору — падать неоткуда
     scene.fx?.warp?.(owner.x, owner.centerY, true);

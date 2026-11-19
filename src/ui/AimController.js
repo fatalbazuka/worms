@@ -458,7 +458,10 @@ export class AimController {
     const p = weapon.projectile;
     const terrain = this.scene.terrain;
     const d = Math.hypot(vx, vy) || 1;
-    let x = o.x + (vx / d) * CFG.MUZZLE_OFFSET, y = o.y + (vy / d) * CFG.MUZZLE_OFFSET;
+    // Точка вылета — как у настоящего выстрела: у потолка ствол упирается в
+    // камень, и без луча дуга начиналась внутри него и не рисовалась
+    const r0 = terrain.raycast(o.x, o.y, o.x + (vx / d) * CFG.MUZZLE_OFFSET, o.y + (vy / d) * CFG.MUZZLE_OFFSET);
+    let x = r0.hit ? r0.freeX : r0.x, y = r0.hit ? r0.freeY : r0.y;
     const dt = 1 / 60;
     const steps = 36;
     for (let i = 1; i <= steps; i++) {
