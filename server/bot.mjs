@@ -54,7 +54,7 @@ export function webhookSecret(token, explicit = '') {
 }
 
 export function createBot({ db, api, players, tournaments, analytics = null, admin: adminPanel = null, adminIds = new Set(), publicUrl = '',
-  tz = 'Europe/Moscow', now = () => Date.now(), log = console, appName = '' }) {
+  tz = 'Europe/Moscow', now = () => Date.now(), log = console, appName = '', promos = null }) {
   const q = {
     payAdd: db.prepare(`insert or ignore into payment (charge_id, player_id, tg_id, amount, purpose, ref, created_at)
                         values (?, ?, ?, ?, ?, ?, ?)`),
@@ -261,6 +261,8 @@ export function createBot({ db, api, players, tournaments, analytics = null, adm
     '/metrics — игроки, новички, бои, возврат на второй день',
     '/web TG_ID логин — выдать вход на сайт (пароль придумаю сам; повтор — новый пароль)',
     '/newweb логин [имя] — отдельный аккаунт только для сайта, без Telegram',
+    '/newpromo КОД [коробок=3] [монет=0] [скин=id] [раз=100] [дней=30] — новый промокод',
+    '/promos — промокоды и сколько активировали · /delpromo КОД — выключить',
   ].join('\n');
 
   /**
@@ -310,10 +312,19 @@ export function createBot({ db, api, players, tournaments, analytics = null, adm
           : `Твой id: ${msg.from.id}. Его спросит админ, чтобы выдать вход на сайт.`);
       case '/help':
         return send(chat, (en
-          ? '/stats — your stats\n/top — top 10\n/tours — tournaments\n/id — your id\n/mute — no streak reminders\n/unmute — remind again'
-          : '/stats — статистика\n/top — топ-10\n/tours — турниры\n/id — твой id'
+          ? '/stats — your stats\n/top — top 10\n/tours — tournaments\n/promo CODE — activate a promo code\n/id — your id\n/mute — no streak reminders\n/unmute — remind again'
+          : '/stats — статистика\n/top — топ-10\n/tours — турниры\n/promo КОД — активировать промокод\n/id — твой id'
           + '\n/mute — не напоминать о серии\n/unmute — снова напоминать')
           + (admin ? `\n\n${ADMIN_HELP}` : ''), play(en));
+      case '/promo': {
+        if (!promos) break;
+        if (!args[0]) return send(chat, en ? 'Usage: /promo CODE' : 'Напиши так: /promo КОД', play(en));
+        const r = promos.redeem(me.id, args[0]);
+        if (!r.ok) return send(chat, `❌ ${r.error}`, play(en));
+        const got = [r.boxes && `коробок: ${r.boxes}`, r.coins && `монет: ${r.coins}`, r.skin && `скин «${r.skin}»`].filter(Boolean).join(', ');
+        return send(chat, en ? `🎁 Code activated: ${got}. Open the game — it's already there.`
+          : `🎁 Промокод активирован: ${got}. Открой игру — всё уже там.`, play(en));
+      }
       case '/mute':
         analytics?.setRemind(me.id, false);
         return send(chat, en ? "OK, no more streak reminders. /unmute — turn them back on."
@@ -327,6 +338,42 @@ export function createBot({ db, api, players, tournaments, analytics = null, adm
     if (!admin) return send(chat, en ? "I don't know that command. /help — what I can do." : 'Не знаю такой команды. /help — что я умею.', play(en));
 
     switch (cmd) {
+      case '/newpromo': {
+        if (!promos) return send(chat, 'промокоды недоступны');
+        const o = { code: args[0] };
+        for (const a of args.slice(1)) {
+          const m = /^(коробок|boxes|монет|coins|скин|skin|раз|uses|дней|days)=(\S+)$/i.exec(a);
+          if (!m) continue;
+          const k = m[1].toLowerCase();
+          if (k === 'коробок' || k === 'boxes') o.boxes = m[2];
+          else if (k === 'монет' || k === 'coins') o.coins = m[2];
+          else if (k === 'скин' || k === 'skin') o.skin = m[2];
+          else if (k === 'раз' || k === 'uses') o.maxUses = m[2];
+          else o.days = m[2];
+        }
+        // Без параметров — 3 коробки, как чаще всего и нужно
+        if (o.boxes === undefined && o.coins === undefined && o.skin === undefined) o.boxes = 3;
+        const r = promos.create(o);
+        if (!r.ok) return send(chat, `Не вышло: ${r.error}`);
+        const p = r.promo;
+        return send(chat, `🎟 Промокод ${p.code.toUpperCase()}: `
+          + [p.boxes && `коробок ${p.boxes}`, p.coins && `монет ${p.coins}`, p.skin && `скин ${p.skin}`].filter(Boolean).join(', ')
+          + `${p.maxUses ? ` · до ${p.maxUses} активаций` : ' · без лимита'}${p.expiresAt ? ` · до ${fmtTime(p.expiresAt)}` : ''}.\n`
+          + `Игрок вводит его в игре (Скины → Промокод) или пишет боту /promo ${p.code}`);
+      }
+      case '/promos': {
+        if (!promos) return send(chat, 'промокоды недоступны');
+        const list = promos.list();
+        if (!list.length) return send(chat, 'Промокодов нет. /newpromo КОД коробок=3');
+        return send(chat, ['🎟 Промокоды', ...list.slice(0, 30).map((p) => `${p.disabled ? '⛔' : '✅'} ${p.code.toUpperCase()} — `
+          + [p.boxes && `${p.boxes} кор.`, p.coins && `${p.coins} мон.`, p.skin].filter(Boolean).join(', ')
+          + ` · ${p.uses}${p.maxUses ? `/${p.maxUses}` : ''} акт.`)].join('\n'));
+      }
+      case '/delpromo': {
+        if (!promos) return send(chat, 'промокоды недоступны');
+        const r = promos.disable(args[0]);
+        return send(chat, r.ok ? `Промокод ${String(args[0]).toUpperCase()} выключен.` : `Не вышло: ${r.error}`);
+      }
       case '/admin': {
         // Одноразовая ссылка в админку на 10 минут; без адреса сайта — только справка
         if (!adminPanel || !publicUrl) return send(chat, ADMIN_HELP);

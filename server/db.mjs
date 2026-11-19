@@ -189,6 +189,27 @@ const MIGRATIONS = [
     done_at    integer
   );
   `,
+  // 9: промокоды — код даёт коробки/монеты/скин, один раз на игрока
+  `
+  create table promo (
+    code        text primary key,               -- нижний регистр
+    boxes       integer not null default 0,
+    coins       integer not null default 0,
+    skin        text,
+    max_uses    integer,                        -- null — без лимита
+    uses        integer not null default 0,
+    expires_at  integer,                        -- null — бессрочный
+    created_at  integer not null,
+    disabled_at integer
+  );
+  create table promo_use (
+    code       text not null references promo (code) on delete cascade,
+    player_id  text not null references player (id) on delete cascade,
+    created_at integer not null,
+    primary key (code, player_id)
+  );
+  insert into promo (code, boxes, created_at) values ('skipper77', 3, cast(strftime('%s','now') as integer) * 1000);
+  `,
 ];
 
 export function openDb(path) {

@@ -544,6 +544,27 @@ check('«твой ход» бот не пишет', !calls('sendMessage').some((
     `${t1?.name} ${st} ${Boolean(t2)} ${Boolean(t3)} коробок ${boxes}`);
 }
 
+// Промокоды: SKIPPER77 есть сразу, один раз на игрока; админ заводит свой с лимитом
+{
+  const tokenOf = async (id, name) => (await call('POST', '/api/telegram', { initData: await signed({ id, first_name: name }) })).data?.token;
+  const A = await tokenOf(5101, 'Промо А'), B = await tokenOf(5102, 'Промо Б');
+  const r1 = await call('POST', '/api/promo', { code: 'Skipper77' }, A);
+  const r2 = await call('POST', '/api/promo', { code: 'SKIPPER77' }, A);
+  const r3 = await call('POST', '/api/promo', { code: 'nope-code' }, A);
+  await hook({ message: { from: { id: ADMIN }, chat: { id: ADMIN, type: 'private' }, text: '/newpromo friends1 коробок=2 раз=1' } });
+  const made = calls('sendMessage').at(-1)?.params.text ?? '';
+  const r4 = await call('POST', '/api/promo', { code: 'friends1' }, A);
+  const r5 = await call('POST', '/api/promo', { code: 'friends1' }, B);
+  await hook({ message: { from: { id: 5102 }, chat: { id: 5102, type: 'private' }, text: '/promo skipper77' } });
+  const viaBot = calls('sendMessage').at(-1)?.params.text ?? '';
+  check('промокод: SKIPPER77 даёт 3 коробки, повтор и чужой код — отказ',
+    r1.status === 200 && r1.data.boxes === 3 && r1.data.owned.boxes >= 3 && r2.status === 409 && r3.status === 404,
+    `${r1.status} ${JSON.stringify(r1.data)?.slice(0, 80)} ${r2.status} ${r3.status}`);
+  check('промокод: админ заводит в боте, лимит активаций работает, игрок вводит и через /promo',
+    /FRIENDS1/.test(made) && r4.status === 200 && r4.data.boxes === 2 && r5.status === 410 && viaBot.includes('активирован'),
+    `${made.slice(0, 60)} | ${r4.status} ${r5.status} | ${viaBot.slice(0, 60)}`);
+}
+
 // Сторис и клипы: картинка ложится на сервер и отдаётся по ссылке; чужое — нет
 {
   const T = (await call('POST', '/api/telegram', { initData: await signed({ id: 4242, first_name: 'Сторис' }) })).data?.token;
