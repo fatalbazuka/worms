@@ -236,7 +236,8 @@ for (const id of ['bazooka', 'grenade', 'cluster', 'mole', 'banana', 'holy', 'mo
   const start = await shoot('dynamite', 40, true, nextSpot());
   if (start.error) check('динамит: стенд собрался', false, start.error);
   else {
-    const r = await settle(7000);
+    // Фитиль 4 с игрового времени; в безголовом браузере игра идёт медленнее часов
+    const r = await settle(25000);
     check('динамит: рвёт землю и задевает соседа', r.crater > 100 && r.damage > 0,
       `${r.damage} hp, воронка ${r.crater} px`);
   }
