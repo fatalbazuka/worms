@@ -236,7 +236,8 @@ for (const id of ['bazooka', 'grenade', 'cluster', 'mole', 'banana', 'holy', 'mo
   const start = await shoot('dynamite', 40, true, nextSpot());
   if (start.error) check('динамит: стенд собрался', false, start.error);
   else {
-    const r = await settle(7000);
+    // Фитиль 4 с игрового времени; в безголовом браузере игра идёт медленнее часов
+    const r = await settle(25000);
     check('динамит: рвёт землю и задевает соседа', r.crater > 100 && r.damage > 0,
       `${r.damage} hp, воронка ${r.crater} px`);
   }
@@ -506,6 +507,12 @@ for (const id of ['bazooka', 'grenade', 'cluster', 'mole', 'banana', 'holy', 'mo
     for (let i = 0; i < 30; i++) mine._crawl(1 / 60);
     const crawled = Math.round(mine.x - mx0);
     mine.destroy?.(); s.mines = s.mines.filter((x) => x !== mine);
+    // Динамит под ногами: секунду спустя лежит и ждёт фитиля, стрелок цел
+    const dyn = WEAPONS_BY_ID.dynamite.fire(s, w.x, w.centerY, 0, 0, w)[0];
+    const hp0 = w.health;
+    for (let i = 0; i < 60 && dyn.alive; i++) dyn.update(1 / 60);
+    const dynamite = { alive: dyn.alive, resting: dyn.resting, selfHit: hp0 - w.health };
+    dyn.destroy?.();
     // Ящики: редкость по шансам, внутри оружие этой редкости
     const tally = { common: 0, rare: 0, epic: 0, legendary: 0 };
     let match = true;
@@ -514,9 +521,11 @@ for (const id of ['bazooka', 'grenade', 'cluster', 'mole', 'banana', 'holy', 'mo
       tally[c.rarity]++;
       if (WEAPONS[c.index].rarity !== c.rarity) match = false;
     }
-    return { split, kids: kids.length, maxB, bounced: !bp.alive, homing, hits, crawled, tally, match,
+    return { dynamite, split, kids: kids.length, maxB, bounced: !bp.alive, homing, hits, crawled, tally, match,
       odds: Object.keys(WEAPON_RARITY).join(',') };
   });
+  check('динамит: лёг под ноги и ждёт фитиля, а не рвётся сразу в стрелке',
+    m.dynamite.alive && m.dynamite.resting && m.dynamite.selfHit === 0, JSON.stringify(m.dynamite));
   check('сплит-ракета: тап делит её на три осколка', m.split && m.kids === 3, JSON.stringify(m));
   check('попрыгунчик: отскакивает и рвётся сам', m.bounced && m.maxB >= 1, `отскоков ${m.maxB}`);
   check('самонаводка: доворачивает к врагу', m.homing.toward, JSON.stringify(m.homing));

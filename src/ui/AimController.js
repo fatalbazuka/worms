@@ -348,7 +348,7 @@ export class AimController {
     }
 
     // Свайп имеет приоритет; иначе показываем прицел кнопочной схемы
-    if (this.mode === 'aim') { this.hintLabel?.setVisible(false); this._drawSwipe(); }
+    if (this.mode === 'aim') { this.padHint = null; this.hintLabel?.setVisible(false); this._drawSwipe(); }
     else if (scene.slingAim && !this.desktop && !scene.charging) {
       // У рогатки прицела «в покое» нет: направления ещё никто не задал
       if (this.crosshair) this.crosshair.setVisible(false);
@@ -458,7 +458,10 @@ export class AimController {
     const p = weapon.projectile;
     const terrain = this.scene.terrain;
     const d = Math.hypot(vx, vy) || 1;
-    let x = o.x + (vx / d) * CFG.MUZZLE_OFFSET, y = o.y + (vy / d) * CFG.MUZZLE_OFFSET;
+    // Точка вылета — как у настоящего выстрела: у потолка ствол упирается в
+    // камень, и без луча дуга начиналась внутри него и не рисовалась
+    const r0 = terrain.raycast(o.x, o.y, o.x + (vx / d) * CFG.MUZZLE_OFFSET, o.y + (vy / d) * CFG.MUZZLE_OFFSET);
+    let x = r0.hit ? r0.freeX : r0.x, y = r0.hit ? r0.freeY : r0.y;
     const dt = 1 / 60;
     const steps = 36;
     for (let i = 1; i <= steps; i++) {
@@ -592,7 +595,10 @@ export class AimController {
       const o = this.origin();
       const r = CFG.SLING_MIN / this.scene.rig.zoom;
       const inside = !shot;
-      this.gfx.lineStyle(3, inside ? 0xff8a8a : 0xffffff, inside ? 0.85 : 0.22).strokeCircle(o.x, o.y, r);
+      // Красным — только когда это правда отмена (натянул и вернул). С
+      // первого касания красное кольцо под пальцем пугало и прятало прицел
+      const cancel = inside && this.wasOut;
+      this.gfx.lineStyle(3, cancel ? 0xff8a8a : 0xffffff, cancel ? 0.85 : 0.22).strokeCircle(o.x, o.y, r);
       if (inside && this.wasOut) {
         this.gfx.lineStyle(4, 0xff8a8a, 0.9);
         this.gfx.lineBetween(o.x - 9, o.y - 9, o.x + 9, o.y + 9);
@@ -608,7 +614,16 @@ export class AimController {
     const d = { x: shot.vx / len, y: shot.vy / len };
     this._ensureCrosshair();
     this.crosshair.setVisible(true);
-    this.crosshair.setPosition(o.x + d.x * CFG.AIM_RAY_LEN, o.y + d.y * CFG.AIM_RAY_LEN);
+    // Рогатка: крестик за кольцом и за пальцем, в экранных px — на отдалении
+    // он не съёживается под палец; к нему — пунктир направления
+    const zoom = this.scene.rig.zoom;
+    const ray = this.scene.slingAim
+      ? Math.max(CFG.AIM_RAY_LEN, (CFG.SLING_MIN + 50) / zoom) : CFG.AIM_RAY_LEN;
+    this.crosshair.setPosition(o.x + d.x * ray, o.y + d.y * ray);
+    if (this.scene.slingAim) {
+      this.gfx.fillStyle(0xffffff, 0.6);
+      for (let s = 22; s < ray - 10; s += 12) this.gfx.fillCircle(o.x + d.x * s, o.y + d.y * s, 2.2 / zoom);
+    }
     this._drawPower(o, d, shot.power / CFG.AIM_MAX_POWER);
     if (this.scene.slingAim) {
       // Резинка «щёлкает» на каждом шаге шкалы — сила слышна и чувствуется

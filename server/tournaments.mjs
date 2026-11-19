@@ -31,7 +31,7 @@ export const CHAMPION_BONUS = 25;
 const ROOM_ABC = 'ABCDEFGHJKLMNPQRSTUVWXY23456789';   // без Z: Z — бои без рейтинга
 
 export function createTournaments({ db, now = () => Date.now(), notify = async () => {}, refund = async () => false,
-  notifyAdmins = async () => {}, matchWindow = MATCH_WINDOW }) {
+  notifyAdmins = async () => {}, matchWindow = MATCH_WINDOW, onFinish = () => {} }) {
   const q = {
     t: db.prepare('select * from tournament where id = ?'),
     tAdd: db.prepare(`insert into tournament (name, size, fee, starts_at, created_at)
@@ -225,6 +225,7 @@ export function createTournaments({ db, now = () => Date.now(), notify = async (
       titles.unshift({ title: `Чемпион «${t.name}»`, at: now() });
       q.champion.run(CHAMPION_BONUS, JSON.stringify(titles.slice(0, 20)), winnerId);
     }
+    try { onFinish(t, winnerId ?? null); } catch { /* приз — не повод ронять турнир */ }
     const text = winnerId
       ? `🏆 Турнир «${t.name}» окончен. Победитель — ${name(winnerId)}!`
       : `Турнир «${t.name}» окончен без победителя: финал не сыгран.`;

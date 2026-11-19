@@ -182,13 +182,14 @@ export class Worm {
     return px >= this.left && px <= this.right && py >= this.top && py <= this.y;
   }
 
-  /** Свободен ли прямоугольник бойца в позиции (cx, cy). */
+  /**
+   * Свободен ли прямоугольник бойца в позиции (cx, cy) — в полёте.
+   * Ширина та же, что у ходьбы (bodyClear): была на пиксель шире, и боец,
+   * дошедший вплотную до камня, уже «упирался» в него в позиции покоя —
+   * прыжок у препятствия гас на первом же кадре.
+   */
   rectClear(cx, cy) {
-    const hw = CFG.WORM_W >> 1;
-    return !this.terrain.solidInRect(
-      Math.round(cx) - hw + 1, Math.round(cy) - CFG.WORM_H + 1,
-      Math.round(cx) + hw - 1, Math.round(cy),
-    );
+    return this.bodyClear(cx, cy);
   }
 
   /** Есть ли твердь прямо под ногами. */
@@ -319,6 +320,15 @@ export class Worm {
     if (this.supported(this.x, this.y)) { this.grounded = true; this.hang = null; return; }
     this.hang = this._hangSide();
     this.grounded = false;
+    // Повис — прицел по умолчанию не должен смотреть в камень: со стены —
+    // лицом от неё, с потолка — не выше горизонта. Иначе первый же выстрел
+    // рвался в лицо и сбрасывал бойца
+    const s = this.scene;
+    if (s.turn?.activeWorm === this && s.canPlayerAct?.()) {
+      if (this.hang === 'left') this.facing = 1;
+      else if (this.hang === 'right') this.facing = -1;
+      else if (this.hang === 'ceil') s.aimAngle = Math.min(s.aimAngle, 0);
+    }
   }
 
   /** Где окажется боец после рывка к точке — не двигая его самого. */
@@ -474,6 +484,7 @@ export class Worm {
     this.fallStartY = this.y;
     this.vy = CFG.JUMP_VY;
     this.vx = dir * CFG.JUMP_VX;
+    this.jumping = true;
   }
 
   /** Бросок батутом: скорость задаётся целиком, падение считается от старта. */
@@ -524,6 +535,7 @@ export class Worm {
     this.hang = null;
     this.zip = null;
     this.grounded = false;
+    this.jumping = false;
     this.vx += ix;
     this.vy += iy;
   }
@@ -583,7 +595,9 @@ export class Worm {
               this.x = nx; this.y += dyy; slid = true; break;
             }
           }
-          if (!slid) this.vx *= -0.25;
+          // Свой прыжок на подъёме прижимается к стенке и перелезает через
+          // невысокое препятствие, а не отлетает назад; от взрыва — отскок
+          if (!slid && !(this.jumping && this.vy < 0)) this.vx *= -0.25;
         }
 
         // Вертикаль
@@ -603,6 +617,7 @@ export class Worm {
 
   _land() {
     this.grounded = true;
+    this.jumping = false;
     const drop = this.y - this.fallStartY;
     this.vy = 0;
     this.vx *= this.scene.rules?.landKeep ?? 0.3;
@@ -750,7 +765,10 @@ export class Worm {
     }
 
     // Спрайты нарисованы мордой влево, поэтому отражаем при движении вправо
-    if (this.view.setFlipX) this.view.setFlipX(this.sprited ? this.facing > 0 : this.facing < 0);
+    // Поворот на π у потолка уже зеркалит картинку — второй раз не надо,
+    // иначе лицо смотрит в одну сторону, а ствол в другую
+    const flip = this.sprited ? this.facing > 0 : this.facing < 0;
+    if (this.view.setFlipX) this.view.setFlipX(this.hang === 'ceil' ? !flip : flip);
 
     if (this.smiley) this._syncSmiley(rx, ry);
     else if (this.sprited) {
@@ -782,12 +800,16 @@ export class Worm {
     if (drop > 0.5) this.shownHealth = Math.max(this.health, this.shownHealth - Math.max(40, drop * 2.5) * frameDt);
     else this.shownHealth = this.health;
     const shake = drop > 0.5 ? Math.sin(this.scene.time.now / 28) * 2.5 : 0;
-    this.label.setPosition(rx + shake, ry - CFG.WORM_H - 20 - lift);
+    // Висит на потолке — здоровье под ним, а не внутри камня
+    const ceil = this.hang === 'ceil';
+    const ly = ceil ? ry + 30 : ry - CFG.WORM_H - 20 - lift;
+    const by = ceil ? ry + 17 : ry - CFG.WORM_H - 7 - lift;
+    this.label.setPosition(rx + shake, ly);
     this.label.setText(`${Math.round(this.shownHealth)}`);
-    this.barBg.setPosition(rx, ry - CFG.WORM_H - 7 - lift);
-    this.bar.setPosition(rx - HP_BAR_W / 2, ry - CFG.WORM_H - 7 - lift);
+    this.barBg.setPosition(rx, by);
+    this.bar.setPosition(rx - HP_BAR_W / 2, by);
     this.bar.width = HP_BAR_W * (this.health / CFG.MAX_HEALTH);
-    this.barGhost.setPosition(rx - HP_BAR_W / 2, ry - CFG.WORM_H - 7 - lift);
+    this.barGhost.setPosition(rx - HP_BAR_W / 2, by);
     this.barGhost.width = HP_BAR_W * (this.shownHealth / CFG.MAX_HEALTH);
     this._trail(rx, ry);
 

@@ -196,6 +196,26 @@ export async function submitDailyTower(run) {
   try { return await call('POST', '/daily-tower', run); } catch { return null; }
 }
 
+/**
+ * Выложить картинку или клип на сервер — Telegram берёт сторис и «скачать»
+ * только по ссылке. @returns {Promise<{url: string, ext: string}|null>}
+ */
+export async function uploadMedia(blob) {
+  if (!token || !blob) return null;
+  try {
+    const res = await fetch(apiUrl('/media'), {
+      method: 'POST',
+      headers: { 'content-type': blob.type.split(';')[0], authorization: `Bearer ${token}` },
+      body: blob,
+    });
+    const data = await res.json();
+    if (!res.ok || !data?.path) return null;
+    return { url: new URL(data.path, apiUrl('/')).href, ext: data.ext };
+  } catch {
+    return null;
+  }
+}
+
 /** Карточка «вызов на бой» для комнаты башни. @returns {Promise<string|null>} id сообщения */
 export async function prepareChallenge(room, link) {
   if (!token) return null;

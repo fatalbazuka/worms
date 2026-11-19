@@ -47,6 +47,7 @@ import {
 import { COSMETICS, KINDS, KIND_NAMES } from '../core/cosmetics.js';
 import { cosState, buyCosmetic, equipCosmetic } from '../platform/cosmetics.js';
 import { fitScale } from '../core/assets.js';
+import { LANG, setLang } from '../i18n/index.js';
 
 /**
  * Меню.
@@ -465,6 +466,8 @@ export default class MenuScene extends Phaser.Scene {
       pill('aim-mode', sling ? 'Прицел: рогатка' : 'Прицел: кнопки', 230,
         () => { setAimScheme(sling ? 'buttons' : 'sling'); this.showRoot(); });
     }
+    // Язык: по умолчанию — из Telegram, здесь можно сменить
+    pill('lang', LANG === 'en' ? 'RU' : 'EN', 74, () => setLang(LANG === 'en' ? 'ru' : 'en'));
     if (!inTelegram()) {
       pill('ui-mode', desktop ? 'Управление: ПК' : 'Управление: сенсор', 260,
         () => { setUiMode(desktop ? 'touch' : 'desktop'); this.showRoot(); });

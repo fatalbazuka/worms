@@ -369,10 +369,15 @@ export class Hud {
       st.dx = px - st.ax; st.dy = py - st.ay;
       const mi = s.moveInput;
       const ax = Math.abs(st.dx);
-      mi.left = st.dx < -CFG.STICK_DEAD;
-      mi.right = st.dx > CFG.STICK_DEAD;
-      mi.walkScale = Math.max(0.35, Math.min(1, (ax - CFG.STICK_DEAD) / (R * 0.7)));
-      if (!st.jumped && st.dy < -R * CFG.STICK_JUMP) { mi.jumpQueued = true; st.jumped = true; }
+      // Вбок — только если палец ушёл в сторону заметнее, чем вверх: иначе
+      // рывок вверх с лёгким сдвигом разворачивал бойца и прыжок уходил назад
+      const side = ax > CFG.STICK_DEAD && ax > -st.dy * 0.5;
+      mi.left = side && st.dx < 0;
+      mi.right = side && st.dx > 0;
+      // Скорость набирается быстро: на полпути к краю — уже полный шаг
+      mi.walkScale = Math.max(0.6, Math.min(1, (ax - CFG.STICK_DEAD) / (R * 0.4)));
+      // Прыжок — когда палец ушёл именно вверх, а не дугой при ходьбе вбок
+      if (!st.jumped && st.dy < -R * CFG.STICK_JUMP && -st.dy > ax * 0.8) { mi.jumpQueued = true; st.jumped = true; }
       if (st.dy > -R * 0.3) st.jumped = false;
     };
     this._stickUp = (p) => {
@@ -455,10 +460,17 @@ export class Hud {
     // Пока тянешь — над рычагом круг «✕»: дотянул туда и отпустил — отмена
     if (this.padPull) {
       const c = this.padCancel, on = this.padCancelOn;
-      g.fillStyle(0xd23b3b, on ? 0.95 : 0.45).fillCircle(c.x, c.y, on ? c.r + 6 : c.r);
-      g.lineStyle(4, 0xffffff, on ? 1 : 0.7).strokeCircle(c.x, c.y, on ? c.r + 6 : c.r);
+      // Пока палец не на «✕» — только тонкий контур: круг висит над полем и
+      // заливкой закрывал бойца вместе с прицелом. Под ним боец — ещё бледнее
+      const rig = scene.rig;
+      const wx = w ? rig.uiX(w.x) : -999;
+      const wy = w ? (w.centerY - rig.viewTop) * rig.zoom - CFG.FRAME.top : -999;
+      const covers = Math.hypot(wx - c.x, wy - c.y) < c.r + 50;
+      const a = on ? 1 : covers ? 0.3 : 0.6;
+      if (on) g.fillStyle(0xd23b3b, 0.95).fillCircle(c.x, c.y, c.r + 6);
+      g.lineStyle(on ? 4 : 3, on ? 0xffffff : 0xff8a8a, a).strokeCircle(c.x, c.y, on ? c.r + 6 : c.r);
       const d = c.r * 0.38;
-      g.lineStyle(7, 0xffffff, on ? 1 : 0.85);
+      g.lineStyle(on ? 7 : 4, on ? 0xffffff : 0xff8a8a, a);
       g.lineBetween(c.x - d, c.y - d, c.x + d, c.y + d);
       g.lineBetween(c.x + d, c.y - d, c.x - d, c.y + d);
     }

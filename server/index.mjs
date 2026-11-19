@@ -20,6 +20,8 @@
  *   BOT_WEBHOOK_SECRET  — свой секрет вебхука (по умолчанию выводится из токена)
  *   TRUST_PROXY         — 1, если впереди nginx/Caddy: IP клиента из X-Real-IP
  *   STATIC_DIR          — папка с игрой, если раздавать её этим же процессом
+ *   TELEGRAM_APP        — короткое имя мини-приложения (t.me/бот/ИМЯ) для ссылок инлайн-вызова
+ *   MEDIA_DIR           — куда класть картинки сторис и клипы (рядом с базой, папка media)
  *
  * API (JSON; вход — заголовок Authorization: Bearer <токен>):
  *   POST /api/telegram {initData}         → {token, player}  вход по подписи Telegram
@@ -34,6 +36,7 @@
  *   POST /api/tournaments/:id/start       → {ok}             только админ
  *   POST /api/stars/donate {amount}       → {invoice}
  *   POST /api/event {name, props}         → {ok}             статистика: open | battle
+ *   POST /api/media (JPEG/PNG/WebM/MP4)   → {id, ext, path}  картинка для сторис, клип; GET /api/media/<id>.<ext>
  *   GET  /api/shop                        → {items, skinStars, owned}  товары и что положено
  *   POST /api/shop/buy {item}             → {invoice}        box1 | box5 | skin-<id>
  *   POST /api/challenge {room, link}      → {id}             карточка «вызов на бой» для shareMessage
@@ -45,7 +48,7 @@
  *   GET  /api/config, /api/health
  */
 import { createServer } from 'node:http';
-import { resolve } from 'node:path';
+import { resolve, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { openDb, tx } from './db.mjs';
 import { newToken, tokenHash, verifyPassword } from './lib/accounts.js';
@@ -62,15 +65,19 @@ import { createShop, SHOP, SKIN_STARS, SKIN_IDS, shopItem } from './shop.mjs';
 import { createDailyTower } from './dailytower.mjs';
 import { createSaves } from './saves.mjs';
 import { createAdmin } from './admin.mjs';
+import { createMedia } from './media.mjs';
+import { createWeekly } from './weekly.mjs';
 
 export function createApp({
   db, botToken = '', trustProxy = false, staticDir = null, now = () => Date.now(),
   adminIds = [], publicUrl = '', telegramApiBase = 'https://api.telegram.org', secret = '', tz = 'Europe/Moscow',
-  log = console,
+  log = console, mediaDir = null, appName = '',
 }) {
   const admins = new Set(adminIds.map(Number).filter(Boolean));
   // login — подбор пароля: не больше 10 попыток в минуту с одного адреса
-  const limits = { write: limiter(120, 60_000), login: limiter(10, 60_000) };
+  const limits = { write: limiter(120, 60_000), login: limiter(10, 60_000), media: limiter(30, 3600_000) };
+  // Картинки для сторис и клипы: лежат несколько дней (server/media.mjs)
+  const media = createMedia({ dir: mediaDir, now });
   const api = createTelegramApi({ token: botToken, base: telegramApiBase, log });
   const players = createPlayers({ db, now, adminIds: admins });
   let bot = null;
@@ -79,13 +86,16 @@ export function createApp({
     notify: (...a) => bot?.notify(...a),
     notifyAdmins: (...a) => bot?.notifyAdmins(...a),
     refund: (chargeId) => bot?.refund(chargeId) ?? false,
+    onFinish: (...a) => weekly?.onFinish(...a),
   });
+  let weekly = null;
   const analytics = createAnalytics({ db, now, tz });
   const shop = createShop({ db, now });
   const saves = createSaves({ db, now });
   const daily = createDailyTower({ db, players, dayOf: () => analytics.dayOf(), now });
   const admin = createAdmin({ db, players, analytics, tournaments, shop, saves, api, now, log });
-  bot = createBot({ db, api, players, tournaments, analytics, admin, adminIds: admins, publicUrl, tz, now, log });
+  bot = createBot({ db, api, players, tournaments, analytics, admin, adminIds: admins, publicUrl, tz, now, log, appName });
+  weekly = createWeekly({ db, tournaments, shop, notify: (...a) => bot.notify(...a), tz, now, log });
   const hookSecret = botToken ? webhookSecret(botToken, secret) : '';
 
   const q = {
@@ -337,6 +347,11 @@ export function createApp({
         if (!link) throw new HttpError(503, 'оплата звёздами сейчас недоступна');
         return { invoice: link };
       }
+      case 'POST /api/media': {
+        const me = auth(req);
+        if (!limits.media.hit(me.id)) throw new HttpError(429, 'слишком много файлов, попробуй через час');
+        return media.upload(req);
+      }
       case 'POST /api/event': {
         const me = auth(req);
         const body = await readJson(req);
@@ -421,6 +436,11 @@ export function createApp({
     let url;
     try { url = new URL(req.url, 'http://x'); } catch { res.writeHead(400).end(); return; }
     if (url.pathname === '/api/admin/backup' && req.method === 'GET') { adminBackup(req, res); return; }
+    if (url.pathname.startsWith('/api/media/') && (req.method === 'GET' || req.method === 'HEAD')) {
+      const download = url.searchParams.get('dl') === '1';
+      if (!media.serve(url.pathname.slice('/api/media/'.length), req, res, { download })) res.writeHead(404).end('not found');
+      return;
+    }
     if (url.pathname.startsWith('/api/')) {
       try {
         send(res, 200, await api_(req, url));
@@ -438,6 +458,7 @@ export function createApp({
   }
 
   handle.tournaments = tournaments;
+  handle.weekly = weekly;
   handle.analytics = analytics;
   handle.bot = bot;
   handle.players = players;
@@ -463,6 +484,8 @@ if (isMain) {
     telegramApiBase: env.TELEGRAM_API_BASE || 'https://api.telegram.org',
     secret: env.BOT_WEBHOOK_SECRET || '',
     tz: env.BOT_TZ || 'Europe/Moscow',
+    appName: env.TELEGRAM_APP || '',
+    mediaDir: env.MEDIA_DIR || join(dirname(resolve(env.DB_PATH || './data/worms.db')), 'media'),
   });
   const server = createServer(handle);
   server.listen(Number(env.PORT ?? 3000), env.HOST || '0.0.0.0', () => {
@@ -479,6 +502,10 @@ if (isMain) {
   // Турниры живут по часам: автостарт и матчи, вышедшие за окно
   const ticker = setInterval(() => {
     try { handle.tournaments.tick(); } catch (e) { console.error('[tournaments] tick', e); }
+    // Турнир недели заводим, только когда бот настроен: иначе анонс уйдёт в никуда
+    if (handle.bot.username) {
+      try { handle.weekly.tick(); } catch (e) { console.error('[weekly] tick', e); }
+    }
     handle.bot.remind().catch((e) => console.error('[bot] напоминания', e));
   }, 30_000);
   const stop = () => {

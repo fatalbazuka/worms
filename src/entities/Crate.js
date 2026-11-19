@@ -51,7 +51,7 @@ export class Crate {
       const fw = this.w + 12, fh = this.h + 10;
       if (rarity !== 'rare') {
         this.glow = s.rig.world(s.add.circle(0, 0, this.w * 0.95, rc, 0.45).setDepth(DEPTH.WORM - 2));
-        s.tweens.add({ targets: this.glow, scale: 1.3, alpha: 0.12, yoyo: true, repeat: -1, duration: 650 });
+        this.glowTween = s.tweens.add({ targets: this.glow, scale: 1.3, alpha: 0.12, yoyo: true, repeat: -1, duration: 650 });
       }
       this.frame = s.rig.world(s.add.graphics().setDepth(DEPTH.WORM));
       this.frame.lineStyle(5, 0x1a1410, 0.9).strokeRoundedRect(-fw / 2, -fh, fw, fh, 7);
@@ -111,14 +111,18 @@ export class Crate {
 
   /** Пересекается ли с прямоугольником бойца. */
   overlapsWorm(w) {
-    return w.right >= this.x - this.w / 2 && w.left <= this.x + this.w / 2
-      && w.y >= this.y - this.h && w.top <= this.y;
+    // Касание тоже считается: ящик, севший на камень шире себя, иначе не
+    // взять сбоку — между хитбоксами всегда оставались 1–3 px
+    const pad = 6;
+    return w.right >= this.x - this.w / 2 - pad && w.left <= this.x + this.w / 2 + pad
+      && w.y >= this.y - this.h - pad && w.top <= this.y + pad;
   }
 
   destroy() {
     if (!this.alive) return;
     this.alive = false;
     this.view.destroy();
+    this.glowTween?.remove();
     this.glow?.destroy();
     this.frame?.destroy();
     if (this.chute) this.chute.destroy();

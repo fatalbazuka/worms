@@ -42,8 +42,11 @@ const BOT = '123456:test-token';
 const ADMIN = 777;
 let clock = Date.now();
 const db = openDb(':memory:');
+const { mkdtempSync } = await import('node:fs');
+const { tmpdir } = await import('node:os');
+const mediaDir = mkdtempSync(`${tmpdir()}/smiles-media-`);
 const app = createApp({
-  db, botToken: BOT, adminIds: [ADMIN], publicUrl: 'https://example.test/worms',
+  db, botToken: BOT, mediaDir, adminIds: [ADMIN], publicUrl: 'https://example.test/worms',
   telegramApiBase: `http://127.0.0.1:${fakeTg.address().port}`, now: () => clock,
   log: { warn() {}, log() {}, error: console.error },
 });
@@ -194,9 +197,15 @@ check('отмена турнира возвращает взнос', ref?.telegr
 
 // ------------------------------------------------------------------- бот
 await hook({ message: { from: { id: 3, first_name: 'Вика' }, chat: { id: 3, type: 'private' }, text: '/start' } });
-const hello = calls('sendMessage').at(-1)?.params;
-check('/start: приветствие и кнопка «Играть» в мини-приложение',
-  hello.reply_markup?.inline_keyboard?.[0]?.[0]?.web_app?.url === 'https://example.test/worms/');
+const hello = calls('sendAnimation').at(-1)?.params;
+check('/start: ролик с боем, приветствие и кнопка «Играть» в мини-приложение',
+  hello?.animation === 'https://example.test/worms/assets/promo/welcome.mp4' && hello.caption.includes('Вика')
+  && hello.reply_markup?.inline_keyboard?.[0]?.[0]?.web_app?.url === 'https://example.test/worms/');
+await hook({ message: { from: { id: 4, first_name: 'Ann', language_code: 'en' }, chat: { id: 4, type: 'private' }, text: '/start' } });
+check('/start по-английски: подпись, кнопка Play и своё меню',
+  calls('sendAnimation').at(-1)?.params.caption.startsWith('Hi, Ann!')
+  && calls('sendAnimation').at(-1)?.params.reply_markup.inline_keyboard[0][0].text === '🎮 Play'
+  && calls('setChatMenuButton').some((c) => c.params.chat_id === 4 && c.params.menu_button.text === 'Play'));
 await hook({ message: { from: { id: 1 }, chat: { id: 1, type: 'private' }, text: '/stats' } });
 check('/stats: статистика в чате', calls('sendMessage').at(-1)?.params.text
   .includes(`Рейтинг: ${app.players.byId('tg1').rating}`), calls('sendMessage').at(-1)?.params.text.split('\n')[1]);
@@ -499,6 +508,72 @@ check('«твой ход» бот не пишет', !calls('sendMessage').some((
   const noAuth = await fetch(`${base}/api/admin/backup`);
   check('админка: копия базы скачивается файлом SQLite, без входа — нет',
     res.status === 200 && buf.subarray(0, 15).toString() === 'SQLite format 3' && noAuth.status === 401, `${res.status} ${buf.length} байт`);
+}
+
+// @бот в любом чате: карточка дуэли с общей комнатой башни и «позвать» по рефералке
+{
+  await hook({ update_id: 9001, inline_query: { id: 'iq1', from: { id: 555, first_name: 'Вася', language_code: 'ru' }, query: '' } });
+  const a = calls('answerInlineQuery').at(-1)?.params;
+  const duel = a?.results?.[0]?.reply_markup?.inline_keyboard?.[0]?.[0]?.url ?? '';
+  const ref = a?.results?.[1]?.reply_markup?.inline_keyboard?.[0]?.[0]?.url ?? '';
+  check('инлайн: карточка дуэли ведёт в комнату башни, вторая — по рефералке',
+    /startapp=ZW[A-Z2-9]{4}$/.test(duel) && ref.endsWith('startapp=ref_555') && a.results[0].input_message_content.message_text.includes('Вася'),
+    JSON.stringify(a)?.slice(0, 300));
+  check('при запуске: вебхук принимает инлайн-запросы',
+    calls('setWebhook').at(-1)?.params.allowed_updates?.includes('inline_query'));
+}
+
+// Турнир недели: заводится сам, один раз за неделю, старт в субботу в 19:00 МСК; чемпиону — коробки
+{
+  const realNow = clock;
+  // Среда 12:00 МСК
+  clock = Date.UTC(2026, 10, 18, 9, 0);
+  const t1 = app.weekly.tick();
+  const t2 = app.weekly.tick();
+  const st = t1 ? new Intl.DateTimeFormat('en-US', { timeZone: 'Europe/Moscow', weekday: 'short', hour: '2-digit', hourCycle: 'h23' }).format(new Date(t1.starts_at)) : '';
+  // Воскресенье: старт этой недели прошёл — ничего не заводим
+  clock = Date.UTC(2026, 10, 22, 9, 0);
+  const t3 = app.weekly.tick();
+  const boxCount = () => db.prepare("select coalesce(sum(boxes), 0) as n from bonus where player_id = 'tg1'").get().n;
+  const before = boxCount();
+  app.weekly.onFinish({ name: t1?.name }, 'tg1');
+  const boxes = boxCount() - before;
+  clock = realNow;
+  check('турнир недели: заводится раз в неделю на субботу 19:00, чемпиону 3 коробки',
+    t1?.name.startsWith('Турнир недели') && t1.size === 16 && t1.fee === 0 && st === 'Sat, 19' && !t2 && !t3 && boxes === 3,
+    `${t1?.name} ${st} ${Boolean(t2)} ${Boolean(t3)} коробок ${boxes}`);
+}
+
+// Сторис и клипы: картинка ложится на сервер и отдаётся по ссылке; чужое — нет
+{
+  const T = (await call('POST', '/api/telegram', { initData: await signed({ id: 4242, first_name: 'Сторис' }) })).data?.token;
+  const jpg = Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xe0]), Buffer.alloc(400, 7)]);
+  const up = await fetch(`${base}/api/media`, { method: 'POST', headers: { authorization: `Bearer ${T}`, 'content-type': 'image/jpeg' }, body: jpg });
+  const r = await up.json();
+  const got = r.path ? await fetch(base + r.path) : null;
+  const body = got ? Buffer.from(await got.arrayBuffer()) : Buffer.alloc(0);
+  const html = await fetch(`${base}/api/media`, { method: 'POST', headers: { authorization: `Bearer ${T}`, 'content-type': 'text/html' }, body: '<b>x</b>'.repeat(20) });
+  const anon = await fetch(`${base}/api/media`, { method: 'POST', headers: { 'content-type': 'image/jpeg' }, body: jpg });
+  check('медиа: картинка для сторис загружается и отдаётся, HTML и без входа — нет',
+    up.status === 200 && got?.status === 200 && got.headers.get('content-type') === 'image/jpeg' && body.equals(jpg)
+      && html.status === 415 && anon.status === 401, `${up.status} ${JSON.stringify(r)} ${got?.status} ${html.status} ${anon.status}`);
+}
+
+// Клип из Android приходит WebM — сервер с ffmpeg отдаёт MP4 (Telegram берёт в сторис только его)
+{
+  const { spawnSync } = await import('node:child_process');
+  const { readFileSync } = await import('node:fs');
+  const src = `${mediaDir}/in.webm`;
+  const made = spawnSync('ffmpeg', ['-v', 'error', '-y', '-f', 'lavfi', '-i', 'testsrc=size=160x120:rate=15', '-t', '0.6', '-c:v', 'libvpx', src]);
+  if (made.status === 0) {
+    const T = (await call('POST', '/api/telegram', { initData: await signed({ id: 4243, first_name: 'Клип' }) })).data?.token;
+    const up = await fetch(`${base}/api/media`, { method: 'POST', headers: { authorization: `Bearer ${T}`, 'content-type': 'video/webm' }, body: readFileSync(src) });
+    const r = await up.json();
+    const got = await fetch(`${base}${r.path}?dl=1`);
+    check('клип: WebM перекодирован в MP4 и отдаётся на скачивание',
+      r.ext === 'mp4' && got.status === 200 && got.headers.get('content-type') === 'video/mp4'
+        && /attachment/.test(got.headers.get('content-disposition')), JSON.stringify(r));
+  }
 }
 
 server.close();

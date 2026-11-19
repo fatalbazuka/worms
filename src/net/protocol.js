@@ -32,6 +32,7 @@ export function captureCommand(scene, vx, vy) {
     x: Math.round(w.x),
     y: Math.round(w.y),
     facing: w.facing,
+    hang: w.hang ?? null,
     weapon: scene.turn.weaponIndex,
     vx: Math.round(vx),
     vy: Math.round(vy),
@@ -52,6 +53,11 @@ export function applyCommand(scene, cmd) {
   w.x = cmd.x;
   w.y = cmd.y;
   w.facing = cmd.facing;
+  // Стрелял вися или сразу после рывка — у зрителя так же: иначе его копия
+  // ещё летела по тросу, пока показывался выстрел
+  w.zip = null; w.vx = 0; w.vy = 0;
+  if ('hang' in cmd) w.hang = cmd.hang;
+  w.grounded = !w.hang && w.supported(w.x, w.y);
   scene.turn.state = 'aim';
   scene.turn.currentTeam = w.team;
   scene.turn.activeWorm = w;

@@ -15,9 +15,12 @@ import { syncChallengesCloud } from './platform/challenges.js';
 import { dailyState } from './platform/daily.js';
 import { dayKey, prevDay } from './core/daily.js';
 import { loadCloudProfile, player, dropAccount } from './platform/player.js';
+import { installI18n } from './i18n/index.js';
 
 initTelegram();
 applyUiClass();
+// Английский — до того, как появится первый текст (экран входа тоже)
+installI18n(globalThis.Phaser);
 
 // Игра живёт в Telegram. На сервере env.js включает WORMS_TELEGRAM_ONLY, и
 // в обычном браузере вместо игры — ссылка на бота и вход по логину и

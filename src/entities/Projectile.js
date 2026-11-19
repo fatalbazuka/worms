@@ -217,6 +217,15 @@ export class Projectile {
       return;
     }
 
+    // Заряд с фитилём и без отскока (динамит) ложится и ждёт фитиля, а не
+    // рвётся от касания земли
+    if (this.fuseLeft > 0) {
+      this.x = ray.freeX; this.y = ray.freeY;
+      this.vx = 0; this.vy = 0;
+      this.resting = true;
+      return;
+    }
+
     this.x = ray.x; this.y = ray.y;
     this.detonate(ray.x, ray.y);
   }
