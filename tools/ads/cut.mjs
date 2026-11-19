@@ -101,8 +101,19 @@ async function png(name, spec) {
       let s = size;
       g.font = `800 ${s}px ${fam}`;
       while (g.measureText(t).width > W - 110 && s > 30) { s -= 2; g.font = `800 ${s}px ${fam}`; }
-      g.lineWidth = s / 4.5; g.strokeStyle = stroke; g.strokeText(t, W / 2, y);
-      g.fillStyle = color; g.fillText(t, W / 2, y);
+      ((sz, t, x, y, color) => {
+        g.save();
+        g.shadowColor = 'rgba(10,6,30,0.55)'; g.shadowBlur = sz / 5; g.shadowOffsetY = sz / 14;
+        if (color === '#ffd166') {
+          g.lineJoin = 'round'; g.lineWidth = Math.max(3, sz / 10); g.strokeStyle = '#5a2a08'; g.strokeText(t, x, y);
+          g.shadowColor = 'transparent';
+          const gr = g.createLinearGradient(0, y - sz * 0.5, 0, y + sz * 0.45);
+          gr.addColorStop(0, '#fff6c2'); gr.addColorStop(0.45, '#ffd04a'); gr.addColorStop(1, '#f39a1e');
+          g.fillStyle = gr;
+        } else g.fillStyle = color;
+        g.fillText(t, x, y);
+        g.restore();
+      })(s, t, W / 2, y, color);
     };
     if (sp.kind === 'caption') {
       // Плашка сверху — под верхней полосой интерфейса игры
@@ -136,8 +147,12 @@ async function png(name, spec) {
       text(sp.lines[1], 1270, 72, '#ffffff');
       text(sp.lines[2], 1370, 54, '#c9d1e3');
       const bw = 760, bh = 150, bx = (W - bw) / 2, by = 1500;
-      g.fillStyle = '#e8463c'; g.beginPath(); g.roundRect(bx, by, bw, bh, 44); g.fill();
-      g.lineWidth = 10; g.strokeStyle = '#141821'; g.stroke();
+      const bgr = g.createLinearGradient(0, by, 0, by + bh);
+      bgr.addColorStop(0, '#ff6a55'); bgr.addColorStop(1, '#d4322a');
+      g.save(); g.shadowColor = 'rgba(0,0,0,0.45)'; g.shadowBlur = 24; g.shadowOffsetY = 8;
+      g.fillStyle = bgr; g.beginPath(); g.roundRect(bx, by, bw, bh, 44); g.fill(); g.restore();
+      g.lineWidth = 4; g.strokeStyle = 'rgba(90,15,10,0.9)'; g.stroke();
+      g.fillStyle = 'rgba(255,255,255,0.18)'; g.beginPath(); g.roundRect(bx + 10, by + 6, bw - 20, bh * 0.38, 40); g.fill();
       text('@Fatalgame', by + bh / 2, 76, '#ffffff', '#7a1712');
     }
     return c.toDataURL('image/png');

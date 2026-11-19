@@ -164,8 +164,19 @@ async function frame(lang) {
         g.font = `800 ${size}px ${fam}`;
         let s = size;
         while (g.measureText(t).width > W - 100 && s > 30) { s -= 2; g.font = `800 ${s}px ${fam}`; }
-        g.lineJoin = 'round'; g.lineWidth = s / 5; g.strokeStyle = '#141821'; g.strokeText(t, W / 2, y);
-        g.fillStyle = color; g.fillText(t, W / 2, y);
+        ((sz, t, x, y, color) => {
+        g.save();
+        g.shadowColor = 'rgba(10,6,30,0.55)'; g.shadowBlur = sz / 5; g.shadowOffsetY = sz / 14;
+        if (color === '#ffd166') {
+          g.lineJoin = 'round'; g.lineWidth = Math.max(3, sz / 10); g.strokeStyle = '#5a2a08'; g.strokeText(t, x, y);
+          g.shadowColor = 'transparent';
+          const gr = g.createLinearGradient(0, y - sz * 0.5, 0, y + sz * 0.45);
+          gr.addColorStop(0, '#fff6c2'); gr.addColorStop(0.45, '#ffd04a'); gr.addColorStop(1, '#f39a1e');
+          g.fillStyle = gr;
+        } else g.fillStyle = color;
+        g.fillText(t, x, y);
+        g.restore();
+      })(s, t, W / 2, y, color);
       };
       text(l1, 150, 84, '#ffd166');
       text(l2, 250, 58, '#ffffff');

@@ -45,15 +45,28 @@ export function fighterFrame(scene, sheet, frame = 13) {
   }
 }
 
-function strokeText(g, text, x, y, size, color, stroke = '#141821', weight = 900) {
+/**
+ * Надпись на карточке. Золотой заголовок — градиент с тонкой тёплой
+ * обводкой; остальное — без обводки, только мягкая тень: толстый чёрный
+ * контур на большой картинке смотрится грубо.
+ */
+function strokeText(g, text, x, y, size, color, stroke = null, weight = 900) {
   text = tr(text);
   g.font = `${weight} ${size}px ${UI.fontFamily}`;
   g.lineJoin = 'round';
-  g.lineWidth = Math.max(6, size / 6);
-  g.strokeStyle = stroke;
-  g.strokeText(text, x, y);
-  g.fillStyle = color;
+  g.save();
+  g.shadowColor = 'rgba(10,6,30,0.55)'; g.shadowBlur = size / 5; g.shadowOffsetY = size / 14;
+  if (color === '#ffd166') {
+    g.lineWidth = Math.max(3, size / 10); g.strokeStyle = '#5a2a08'; g.strokeText(text, x, y);
+    g.shadowColor = 'transparent';
+    const gr = g.createLinearGradient(0, y - size * 0.5, 0, y + size * 0.45);
+    gr.addColorStop(0, '#fff6c2'); gr.addColorStop(0.45, '#ffd04a'); gr.addColorStop(1, '#f39a1e');
+    g.fillStyle = gr;
+  } else {
+    g.fillStyle = color;
+  }
   g.fillText(text, x, y);
+  g.restore();
 }
 
 /**
@@ -110,9 +123,12 @@ export function drawStory({ shot = null, fighter = null, title, lines = [], cta,
 
   // Призыв: плашка-кнопка
   const bw = 820, bh = 120, bx = (STORY_W - bw) / 2, by = STORY_H - 200;
-  g.fillStyle = '#e8463c';
-  g.beginPath(); g.roundRect(bx, by, bw, bh, 36); g.fill();
-  g.lineWidth = 8; g.strokeStyle = '#141821'; g.stroke();
+  const bgr = g.createLinearGradient(0, by, 0, by + bh);
+  bgr.addColorStop(0, '#ff6a55'); bgr.addColorStop(1, '#d4322a');
+  g.save(); g.shadowColor = 'rgba(0,0,0,0.45)'; g.shadowBlur = 24; g.shadowOffsetY = 8;
+  g.fillStyle = bgr; g.beginPath(); g.roundRect(bx, by, bw, bh, 36); g.fill(); g.restore();
+  g.lineWidth = 4; g.strokeStyle = 'rgba(90,15,10,0.9)'; g.stroke();
+  g.fillStyle = 'rgba(255,255,255,0.18)'; g.beginPath(); g.roundRect(bx + 10, by + 6, bw - 20, bh * 0.38, 30); g.fill();
   strokeText(g, cta, STORY_W / 2, by + bh / 2, 52, '#ffffff', '#7a1712', 900);
   if (handle) strokeText(g, handle, STORY_W / 2, STORY_H - 45, 40, '#c9d1e3', '#141821', 800);
   return c;

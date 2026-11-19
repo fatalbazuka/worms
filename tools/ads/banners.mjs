@@ -82,8 +82,19 @@ for (const [theme, path] of Object.entries(frames)) {
       };
       const text = (t, x, y, size, color, align = 'center', maxW = W - 100, stroke = '#141821') => {
         const sz = fit(t, size, maxW); g.textAlign = align;
-        g.lineWidth = sz / 4.5; g.strokeStyle = stroke; g.strokeText(t, x, y);
-        g.fillStyle = color; g.fillText(t, x, y);
+        ((sz, t, x, y, color) => {
+        g.save();
+        g.shadowColor = 'rgba(10,6,30,0.55)'; g.shadowBlur = sz / 5; g.shadowOffsetY = sz / 14;
+        if (color === '#ffd166') {
+          g.lineJoin = 'round'; g.lineWidth = Math.max(3, sz / 10); g.strokeStyle = '#5a2a08'; g.strokeText(t, x, y);
+          g.shadowColor = 'transparent';
+          const gr = g.createLinearGradient(0, y - sz * 0.5, 0, y + sz * 0.45);
+          gr.addColorStop(0, '#fff6c2'); gr.addColorStop(0.45, '#ffd04a'); gr.addColorStop(1, '#f39a1e');
+          g.fillStyle = gr;
+        } else g.fillStyle = color;
+        g.fillText(t, x, y);
+        g.restore();
+      })(sz, t, x, y, color);
         return sz;
       };
       // Несколько строк по ширине: слова переносятся, кегль общий
@@ -101,9 +112,13 @@ for (const [theme, path] of Object.entries(frames)) {
         return y + rows.length * size * lh;
       };
       const pill = (x, y, bw, bh, label) => {
-        g.fillStyle = '#e8463c'; g.beginPath(); g.roundRect(x, y, bw, bh, bh / 2.6); g.fill();
-        g.lineWidth = 8; g.strokeStyle = '#141821'; g.stroke();
-        text(label, x + bw / 2, y + bh / 2, bh * 0.4, '#ffffff', 'center', bw - 40, '#7a1712');
+        const bg = g.createLinearGradient(0, y, 0, y + bh);
+        bg.addColorStop(0, '#ff6a55'); bg.addColorStop(1, '#d4322a');
+        g.save(); g.shadowColor = 'rgba(0,0,0,0.45)'; g.shadowBlur = 20; g.shadowOffsetY = 6;
+        g.fillStyle = bg; g.beginPath(); g.roundRect(x, y, bw, bh, bh / 2.6); g.fill(); g.restore();
+        g.lineWidth = Math.max(3, bh / 30); g.strokeStyle = 'rgba(90,15,10,0.9)'; g.stroke();
+        g.fillStyle = 'rgba(255,255,255,0.18)'; g.beginPath(); g.roundRect(x + 8, y + 5, bw - 16, bh * 0.38, bh / 3); g.fill();
+        text(label, x + bw / 2, y + bh / 2, bh * 0.4, '#ffffff', 'center', bw - 40);
       };
       if (H > W) {
         // Сторис: кадр целиком, текст наверху (там полоса интерфейса игры),

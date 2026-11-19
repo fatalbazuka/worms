@@ -52,17 +52,40 @@ for (const lang of ['ru', 'en']) {
       g.drawImage(img, 0, 0);
       const fam = '"Worms UI", system-ui, sans-serif';
       g.lineJoin = 'round'; g.textBaseline = 'middle';
-      const text = (s, x, y, size, color, align = 'center', maxW = W - 120, stroke = '#141821') => {
-        let sz = size; g.textAlign = align; g.font = `800 ${sz}px ${fam}`;
+      // Заголовок: золотой градиент, тонкая тёплая обводка, мягкая тень.
+      // Подписи: белые, без обводки — только тень, чтобы читались на картинке.
+      const fit = (s, size, maxW) => {
+        let sz = size; g.font = `800 ${sz}px ${fam}`;
         while (g.measureText(s).width > maxW && sz > 20) { sz -= 2; g.font = `800 ${sz}px ${fam}`; }
-        g.lineWidth = sz / 4.2; g.strokeStyle = stroke; g.strokeText(s, x, y);
-        g.fillStyle = color; g.fillText(s, x, y);
+        return sz;
+      };
+      const text = (s, x, y, size, color, align = 'center', maxW = W - 120) => {
+        const sz = fit(s, size, maxW); g.textAlign = align;
+        const gold = color === '#ffd166';
+        g.save();
+        g.shadowColor = 'rgba(10,6,30,0.55)'; g.shadowBlur = sz / 5; g.shadowOffsetY = sz / 14;
+        if (gold) {
+          g.lineWidth = Math.max(3, sz / 10); g.strokeStyle = '#5a2a08'; g.strokeText(s, x, y);
+          g.shadowColor = 'transparent';
+          const gr = g.createLinearGradient(0, y - sz * 0.5, 0, y + sz * 0.45);
+          gr.addColorStop(0, '#fff6c2'); gr.addColorStop(0.45, '#ffd04a'); gr.addColorStop(1, '#f39a1e');
+          g.fillStyle = gr;
+        } else {
+          g.fillStyle = color;
+        }
+        g.fillText(s, x, y);
+        g.restore();
+        return sz;
       };
       const pill = (x, y, w, h, label) => {
         g.save(); g.shadowColor = 'rgba(0,0,0,0.45)'; g.shadowBlur = 24; g.shadowOffsetY = 8;
-        g.fillStyle = '#e8463c'; g.beginPath(); g.roundRect(x, y, w, h, h / 2.4); g.fill(); g.restore();
-        g.lineWidth = Math.max(6, h / 16); g.strokeStyle = '#141821'; g.beginPath(); g.roundRect(x, y, w, h, h / 2.4); g.stroke();
-        text(label, x + w / 2, y + h / 2, h * 0.4, '#ffffff', 'center', w - 50, '#7a1712');
+        const bg = g.createLinearGradient(0, y, 0, y + h);
+        bg.addColorStop(0, '#ff6a55'); bg.addColorStop(1, '#d4322a');
+        g.fillStyle = bg; g.beginPath(); g.roundRect(x, y, w, h, h / 2.4); g.fill(); g.restore();
+        g.lineWidth = Math.max(3, h / 30); g.strokeStyle = 'rgba(90,15,10,0.9)'; g.beginPath(); g.roundRect(x, y, w, h, h / 2.4); g.stroke();
+        // блик сверху
+        g.fillStyle = 'rgba(255,255,255,0.18)'; g.beginPath(); g.roundRect(x + 10, y + 6, w - 20, h * 0.38, h / 3); g.fill();
+        text(label, x + w / 2, y + h / 2, h * 0.4, '#ffffff', 'center', w - 50);
       };
       const shade = (x0, y0, x1, y1, from, to) => {
         const gr = g.createLinearGradient(x0, y0, x1, y1);
