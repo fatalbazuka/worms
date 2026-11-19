@@ -29,17 +29,25 @@ mkdirSync(OUT, { recursive: true });
  *   wait n — n кадров; flight — ждать, пока снаряды летят
  *   ready — ждать своего хода
  */
+// ready — перемотка до своего хода без записи: ход соперника в ролике не нужен
+// ready — перемотка до своего хода без записи: ход соперника в ролике не нужен
 const SCENES = {
-  selfown: { seed: 4242, steps: [['ready'], ['place', 'same'], ['aim', 'grenade', 25, -760], ['flight'], ['wait', 50],
-    ['ready'], ['aim', 'grenade', 'solve'], ['flight']] },
-  bouncer: { seed: 777, steps: [['ready'], ['place', 'near'], ['aim', 'banana', 'bounce'], ['flight'], ['wait', 40],
-    ['ready'], ['aim', 'banana', 'solve'], ['flight']] },
-  spring: { seed: 4242, steps: [['ready'], ['place', 'same'], ['aim', 'spring', 'leap'], ['wait', 90],
-    ['ready'], ['aim', 'bazooka', 'solve'], ['flight']] },
-  magnet: { seed: 5150, steps: [['ready'], ['place', 'same'], ['aim', 'mine', 'drop'], ['flight'], ['wait', 200]] },
-  weight: { seed: 4242, steps: [['ready'], ['place', 'below'], ['aim', 'weight', 'drop'], ['flight'], ['wait', 40],
-    ['ready'], ['aim', 'weight', 'drop'], ['flight']] },
-  holy: { seed: 777, steps: [['ready'], ['place', 'same'], ['gather'], ['aim', 'holy', 'solve'], ['flight']] },
+  selfown: { seed: 4242, steps: [['ready'], ['place', 'same'], ['aim', 'grenade', 0, -640], ['flight'], ['wait', 45],
+    ['ready'], ['aim', 'bazooka', 'solve'], ['flight'], ['wait', 30],
+    ['ready'], ['aim', 'grenade', 0, -640], ['flight'], ['wait', 45]] },
+  bouncer: { seed: 777, steps: [['ready'], ['place', 'near'], ['aim', 'banana', 'bounce'], ['flight'], ['wait', 30],
+    ['ready'], ['place', 'near'], ['aim', 'banana', 'solve'], ['flight'], ['wait', 30],
+    ['ready'], ['aim', 'banana', 'bounce'], ['flight'], ['wait', 30]] },
+  spring: { seed: 4242, steps: [['ready'], ['place', 'same'], ['aim', 'spring', 'leap'], ['wait', 75],
+    ['ready'], ['place', 'same'], ['aim', 'bazooka', 'solve'], ['flight'], ['wait', 30],
+    ['ready'], ['aim', 'spring', 'leap'], ['wait', 75]] },
+  magnet: { seed: 4242, steps: [['ready'], ['place', 'close'], ['aim', 'mine', 'drop'], ['flight'], ['boom', 260], ['wait', 30],
+    ['ready'], ['place', 'same'], ['aim', 'bazooka', 'solve'], ['flight'], ['wait', 30]] },
+  weight: { seed: 4242, steps: [['ready'], ['place', 'below'], ['aim', 'weight', 'drop'], ['flight'], ['wait', 35],
+    ['ready'], ['place', 'below'], ['aim', 'weight', 'drop'], ['flight'], ['wait', 35],
+    ['ready'], ['place', 'below'], ['aim', 'weight', 'drop'], ['flight'], ['wait', 35]] },
+  holy: { seed: 777, steps: [['ready'], ['place', 'same'], ['gather'], ['aim', 'holy', 'solve'], ['flight'], ['wait', 50],
+    ['ready'], ['place', 'same'], ['gather'], ['aim', 'cluster', 'solve'], ['flight'], ['wait', 40]] },
 };
 
 const browser = await chromium.launch();
@@ -85,6 +93,10 @@ async function record(name) {
     };
     const ad = {
       step() { virt += 1000 / 30; g.step(virt, 1000 / 30); return g.canvas.toDataURL('image/jpeg', 0.92); },
+      // Без снимка: перемотка там, где смотреть нечего
+      skip(n) { for (let i = 0; i < n; i++) { virt += 1000 / 30; g.step(virt, 1000 / 30); } s.setWind?.(0); },
+      calm() { s.setWind?.(0); },
+      booms: 0,
       ready: () => Boolean(s.canPlayerAct?.()),
       flying: () => s.projectiles.length > 0,
       place(kind) {
@@ -101,7 +113,7 @@ async function record(name) {
           }
           return 'far';
         }
-        const [lo, hi] = kind === 'near' ? [150, 300] : [110, 260];
+        const [lo, hi] = kind === 'near' ? [150, 300] : kind === 'close' ? [100, 140] : [110, 260];
         for (let d = lo; d <= hi; d += 10) {
           for (const sg of [1, -1]) {
             const x = w.x + sg * d;
@@ -141,7 +153,7 @@ async function record(name) {
           const gsc = WEAPONS[wi].projectile.gravityScale ?? 1;
           vx = (e.x - w.x) / t;
           vy = ((e.centerY - 140 - w.centerY) - 0.5 * CFG.GRAVITY * gsc * t * t) / t;
-          if (id === 'mine') { vx = (e.x - w.x) * 0.55 / t; vy = -320; }
+          if (id === 'mine') { vx = (e.x - w.x) * 0.45 / 0.7; vy = -260; }
         }
         s.aimAngle = Math.atan2(-vy, Math.abs(vx));
         this.pending = { vx, vy };
@@ -149,6 +161,8 @@ async function record(name) {
       },
       shoot() { s.fireActiveWorm(this.pending.vx, this.pending.vy); },
     };
+    const impact = s._impact.bind(s);
+    s._impact = (...a) => { ad.booms++; return impact(...a); };
     window.__ad = ad;
   });
 
@@ -161,12 +175,19 @@ async function record(name) {
       frames += k; n -= k;
     }
   };
-  const until = async (fn, max) => { for (let i = 0; i < max && frames < LEN; i++) { if (await page.evaluate(fn)) return; await step(3); } };
+  const until = async (fn, max, arg) => { for (let i = 0; i < max && frames < LEN; i++) { if (await page.evaluate(fn, arg)) return; await step(3); } };
 
   await step(15);
   for (const [act, ...args] of scene.steps) {
     if (frames >= LEN) break;
-    if (act === 'ready') await until(() => window.__ad.ready(), 300);
+    if (act === 'ready') {
+      for (let i = 0; i < 200 && !(await page.evaluate(() => window.__ad.ready())); i++) await page.evaluate(() => window.__ad.skip(6));
+      await page.evaluate(() => window.__ad.calm());
+    } else if (act === 'boom') {
+      const b0 = await page.evaluate(() => window.__ad.booms);
+      await until((n) => window.__ad.booms > n, args[0], b0);
+    }
+    if (act === 'ready' || act === 'boom') continue;
     else if (act === 'place') process.stdout.write(`${name}:${await page.evaluate((k) => window.__ad.place(k), args[0])} `);
     else if (act === 'gather') await page.evaluate(() => window.__ad.gather());
     else if (act === 'aim') {
