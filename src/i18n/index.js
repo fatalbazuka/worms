@@ -11,9 +11,9 @@
  * переводится по строкам и по кускам между « · ». Не нашлось совсем —
  * остаётся по-русски: лучше русская строка, чем пустое место.
  *
- * Язык: выбранный вручную (worms.lang.v1), иначе язык Telegram, иначе
- * браузера. Русский — для ru и соседних языков, где русский понятнее
- * английского; остальным — английский.
+ * Язык: выбранный вручную (worms.lang.v1), иначе язык Telegram. Русский —
+ * для ru и соседних языков, где русский понятнее английского, и вне
+ * Telegram; остальным — английский.
  */
 import { EN } from './en.js';
 
@@ -26,14 +26,16 @@ function detect() {
     const saved = localStorage.getItem(KEY);
     if (saved === 'ru' || saved === 'en') return saved;
   } catch { /* инкогнито */ }
-  const tg = globalThis.Telegram?.WebApp?.initDataUnsafe?.user?.language_code;
-  const code = String(tg || globalThis.navigator?.language || 'ru');
   // ?lang=en в адресе — для проверки и скриншотов
   try {
     const q = new URLSearchParams(globalThis.location?.search ?? '').get('lang');
     if (q === 'ru' || q === 'en') return q;
   } catch { /* нет location */ }
-  return RU_LIKE.test(code) ? 'ru' : 'en';
+  // Язык берём из Telegram: там он есть у каждого. Вне Telegram (сайт с
+  // логином, разработка) — русский; английский — переключателем в меню
+  const tg = globalThis.Telegram?.WebApp?.initDataUnsafe?.user?.language_code;
+  if (!tg) return 'ru';
+  return RU_LIKE.test(String(tg)) ? 'ru' : 'en';
 }
 
 export const LANG = detect();
