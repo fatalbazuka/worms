@@ -1183,8 +1183,12 @@ export default class GameScene extends Phaser.Scene {
       this.rig.manual = false; // пошли — камера снова ведёт бойца
     }
 
-    const jump = this.moveInput.jumpQueued || Phaser.Input.Keyboard.JustDown(k.jump);
-    if (jump) w.jump();
+    // Прыжок помним 150 мс: нажал за миг до приземления — прыгнет, приземлившись
+    if (this.moveInput.jumpQueued || Phaser.Input.Keyboard.JustDown(k.jump)) this._jumpAt = this.time.now;
+    if (this._jumpAt && (w.grounded || w.hang) && this.time.now - this._jumpAt < 150) {
+      w.jump();
+      this._jumpAt = 0;
+    }
     this.moveInput.jumpQueued = false;
 
     // Угол прицела
@@ -1324,8 +1328,12 @@ export default class GameScene extends Phaser.Scene {
     if (chance <= 0) return;
     const spots = [];
     const edge = Math.min(200, CFG.WORLD_W * 0.12);
+    // Не на впечатанный декор: с кроны дерева или крыши камня ящик не взять.
+    // Декор строится от зерна, поэтому точки совпадают у обоих в сети
+    const props = this.props?.stamped ?? [];
     for (let x = edge; x < CFG.WORLD_W - edge; x += 24) {
-      if (this.terrain.isSpawnable(x)) spots.push(x);
+      if (this.terrain.isSpawnable(x)
+        && !props.some((q) => Math.abs(q.x - x) < q.size / 2 + CFG.CRATE_W / 2)) spots.push(x);
     }
     if (!spots.length) return;
     const drop = (kind) => {
@@ -1696,7 +1704,8 @@ export default class GameScene extends Phaser.Scene {
   _crateWeapon() {
     const rng = this.turnRng;
     const pool = (rar) => WEAPONS.map((w, i) => ({ w, i }))
-      .filter(({ w }) => w.startAmmo !== null && w.rarity === rar && this.turn.allowed?.(w) !== false);
+      .filter(({ w }) => w.startAmmo !== null && w.rarity === rar
+        && (!this.rules.only || this.rules.only.includes(w.id)));
     let r = rng() * Object.values(WEAPON_RARITY).reduce((a, x) => a + x.odds, 0);
     let rarity = 'common';
     for (const [k, v] of Object.entries(WEAPON_RARITY)) {

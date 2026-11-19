@@ -182,13 +182,14 @@ export class Worm {
     return px >= this.left && px <= this.right && py >= this.top && py <= this.y;
   }
 
-  /** Свободен ли прямоугольник бойца в позиции (cx, cy). */
+  /**
+   * Свободен ли прямоугольник бойца в позиции (cx, cy) — в полёте.
+   * Ширина та же, что у ходьбы (bodyClear): была на пиксель шире, и боец,
+   * дошедший вплотную до камня, уже «упирался» в него в позиции покоя —
+   * прыжок у препятствия гас на первом же кадре.
+   */
   rectClear(cx, cy) {
-    const hw = CFG.WORM_W >> 1;
-    return !this.terrain.solidInRect(
-      Math.round(cx) - hw + 1, Math.round(cy) - CFG.WORM_H + 1,
-      Math.round(cx) + hw - 1, Math.round(cy),
-    );
+    return this.bodyClear(cx, cy);
   }
 
   /** Есть ли твердь прямо под ногами. */
@@ -474,6 +475,7 @@ export class Worm {
     this.fallStartY = this.y;
     this.vy = CFG.JUMP_VY;
     this.vx = dir * CFG.JUMP_VX;
+    this.jumping = true;
   }
 
   /** Бросок батутом: скорость задаётся целиком, падение считается от старта. */
@@ -524,6 +526,7 @@ export class Worm {
     this.hang = null;
     this.zip = null;
     this.grounded = false;
+    this.jumping = false;
     this.vx += ix;
     this.vy += iy;
   }
@@ -583,7 +586,9 @@ export class Worm {
               this.x = nx; this.y += dyy; slid = true; break;
             }
           }
-          if (!slid) this.vx *= -0.25;
+          // Свой прыжок на подъёме прижимается к стенке и перелезает через
+          // невысокое препятствие, а не отлетает назад; от взрыва — отскок
+          if (!slid && !(this.jumping && this.vy < 0)) this.vx *= -0.25;
         }
 
         // Вертикаль
@@ -603,6 +608,7 @@ export class Worm {
 
   _land() {
     this.grounded = true;
+    this.jumping = false;
     const drop = this.y - this.fallStartY;
     this.vy = 0;
     this.vx *= this.scene.rules?.landKeep ?? 0.3;

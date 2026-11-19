@@ -30,19 +30,20 @@ const SALT = 0x51ed;
 // Наборы по виду башни: что стоит на этажах и что видно за башней
 const THEMES = {
   classic: {
-    props: ['tree', 'pine', 'mushroom', 'herb', 'sunflower', 'rock', 'box', 'barrel'],
+    // Коробки 📦 тут нет: её принимали за ящик с оружием и упирались в неё
+    props: ['tree', 'pine', 'mushroom', 'herb', 'sunflower', 'rock', 'bricks', 'barrel'],
     back: ['mountain', 'tree', 'pine', 'cloud', 'sun'],
   },
   wind: {
-    props: ['palm', 'herb', 'rock', 'box', 'barrel', 'sunflower'],
+    props: ['palm', 'herb', 'rock', 'bricks', 'barrel', 'sunflower'],
     back: ['cloud', 'cloud', 'palm', 'mountain', 'sun'],
   },
   ice: {
-    props: ['pine', 'snowman', 'ice', 'rock', 'box', 'barrel'],
+    props: ['pine', 'snowman', 'ice', 'rock', 'ice', 'barrel'],
     back: ['mountain', 'snowflake', 'pine', 'cloud', 'snowflake'],
   },
   lava: {
-    props: ['rock', 'mushroom', 'bricks', 'box', 'barrel', 'barrel'],
+    props: ['rock', 'mushroom', 'bricks', 'rock', 'barrel', 'barrel'],
     back: ['volcano', 'fire', 'mountain', 'cloud', 'volcano'],
   },
   space: {
@@ -62,9 +63,12 @@ const SIZE = {
  * [kind, x, y, w, h]: x от центра, y вверх от низа (отрицательный).
  */
 const SILHOUETTE = {
-  tree: [['rect', -0.08, -0.36, 0.16, 0.36], ['ellipse', -0.4, -0.95, 0.8, 0.66]],
-  pine: [['rect', -0.07, -0.2, 0.14, 0.2], ['ellipse', -0.33, -0.95, 0.66, 0.8]],
-  palm: [['rect', -0.07, -0.7, 0.14, 0.7], ['ellipse', -0.42, -0.98, 0.84, 0.36]],
+  // Деревья держат только крону, и та — выше головы бойца: стволы были
+  // глухими стенами, а крона ниже роста — потолком, через них не пройти и
+  // не перепрыгнуть. Под кроной теперь проходят, а прячутся за ней от навеса
+  tree: [['ellipse', -0.4, -0.95, 0.8, 0.46]],
+  pine: [['ellipse', -0.3, -0.95, 0.6, 0.42]],
+  palm: [['ellipse', -0.42, -0.98, 0.84, 0.36]],
   rock: [['ellipse', -0.43, -0.6, 0.86, 0.6]],
   box: [['rect', -0.38, -0.78, 0.76, 0.78]],
   ice: [['rect', -0.38, -0.78, 0.76, 0.78]],
