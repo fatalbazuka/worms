@@ -51,6 +51,7 @@ import { CHALLENGES, CHALLENGE_BY_ID, starsFor } from '../campaign/challenges.js
 import { saveChallenge } from '../platform/challenges.js';
 import { grantCoins } from '../platform/daily.js';
 import { CameraRig } from '../ui/CameraRig.js';
+import { Coach } from '../ui/Coach.js';
 import { voice } from '../audio/Voice.js';
 import { askText, closeOverlay } from '../ui/Overlay.js';
 import { isDesktop, aimScheme } from '../platform/device.js';
@@ -153,6 +154,8 @@ export default class GameScene extends Phaser.Scene {
     this.turn = new TurnManager(this);
     this.aim = new AimController(this);
     this.offscreen = new OffscreenMarkers(this);
+    // Новичок: пошаговая тренировка поверх «Первого выстрела»
+    this.coach = this.match.tutorial && this.slingAim && !isDesktop() ? new Coach(this) : null;
 
     this._spawnWorms();
     this._spawnMonsters();
@@ -406,6 +409,7 @@ export default class GameScene extends Phaser.Scene {
    * две подсказки разом на первом ходу только путают.
    */
   get slingHint() {
+    if (this.coach) return this.coach.wantsSlingHint;
     if (!this.slingAim) return false;
     if (this._slingUses == null) {
       try { this._slingUses = Number(localStorage.getItem('worms.slingUses')) || 0; } catch { this._slingUses = 0; }
@@ -414,6 +418,7 @@ export default class GameScene extends Phaser.Scene {
   }
 
   get hookHint() {
+    if (this.coach) return this.coach.wantsHookHint;
     if (!this.sling || this.slingHint) return false;
     if (this._hookUses == null) {
       try { this._hookUses = Number(localStorage.getItem('worms.hookUses')) || 0; } catch { this._hookUses = 0; }
@@ -1015,6 +1020,10 @@ export default class GameScene extends Phaser.Scene {
     }
     this.props?.update(dt);
     this._scrollBg();
+    if (this.coach) {
+      this.coach.update();
+      if (this.coach.finished) this.coach = null;
+    }
     this.ambience?.update(dt);
     for (const m of this.monsters) m.update(dt);
     if (this.monsters.some((m) => !m.alive)) this.monsters = this.monsters.filter((m) => m.alive);

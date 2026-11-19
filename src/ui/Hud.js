@@ -432,7 +432,7 @@ export class Hud {
     const g = this.padGfx, p = this.slingPad;
     g.clear();
     const w = scene.turn.activeWorm;
-    const ready = scene.canPlayerAct() && w && !w.zip && !scene.turn.retreating;
+    const ready = scene.canPlayerAct() && w && !w.zip && !scene.turn.retreating && !scene.coach?.lockShot;
     // Палец на рычаге — показываем его; иначе подсказка тянет сама
     let pull = this.padPull;
     if (!pull && ready && scene.aim?.padHint) pull = scene.aim.padHint;
@@ -1085,7 +1085,8 @@ export class Hud {
       const sling = !!scene.slingHint;
       // Батут ведёт себя не как снаряд — подсказка, пока он в руках
       const spring = scene.slingAim && scene.turn.weapon?.id === 'spring';
-      const show = !this.helpVisible && scene.canPlayerAct()
+      // На тренировке своя панель с шагами — строка подсказки не нужна
+      const show = !this.helpVisible && scene.canPlayerAct() && !scene.coach
         && (spring || sling || (scene.hookHint && scene.hooksLeft > 0));
       if (show) {
         this.hintText.setText(spring
