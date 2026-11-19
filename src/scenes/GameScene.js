@@ -994,7 +994,9 @@ export default class GameScene extends Phaser.Scene {
     let dt = Math.min(delta / 1000, CFG.MAX_DT);
     // Замедление на добивании: мир на полсекунды вязнет, интерфейс и часы
     // хода идут как шли
-    if (this._slow && performance.now() < this._slow.until) dt *= this._slow.k;
+    // Стоп-кадр попадания — короче и сильнее замедления
+    if (this._stop && performance.now() < this._stop) dt *= 0.04;
+    else if (this._slow && performance.now() < this._slow.until) dt *= this._slow.k;
 
     // Таймер хода, набор силы и поворот прицела считаются по системным часам.
     // Дельта Phaser для этого не годится: он её сглаживает и под нагрузкой
@@ -1416,6 +1418,8 @@ export default class GameScene extends Phaser.Scene {
     // по тросу тоже: сначала долети.
     if (!allowed || this.turn.retreating || !w || !w.alive || (w.zip && !this.replaying)) return;
 
+    // Выстрел с уроном — потом посмотрим, попал ли (дразнилка на промах)
+    if (!this.replaying && (this.turn.weapon?.explosion?.damage ?? 0) > 0) this._turnShot = { team: this.turn.currentTeam, hits: 0 };
     const len = Math.hypot(vx, vy) || 1;
     const nx = vx / len, ny = vy / len;
 
@@ -1518,10 +1522,14 @@ export default class GameScene extends Phaser.Scene {
 
     let felt = 0;
     let ouch = null, ouchDmg = 0;
+    const shooter = owner?.team ?? this.turn.currentTeam;
+    let foesHit = 0;
     for (const w of this.worms) {
       if (!w.alive) continue;
       const wx = w.x, wy = w.centerY;
       const d = Math.hypot(wx - x, wy - y);
+      // Мимо, но рядом — подпрыгнул от испуга
+      if (d > cfg.damageRadius && d < cfg.damageRadius + 130) w.startle();
       if (d > cfg.damageRadius) continue;
 
       const f = 1 - d / cfg.damageRadius;      // линейный спад от центра
@@ -1534,14 +1542,33 @@ export default class GameScene extends Phaser.Scene {
       w.damage(dmg, 'взрыв');
       if (dmg > 0) felt = Math.max(felt, this.isLocalTeam(w.team) ? 2 : 1);
       if (dmg > 0) this._countHit(w, dmg);
+      if (dmg > 0 && w.team !== shooter) {
+        foesHit++;
+        if (this._turnShot) this._turnShot.hits++;
+      }
       if (dmg > ouchDmg) { ouch = w; ouchDmg = dmg; }
     }
+    this._impact(x, y, ouchDmg, foesHit);
     // Сильно досталось — боец вскрикивает. Царапины молча, иначе «ой» на каждый чих
     if (ouch && ouchDmg >= 25 && !this.gameOverUi) voice.say('hurt', { team: ouch.team });
     // Отдача в руку: задели своего — сильно, чужого — коротко
     if (felt === 2) haptic('hurt');
     else if (felt === 1) haptic('hit');
     if (felt) this._botReact(felt === 2);
+  }
+
+  /**
+   * Попадание должно чувствоваться: мир на миг замирает (стоп-кадр), по
+   * силе удара — выкрик. Двоих-троих разом — «Дуплет!»/«Тройной!».
+   */
+  _impact(x, y, dmg, foesHit) {
+    if (dmg >= 15) {
+      this._stop = performance.now() + (dmg >= 45 ? 120 : 70);
+      this.rig.punch(dmg >= 45 ? 0.05 : 0.03, 170);
+    }
+    if (foesHit >= 3) this.fx.callout(x, y - 50, 'Тройной!', '#ff8ad4', 40);
+    else if (foesHit === 2) this.fx.callout(x, y - 50, 'Дуплет!', '#8ad4ff', 38);
+    else if (dmg >= 45) this.fx.callout(x, y - 50, 'Бабах!', '#ffd166', 36);
   }
 
   /**
@@ -1645,13 +1672,27 @@ export default class GameScene extends Phaser.Scene {
 
   /** Ход отыгран и очередь передана — отдаём второму игроку итог. */
   onTurnResolved(actedTeam) {
+    // Соперник стрелял и никого не задел — над ним смеются
+    const shot = this._turnShot;
+    this._turnShot = null;
+    if (shot && shot.team === actedTeam && shot.hits === 0 && !this.gameOverUi) {
+      const mockers = this.worms.filter((w) => w.alive && w.team !== actedTeam);
+      for (const w of mockers) w.taunt();
+      if (mockers.length) voice.say('laugh', { team: mockers[0].team });
+    }
     this.net?.sendState(actedTeam);
     this.explosionLog = [];
   }
 
   onWormDied(worm) {
-    // Добивание — главное событие хода: мир замирает на полсекунды
-    if (!this.replaying) this._slow = { until: performance.now() + 520, k: 0.28 };
+    // Добивание — главное событие хода: мир замирает на полсекунды. Решающее
+    // (команда выбита) — дольше, с наездом камеры и выкриком
+    const decisive = this.checkVictory() !== null;
+    if (!this.replaying) this._slow = decisive ? { until: performance.now() + 1500, k: 0.2 } : { until: performance.now() + 520, k: 0.28 };
+    if (decisive) {
+      this.rig.punch(0.14, 900);
+      this.fx.callout(worm.x, worm.centerY - 70, 'Решающий!', '#ffd166', 44);
+    }
     if (this._myStrike() && worm.team !== this.myTeamIndex) this.battleStats.kills++;
     this.fx.explosion(worm.x, worm.centerY, 26);
     // Тоже по целым: у соперника гибель приходит снимком с целыми координатами

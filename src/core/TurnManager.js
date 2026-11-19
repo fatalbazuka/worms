@@ -127,11 +127,16 @@ export class TurnManager {
     for (const w of this.scene.worms) w.setActiveMarker(w === worm);
     this.scene.followTarget = worm;
     this.scene.frameTurn(worm);
-    this.scene.fx.sound('turnStart');
-    this.scene.fx.banner(
-      `${TEAM_NAMES[team]} — ход ${this.turnNumber}`,
-      hex(TEAM_COLORS[team]), 1200,
-    );
+    this._announce(worm, team);
+  }
+
+  /** Плашка хода с лицом бойца: «Твой ход!» против бота и по сети, иначе — команда. */
+  _announce(worm, team) {
+    const solo = this.scene.bots?.some(Boolean) || this.scene.net?.connected;
+    const mine = this.scene.isLocalTeam?.(team);
+    const title = solo ? (mine ? 'Твой ход!' : 'Ход соперника') : TEAM_NAMES[team];
+    if (this.scene.fx.turnPlate) this.scene.fx.turnPlate(worm, title, `${worm.name} · ход ${this.turnNumber}`, hex(TEAM_COLORS[team]));
+    else this.scene.fx.banner(`${TEAM_NAMES[team]} — ход ${this.turnNumber}`, hex(TEAM_COLORS[team]), 1200);
   }
 
   /**
@@ -171,10 +176,7 @@ export class TurnManager {
     for (const w of this.scene.worms) w.setActiveMarker(w === worm);
     this.scene.followTarget = worm;
     this.scene.frameTurn(worm);
-    this.scene.fx.banner(
-      `${TEAM_NAMES[info.team]} — ход ${this.turnNumber}`,
-      hex(TEAM_COLORS[info.team]), 1200,
-    );
+    this._announce(worm, info.team);
     return true;
   }
 

@@ -103,6 +103,7 @@ function fighterAnims(sheet) {
     [`${sheet}_aim`]: { frameRate: 1, repeat: -1, frames: [12] },
     [`${sheet}_win`]: { frameRate: 5, repeat: -1, frames: [13, 3] },
     [`${sheet}_cry`]: { frameRate: 1, repeat: -1, frames: [14] },
+    [`${sheet}_surprised`]: { frameRate: 1, repeat: -1, frames: [9] },
   };
 }
 

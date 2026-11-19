@@ -304,6 +304,52 @@ export class Fx {
    * (единственная плашка с распознаваемым форматом) звучит сигналом «теперь
    * ты», остальные — коротким кликом уведомления: они и есть уведомления.
    */
+  /**
+   * Выкрик в мире над местом события: «Бабах!», «Дуплет!», «Решающий!».
+   * Выпрыгивает, чуть подлетает и тает.
+   */
+  callout(x, y, text, color = '#ffd166', size = 34) {
+    const s = this.scene;
+    const t = s.rig.world(s.add.text(x, y, text, font(size, 800, color))
+      .setOrigin(0.5).setDepth(DEPTH.HUD - 6).setStroke('#10131a', 7).setScale(0.3).setAngle(-6));
+    s.tweens.add({ targets: t, scale: 1, angle: 0, duration: 260, ease: 'Back.easeOut' });
+    s.tweens.add({ targets: t, y: y - 46, duration: 1100, ease: 'Sine.easeOut' });
+    s.tweens.add({ targets: t, alpha: 0, delay: 800, duration: 350, onComplete: () => t.destroy() });
+    return t;
+  }
+
+  /**
+   * Плашка начала хода: лицо бойца и чей ход. Въезжает слева, стоит
+   * секунду и уезжает вправо — видно, кто ходит, ещё до первого движения.
+   */
+  turnPlate(worm, title, sub, color = '#ffffff') {
+    const s = this.scene;
+    sfx.play('turnStart');
+    const W = CFG.VIEW_W, y = Math.round(CFG.VIEW_H * 0.3);
+    const w = Math.min(W - 60, 460), h = 96;
+    const parts = [];
+    const add = (o, d = DEPTH.HUD + 5) => { s.rig.ui(o.setScrollFactor(0).setDepth(d)); parts.push(o); return o; };
+    const g = add(s.add.graphics());
+    g.fillStyle(0x10131a, 0.88).fillRoundedRect(-w / 2, -h / 2, w, h, 22);
+    g.lineStyle(4, Phaser.Display.Color.HexStringToColor(color).color, 1).strokeRoundedRect(-w / 2, -h / 2, w, h, 22);
+    let face = null;
+    if (worm?.smiley && s.textures.exists(worm.sheet)) {
+      face = add(s.add.sprite(-w / 2 + 56, 30, worm.sheet, 0).setOrigin(0.5, 0.92).setScale(0.82).setFlipX(true), DEPTH.HUD + 6);
+      face.play(`${worm.sheet}_win`);
+    }
+    const tx = face ? -w / 2 + 110 : 0;
+    const t1 = add(s.add.text(tx, -14, title, font(32, 800, color)).setOrigin(face ? 0 : 0.5, 0.5), DEPTH.HUD + 6);
+    const t2 = add(s.add.text(tx, 22, sub, font(20, 700, '#c9d3e6')).setOrigin(face ? 0 : 0.5, 0.5), DEPTH.HUD + 6);
+    const box = [g, face, t1, t2].filter(Boolean);
+    const base = box.map((o) => o.x);
+    box.forEach((o, i) => { o.x = base[i] - W; o.y += y; });
+    s.tweens.add({ targets: box, x: (o) => base[box.indexOf(o)] + W / 2, duration: 280, ease: 'Back.easeOut' });
+    s.tweens.add({
+      targets: box, x: `+=${W}`, alpha: 0, delay: 1150, duration: 260, ease: 'Quad.easeIn',
+      onComplete: () => parts.forEach((o) => o.destroy()),
+    });
+  }
+
   banner(text, color = '#ffffff', duration = 1600, sound = undefined) {
     const s = this.scene;
     sfx.play(sound === undefined ? (TURN_BANNER.test(text) ? 'turnStart' : 'select') : sound);

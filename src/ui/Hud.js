@@ -677,6 +677,9 @@ export class Hud {
     st.more.setVisible(st.shown);
     st.more.iconImage?.setVisible(st.shown);
     const list = st.shown ? this._stripWeapons(turn) : [];
+    // Сменили оружие — выбранный кружок подпрыгивает
+    const bump = st.lastIdx !== undefined && st.lastIdx !== turn.weaponIndex;
+    st.lastIdx = turn.weaponIndex;
     st.chips.forEach((c, i) => {
       const idx = list[i];
       c.index = idx ?? null;
@@ -687,7 +690,13 @@ export class Hud {
       const key = weaponIcon(scene, WEAPONS[idx]);
       if (key) {
         if (c.icon.texture.key !== key) c.icon.setTexture(key);
-        c.icon.setScale(fitScale(scene, key, st.r * 1.5)).setVisible(true);
+        const k = fitScale(scene, key, st.r * 1.5);
+        if (on && bump) {
+          c.popUntil = scene.time.now + 260;
+          scene.haptic?.('select');
+        }
+        const pop = Math.max(0, (c.popUntil ?? 0) - scene.time.now) / 260;
+        c.icon.setScale(k * (1 + Math.sin(pop * Math.PI) * 0.35)).setVisible(true);
       } else c.icon.setVisible(false);
       const n = turn.ammoOf ? turn.ammoOf(idx) : Infinity;
       c.badge.setText(Number.isFinite(n) ? String(n) : '∞').setVisible(true);
@@ -802,7 +811,11 @@ export class Hud {
     img.setScale(0.94).setTint(0xc9c9c9);
     this.scene.haptic?.('tap');
   }
-  _unpress(img) { img.setScale(1).clearTint(); }
+  /** Отпустили — кнопка пружинит обратно, а не встаёт на место рывком. */
+  _unpress(img) {
+    img.clearTint();
+    this.scene.tweens.add({ targets: img, scale: { from: 1.08, to: 1 }, duration: 180, ease: 'Back.easeOut' });
+  }
   /**
    * Глобальное отпускание: палец мог уйти с кнопки до того, как его подняли,
    * и тогда своего события кнопка не получит. Отпускаем только то, что

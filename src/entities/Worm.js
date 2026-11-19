@@ -140,6 +140,11 @@ export class Worm {
     this.barBg = s.add.rectangle(this.x, this.y - CFG.WORM_H - 6, HP_BAR_W + 2, 5, 0x101420, 0.85)
       .setOrigin(0.5, 0.5).setDepth(DEPTH.WORM + 2);
     s.rig.world(this.barBg);
+    // Белый «хвост» под полоской: здоровье тает, а не исчезает разом
+    this.barGhost = s.add.rectangle(this.x - HP_BAR_W / 2, this.y - CFG.WORM_H - 6, HP_BAR_W, 3, 0xffffff)
+      .setOrigin(0, 0.5).setDepth(DEPTH.WORM + 2);
+    s.rig.world(this.barGhost);
+    this.shownHealth = this.health;
     this.bar = s.add.rectangle(this.x - HP_BAR_W / 2, this.y - CFG.WORM_H - 6, HP_BAR_W, 3, color)
       .setOrigin(0, 0.5).setDepth(DEPTH.WORM + 3);
     s.rig.world(this.bar);
@@ -482,6 +487,35 @@ export class Worm {
     if (vx) this.facing = vx > 0 ? 1 : -1;
   }
 
+  /** Рядом рвануло, а не задело: подпрыгнул от испуга. */
+  startle() {
+    if (!this.alive || this.scene.time.now < (this.hurtUntil ?? 0)) return;
+    this.startleUntil = this.scene.time.now + 650;
+  }
+
+  /** Соперник промахнулся: посмеяться. */
+  taunt(ms = 1400) {
+    if (!this.alive || this.mood) return;
+    this.tauntUntil = this.scene.time.now + ms;
+  }
+
+  /**
+   * Отлетает от взрыва — за ним шлейф из полупрозрачных копий. Только
+   * картинка: позиция и физика не трогаются.
+   */
+  _trail(rx, ry) {
+    if (!this.smiley || !this.alive || this.grounded || this.zip || this.hang) return;
+    if (Math.hypot(this.vx, this.vy) < 420) return;
+    const now = this.scene.time.now;
+    if (now - (this._ghostAt ?? 0) < 45) return;
+    this._ghostAt = now;
+    const v = this.view;
+    const g = this.scene.rig.world(this.scene.add.image(v.x, v.y, v.texture.key, v.frame.name)
+      .setOrigin(v.originX, v.originY).setScale(v.scaleX, v.scaleY).setFlipX(v.flipX)
+      .setRotation(v.rotation).setAlpha(0.38).setDepth(DEPTH.WORM - 1).setTintFill(0xffffff));
+    this.scene.tweens.add({ targets: g, alpha: 0, scale: v.scaleX * 0.8, duration: 260, onComplete: () => g.destroy() });
+  }
+
   /** Импульс от взрыва. */
   applyImpulse(ix, iy) {
     if (!this.alive) return;
@@ -628,7 +662,7 @@ export class Worm {
     if (this.smiley && !grave?.emoji) this._ghost();
     s.fx?.knockout(this.x, this.centerY);
     s.tweens.add({
-      targets: [this.view, this.label, this.bar, this.barBg, this.eye, this.ring].filter(Boolean),
+      targets: [this.view, this.label, this.bar, this.barBg, this.barGhost, this.eye, this.ring].filter(Boolean),
       alpha: 0,
       y: '+=6',
       duration: 400,
@@ -637,6 +671,7 @@ export class Worm {
         this.label.destroy();
         this.bar.destroy();
         this.barBg.destroy();
+        this.barGhost?.destroy();
         if (this.eye) this.eye.destroy();
         this.ring?.destroy();
         this.marker.destroy();
@@ -741,11 +776,20 @@ export class Worm {
       }
     }
 
-    this.label.setPosition(rx, ry - CFG.WORM_H - 20 - lift);
-    this.label.setText(`${this.health}`);
+    // Число здоровья досчитывает вниз, а пока тает — подрагивает
+    const frameDt = Math.min(0.05, (this.scene.game?.loop?.delta ?? 16) / 1000);
+    const drop = this.shownHealth - this.health;
+    if (drop > 0.5) this.shownHealth = Math.max(this.health, this.shownHealth - Math.max(40, drop * 2.5) * frameDt);
+    else this.shownHealth = this.health;
+    const shake = drop > 0.5 ? Math.sin(this.scene.time.now / 28) * 2.5 : 0;
+    this.label.setPosition(rx + shake, ry - CFG.WORM_H - 20 - lift);
+    this.label.setText(`${Math.round(this.shownHealth)}`);
     this.barBg.setPosition(rx, ry - CFG.WORM_H - 7 - lift);
     this.bar.setPosition(rx - HP_BAR_W / 2, ry - CFG.WORM_H - 7 - lift);
     this.bar.width = HP_BAR_W * (this.health / CFG.MAX_HEALTH);
+    this.barGhost.setPosition(rx - HP_BAR_W / 2, ry - CFG.WORM_H - 7 - lift);
+    this.barGhost.width = HP_BAR_W * (this.shownHealth / CFG.MAX_HEALTH);
+    this._trail(rx, ry);
 
     if (this.marker.visible) {
       const bob = Math.sin(this.scene.time.now / 220) * 4;
@@ -780,11 +824,30 @@ Worm.prototype._syncSmiley = function _syncSmiley(rx, ry) {
     && (scene.charging || scene.aim?.mode === 'aim');
   if (this.mood) this._setAnim(this.mood);
   else if (now < (this.hurtUntil ?? 0)) this._setAnim(this.hurtPose);
+  else if (now < (this.startleUntil ?? 0) && this.grounded) this._setAnim('worm_surprised');
+  else if (now < (this.tauntUntil ?? 0) && this.grounded) this._setAnim('worm_win');
   else if (this.hang) this._setAnim(aiming ? 'worm_aim' : 'worm_idle');
   else if (!this.grounded) this._setAnim('worm_fall');
   else if (aiming) this._setAnim('worm_aim');
   else if (this.walking || now < (this.remoteWalkUntil ?? 0)) this._setAnim('worm_walk');
   else this._setAnim('worm_idle');
+
+  // Испуг — подпрыгнул на месте (только картинка)
+  const st = (this.startleUntil ?? 0) - now;
+  if (st > 0 && this.grounded) this.view.y -= Math.sin((1 - st / 650) * Math.PI) * 12;
+  // Взгляд: кто не ходит — следит за летящим снарядом, а в тишине иногда
+  // оглядывается. Только отражение картинки, facing не трогаем
+  if (scene.turn?.activeWorm !== this && this.grounded && !this.hang) {
+    const p = scene.projectiles?.find((x) => x.alive);
+    let look = 0;
+    if (p && Math.abs(p.x - this.x) > 6) look = Math.sign(p.x - this.x);
+    else if (now < (this._glanceUntil ?? 0)) look = -this.facing;
+    else if (now > (this._glanceNext ??= now + 2500 + Math.random() * 4000)) {
+      this._glanceUntil = now + 700 + Math.random() * 500;
+      this._glanceNext = now + 3500 + Math.random() * 5000;
+    }
+    if (look) this.view.setFlipX(look > 0);
+  }
 };
 
 /**

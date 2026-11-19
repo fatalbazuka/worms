@@ -565,9 +565,26 @@ export default class MenuScene extends Phaser.Scene {
   /** Монеты игрока: значок и число. right — прижать к правому краю по x. */
   _coinBadge(x, y, right = false) {
     const n = dailyState().coins;
-    const t = this.add.text(x, y, `${n}`, font(28, 800, '#ffe27a')).setOrigin(right ? 1 : 0, 0.5);
+    // Прибавилось с прошлого раза (бой, задание, подарок) — досчитываем вверх
+    // с россыпью монет: награда видна, а не просто другое число
+    const prev = this.registry.get('coinsShown') ?? n;
+    this.registry.set('coinsShown', n);
+    const t = this.add.text(x, y, `${prev}`, font(28, 800, '#ffe27a')).setOrigin(right ? 1 : 0, 0.5);
     const icon = this.add.image(right ? x - t.width - 24 : x - 26, y, this._coinTexture()).setScale(0.9);
     this.items.push(icon, t);
+    if (n > prev) {
+      const c = { v: prev };
+      this.tweens.add({
+        targets: c, v: n, delay: 350, duration: 900, ease: 'Cubic.easeOut',
+        onUpdate: () => {
+          if (!t.active) return;
+          t.setText(`${Math.round(c.v)}`);
+          if (right) icon.setX(x - t.width - 24);
+        },
+      });
+      this.tweens.add({ targets: [t, icon], scale: '*=1.25', yoyo: true, delay: 350, duration: 160, repeat: 2 });
+      this.time.delayedCall(350, () => { if (t.active) this._coinBurst(icon.x, icon.y); });
+    }
     return { icon, text: t };
   }
 

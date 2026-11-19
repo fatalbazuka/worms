@@ -422,6 +422,12 @@ for (const id of ['bazooka', 'grenade', 'cluster', 'mole', 'banana', 'holy', 'mo
       pad: Boolean(pad?.launch) && pad.x === wx,
       same: second.vx === pad.launch.vx && second.vy === pad.launch.vy && second.uses === 0,
     };
+    // Удар чувствуется: стоп-кадр, здоровье над головой тает, а не прыгает
+    const hitW = s.worms.find((o) => o.alive && o !== w && o !== other) ?? other;
+    hitW.shownHealth = hitW.health;
+    s.explode(hitW.x, hitW.centerY, { radius: 8, damageRadius: 40, damage: 50, knockback: 0, shake: 0 });
+    hitW.update(1 / 60);
+    const juice = { stop: (s._stop ?? 0) > performance.now(), lag: hitW.shownHealth > hitW.health, hp: hitW.health };
     // Укрытия впечатаны в землю: твердь там, где предмет, взрыв её выгрызает
     const st = s.props.stamped[0];
     const solidIn = () => {
@@ -434,7 +440,7 @@ for (const id of ['bazooka', 'grenade', 'cluster', 'mole', 'banana', 'holy', 'mo
     const before = solidIn();
     s.explode(st.x, st.y - st.size * 0.35, { radius: 22, damageRadius: 30, damage: 0, knockback: 0, shake: 0 });
     return {
-      weight, sticky: { stuck, exploded: !ps.alive }, rise: y0 - minY, springFire,
+      weight, sticky: { stuck, exploded: !ps.alive }, rise: y0 - minY, springFire, juice,
       stamped: s.props.stamped.length, before, after: solidIn(), name: st.name,
     };
   });
@@ -442,6 +448,8 @@ for (const id of ['bazooka', 'grenade', 'cluster', 'mole', 'banana', 'holy', 'mo
     r.weight.pierced && r.weight.exploded && r.weight.below, JSON.stringify(r.weight));
   check('липучка: прилипает к поверхности и взрывается по фитилю', r.sticky.stuck && r.sticky.exploded);
   check('батут: подбрасывает вставшего на него бойца', r.rise > 60, `${Math.round(r.rise)} px`);
+  check('сильное попадание: стоп-кадр, здоровье над головой тает постепенно',
+    r.juice.stop && r.juice.lag, JSON.stringify(r.juice));
   check('батут-оружие: боец летит по прицелу, пружина один раз бросает следующего так же',
     r.springFire.flew && r.springFire.pad && r.springFire.same, JSON.stringify(r.springFire));
   check('укрытия впечатаны в землю, взрыв выгрызает из них кусок',
