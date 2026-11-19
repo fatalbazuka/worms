@@ -523,6 +523,27 @@ check('«твой ход» бот не пишет', !calls('sendMessage').some((
     calls('setWebhook').at(-1)?.params.allowed_updates?.includes('inline_query'));
 }
 
+// Турнир недели: заводится сам, один раз за неделю, старт в субботу в 19:00 МСК; чемпиону — коробки
+{
+  const realNow = clock;
+  // Среда 12:00 МСК
+  clock = Date.UTC(2026, 10, 18, 9, 0);
+  const t1 = app.weekly.tick();
+  const t2 = app.weekly.tick();
+  const st = t1 ? new Intl.DateTimeFormat('en-US', { timeZone: 'Europe/Moscow', weekday: 'short', hour: '2-digit', hourCycle: 'h23' }).format(new Date(t1.starts_at)) : '';
+  // Воскресенье: старт этой недели прошёл — ничего не заводим
+  clock = Date.UTC(2026, 10, 22, 9, 0);
+  const t3 = app.weekly.tick();
+  const boxCount = () => db.prepare("select coalesce(sum(boxes), 0) as n from bonus where player_id = 'tg1'").get().n;
+  const before = boxCount();
+  app.weekly.onFinish({ name: t1?.name }, 'tg1');
+  const boxes = boxCount() - before;
+  clock = realNow;
+  check('турнир недели: заводится раз в неделю на субботу 19:00, чемпиону 3 коробки',
+    t1?.name.startsWith('Турнир недели') && t1.size === 16 && t1.fee === 0 && st === 'Sat, 19' && !t2 && !t3 && boxes === 3,
+    `${t1?.name} ${st} ${Boolean(t2)} ${Boolean(t3)} коробок ${boxes}`);
+}
+
 // Сторис и клипы: картинка ложится на сервер и отдаётся по ссылке; чужое — нет
 {
   const T = (await call('POST', '/api/telegram', { initData: await signed({ id: 4242, first_name: 'Сторис' }) })).data?.token;

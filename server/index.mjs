@@ -66,6 +66,7 @@ import { createDailyTower } from './dailytower.mjs';
 import { createSaves } from './saves.mjs';
 import { createAdmin } from './admin.mjs';
 import { createMedia } from './media.mjs';
+import { createWeekly } from './weekly.mjs';
 
 export function createApp({
   db, botToken = '', trustProxy = false, staticDir = null, now = () => Date.now(),
@@ -85,13 +86,16 @@ export function createApp({
     notify: (...a) => bot?.notify(...a),
     notifyAdmins: (...a) => bot?.notifyAdmins(...a),
     refund: (chargeId) => bot?.refund(chargeId) ?? false,
+    onFinish: (...a) => weekly?.onFinish(...a),
   });
+  let weekly = null;
   const analytics = createAnalytics({ db, now, tz });
   const shop = createShop({ db, now });
   const saves = createSaves({ db, now });
   const daily = createDailyTower({ db, players, dayOf: () => analytics.dayOf(), now });
   const admin = createAdmin({ db, players, analytics, tournaments, shop, saves, api, now, log });
   bot = createBot({ db, api, players, tournaments, analytics, admin, adminIds: admins, publicUrl, tz, now, log, appName });
+  weekly = createWeekly({ db, tournaments, shop, notify: (...a) => bot.notify(...a), tz, now, log });
   const hookSecret = botToken ? webhookSecret(botToken, secret) : '';
 
   const q = {
@@ -454,6 +458,7 @@ export function createApp({
   }
 
   handle.tournaments = tournaments;
+  handle.weekly = weekly;
   handle.analytics = analytics;
   handle.bot = bot;
   handle.players = players;
@@ -497,6 +502,10 @@ if (isMain) {
   // Турниры живут по часам: автостарт и матчи, вышедшие за окно
   const ticker = setInterval(() => {
     try { handle.tournaments.tick(); } catch (e) { console.error('[tournaments] tick', e); }
+    // Турнир недели заводим, только когда бот настроен: иначе анонс уйдёт в никуда
+    if (handle.bot.username) {
+      try { handle.weekly.tick(); } catch (e) { console.error('[weekly] tick', e); }
+    }
     handle.bot.remind().catch((e) => console.error('[bot] напоминания', e));
   }, 30_000);
   const stop = () => {

@@ -811,5 +811,7 @@ export const EN = {
  "клип в сторис — осталось опубликовать": "clip ready for your story — just publish it",
  "клип сохранён — выкладывай в TikTok, Reels или Shorts": "clip saved — post it to TikTok, Reels or Shorts",
  "не вышло загрузить клип — попробуй ещё раз": "couldn't upload the clip — try again",
- "🎬 Клип": "🎬 Clip"
+ "🎬 Клип": "🎬 Clip",
+ "добито: {0}": "knockouts: {0}",
+ " · добито: {0}": " · knockouts: {0}"
 };
