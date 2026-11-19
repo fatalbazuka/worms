@@ -818,7 +818,6 @@ export const EN = {
  "коробки и монеты по коду": "boxes and coins by code",
  "Промокод": "Promo code",
  "Код": "Code",
- "например, SKIPPER77": "e.g. SKIPPER77",
  "Активировать": "Activate",
  "Один код — один раз на игрока.": "One code — once per player.",
  "код — от 3 до 32 букв и цифр": "code — 3 to 32 letters and digits",
