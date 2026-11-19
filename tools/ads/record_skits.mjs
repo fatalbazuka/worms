@@ -54,6 +54,7 @@ async function skit(name) {
     const s = g.scene.getScene('Game');
     s.hud.setHelp?.(false);
     const { WEAPONS } = await import('/src/weapons/index.js');
+    window.__wb = await import('/src/weapons/index.js');
     const { Bot } = await import('/src/ai/Bot.js');
     const { CFG } = await import('/src/config.js');
     const bot = new Bot(s, 'sniper');
@@ -123,18 +124,23 @@ async function skit(name) {
         return null;
       },
       /** Камера стоит: кадр по центру точек, с полями. */
-      frame(pts, pad = 95, minW = 270) {
+      frame(pts, pad = 60, minW = 220) {
         window.__sceneX = pts[0][0];
         const xs = pts.map((p) => p[0]), ys = pts.map((p) => p[1]);
         const cx = (Math.min(...xs) + Math.max(...xs)) / 2;
         const cy = (Math.min(...ys) + Math.max(...ys)) / 2;
         const needW = Math.max(minW, Math.max(...xs) - Math.min(...xs) + pad * 2);
         const needH = Math.max(...ys) - Math.min(...ys) + pad * 2.4;
-        const z = Math.min(s.rig.W / needW, s.rig.H / needH);
-        s.rig.setZoom(z);
+        // Ближе, чем разрешает игра (1.8×), и без упора в верх мира: это клип
+        const z = Math.min(s.rig.W / needW, s.rig.H / needH, 3.2);
+        s.rig.zoom = z; s.rig.worldCam.setZoom(z);
         s.rig.manual = true; s.rig.idle = -1e12;
-        s.rig.setViewLeft(cx - s.rig.visibleW / 2);
-        s.rig.setViewTop(s.rig.clampTop ? s.rig.clampTop(cy - s.rig.visibleH * 0.52) : cy - s.rig.visibleH * 0.52);
+        s.rig.worldCam.scrollX = cx - s.rig.visibleW / 2 + (s.rig.visibleW - s.rig.W) / 2;
+        s.rig.setViewTop(cy - s.rig.visibleH * 0.5);
+        // Интерфейс боя в клипе не нужен: только бойцы, снаряды и пузыри
+        s.rig.uiCam.setVisible(false);
+        // Камера наша: игра каждый кадр возвращала бы её в свои рамки
+        s.rig.update = () => {};
       },
       hold() { s.rig.manual = true; s.rig.idle = -1e12; },
       emote(w, id) {
@@ -293,9 +299,9 @@ const SKITS = {
     await step(40);
     await ev(() => { const h = window.__h; const b = window.__tri.find((w) => w.alive); if (b) h.emote(b, 'wow'); });
     await untilBoom(220);
-    await step(80);
+    await step(60);
     await ev(() => { const h = window.__h; h.emote(h.s.worms.find((w) => w.team === 0 && w.alive), 'laugh'); });
-    await step(70);
+    await step(50);
   },
 
   // Синий уходит, а магнитная мина ползёт за ним
@@ -312,9 +318,9 @@ const SKITS = {
       window.__p = p;
     });
     await step(20);
-    await ev(() => { const h = window.__h; h.weapon('mine'); h.aim(150, -260); });
+    await ev(() => { const h = window.__h; h.weapon('mine'); h.aim(85, -240); });
     await step(30);
-    await ev(() => window.__h.fire(150, -260));
+    await ev(() => window.__h.fire(85, -240));
     await untilLanded(90);
     await ev(() => window.__h.freeze());
     await ev(() => { const h = window.__h; h.emote(h.foes()[0], 'wow'); });
@@ -326,7 +332,7 @@ const SKITS = {
         if (!b) return true;
         if (b.x < p.x + p.len - 20 && b.grounded) {
           b.facing = (k % 50) < 40 ? 1 : -1;     // иногда оглядывается
-          if (b.facing === 1) { b.x += 1.1; b.y = h.T.surfaceYAt(b.x, b.y - 30) ?? b.y; }
+          if (b.facing === 1) { b.x += 1.5; b.y = h.T.surfaceYAt(b.x, b.y - 30) ?? b.y; }
           b.remoteWalkUntil = h.s.time.now + 120;
         }
         if (k === 60) h.emote(b, 'cry');
@@ -350,7 +356,7 @@ const SKITS = {
       h.put(b, ...h.at(p, 0.9), -1);
       window.__span = p.len;
       h.foes().slice(1).forEach(h.park); h.mates().forEach(h.park);
-      h.frame([[a.x, a.y - 240], [b.x + 120, b.y]]);
+      h.frame([[a.x, a.y - 200], [b.x + 40, b.y]]);
       window.__b = b;
     });
     await step(20);
@@ -383,7 +389,15 @@ const SKITS = {
     await step(25);
     await ev(() => { const h = window.__h; h.weapon('bat'); const a = h.me(); h.aim(a.facing * 500, -300); });
     await step(20);
-    await ev(() => { const h = window.__h; const a = h.me(); h.fire(a.facing * 500, -300); });
+    const bat = await ev(() => {
+      const h = window.__h; const a = h.me(), b = window.__b;
+      const before = { ok: h.s.canAct(), st: h.s.turn.state, w: h.s.turn.weapon?.id, dx: Math.round(b.x - a.x), dy: Math.round(b.y - a.y), hp: b.health };
+      // Мимо проверок хода — нам нужен только удар
+      const { WEAPONS_BY_ID: W } = window.__wb;
+      W.bat.fire(h.s, a.x, a.centerY, a.facing * 500, -300, a);
+      return { ...before, after: h.s.turn.state, vx: Math.round(b.vx), hp2: b.health };
+    });
+    console.log('flyby bat', JSON.stringify(bat));
     await step(110);
     await ev(() => { const h = window.__h; h.emote(h.me(), 'laugh'); });
     await step(60);
