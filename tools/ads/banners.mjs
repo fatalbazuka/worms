@@ -73,49 +73,69 @@ for (const [theme, path] of Object.entries(frames)) {
       const img = new Image(); img.src = data; await img.decode();
       const c = document.createElement('canvas'); c.width = W; c.height = H;
       const g = c.getContext('2d');
-      // Кадр «обложкой»: в квадрате и 16:9 — середина башни, где действие
-      const k = Math.max(W / img.width, H / img.height);
-      const w = img.width * k, h = img.height * k;
-      const oy = H < img.height * k ? (H - h) * 0.42 : (H - h) / 2;
-      g.drawImage(img, (W - w) / 2, oy, w, h);
-      const wide = W > H;
       const fam = '"Worms UI", system-ui, sans-serif';
-      // Затемнение под текст
-      const grd = wide ? g.createLinearGradient(0, 0, W * 0.75, 0) : g.createLinearGradient(0, H * 0.45, 0, H);
-      grd.addColorStop(0, wide ? 'rgba(8,10,24,0.92)' : 'rgba(8,10,24,0)');
-      grd.addColorStop(wide ? 0.6 : 0.5, 'rgba(8,10,24,0.82)');
-      grd.addColorStop(1, wide ? 'rgba(8,10,24,0)' : 'rgba(8,10,24,0.95)');
-      g.fillStyle = grd;
-      if (wide) g.fillRect(0, 0, W * 0.75, H); else g.fillRect(0, H * 0.45, W, H * 0.55);
-      const top = g.createLinearGradient(0, 0, 0, 200);
-      top.addColorStop(0, 'rgba(8,10,24,0.85)'); top.addColorStop(1, 'rgba(8,10,24,0)');
-      g.fillStyle = top; g.fillRect(0, 0, W, 200);
       g.lineJoin = 'round'; g.textBaseline = 'middle';
-      const text = (t, x, y, size, color, align = 'center', maxW = W - 100, stroke = '#141821') => {
-        let s = size; g.textAlign = align;
-        g.font = `800 ${s}px ${fam}`;
-        while (g.measureText(t).width > maxW && s > 24) { s -= 2; g.font = `800 ${s}px ${fam}`; }
-        g.lineWidth = s / 4.5; g.strokeStyle = stroke; g.strokeText(t, x, y);
-        g.fillStyle = color; g.fillText(t, x, y);
+      const fit = (t, size, maxW) => {
+        let sz = size; g.font = `800 ${sz}px ${fam}`;
+        while (g.measureText(t).width > maxW && sz > 24) { sz -= 2; g.font = `800 ${sz}px ${fam}`; }
+        return sz;
       };
-      // Логотип сверху
-      text('SMILES', wide ? 60 : W / 2, wide ? 70 : 90, wide ? 64 : 92, '#ffd166', wide ? 'left' : 'center');
-      // Заголовок, подзаголовок, кнопка
+      const text = (t, x, y, size, color, align = 'center', maxW = W - 100, stroke = '#141821') => {
+        const sz = fit(t, size, maxW); g.textAlign = align;
+        g.lineWidth = sz / 4.5; g.strokeStyle = stroke; g.strokeText(t, x, y);
+        g.fillStyle = color; g.fillText(t, x, y);
+        return sz;
+      };
+      // Несколько строк по ширине: слова переносятся, кегль общий
+      const para = (t, x, y, size, color, maxW, lh = 1.15) => {
+        g.font = `800 ${size}px ${fam}`;
+        const words = t.split(' ');
+        const rows = [];
+        let row = '';
+        for (const w of words) {
+          const test = row ? `${row} ${w}` : w;
+          if (g.measureText(test).width > maxW && row) { rows.push(row); row = w; } else row = test;
+        }
+        if (row) rows.push(row);
+        rows.forEach((r, k) => text(r, x, y + k * size * lh, size, color, 'left', maxW));
+        return y + rows.length * size * lh;
+      };
       const pill = (x, y, bw, bh, label) => {
         g.fillStyle = '#e8463c'; g.beginPath(); g.roundRect(x, y, bw, bh, bh / 2.6); g.fill();
         g.lineWidth = 8; g.strokeStyle = '#141821'; g.stroke();
-        text(label, x + bw / 2, y + bh / 2, bh * 0.42, '#ffffff', 'center', bw - 40, '#7a1712');
+        text(label, x + bw / 2, y + bh / 2, bh * 0.4, '#ffffff', 'center', bw - 40, '#7a1712');
       };
-      if (wide) {
-        text(lines[0], 60, H * 0.45, 76, '#ffd166', 'left', W * 0.6);
-        text(lines[1], 60, H * 0.45 + 84, 40, '#ffffff', 'left', W * 0.6);
-        pill(60, H - 170, 520, 104, `${cta} · @Fatalgame`);
+      if (H > W) {
+        // Сторис: кадр целиком, текст наверху (там полоса интерфейса игры),
+        // кнопка внизу — поверх джойстиков
+        g.drawImage(img, 0, 0, W, H);
+        const top = g.createLinearGradient(0, 0, 0, 640);
+        top.addColorStop(0, 'rgba(8,10,24,0.95)'); top.addColorStop(0.7, 'rgba(8,10,24,0.75)'); top.addColorStop(1, 'rgba(8,10,24,0)');
+        g.fillStyle = top; g.fillRect(0, 0, W, 640);
+        const bot = g.createLinearGradient(0, H - 420, 0, H);
+        bot.addColorStop(0, 'rgba(8,10,24,0)'); bot.addColorStop(1, 'rgba(8,10,24,0.92)');
+        g.fillStyle = bot; g.fillRect(0, H - 420, W, 420);
+        text('SMILES', W / 2, 120, 96, '#ffd166');
+        text(lines[0], W / 2, 270, 96, '#ffffff');
+        text(lines[1], W / 2, 380, 54, '#ffd166');
+        pill((W - 760) / 2, H - 230, 760, 140, `${cta} · @Fatalgame`);
       } else {
-        const base = H - (H > 1200 ? 520 : 400);
-        text(lines[0], W / 2, base, H > 1200 ? 96 : 84, '#ffd166');
-        text(lines[1], W / 2, base + (H > 1200 ? 110 : 92), H > 1200 ? 52 : 44, '#ffffff');
-        const bw = 720, bh = H > 1200 ? 140 : 118;
-        pill((W - bw) / 2, H - (H > 1200 ? 250 : 190), bw, bh, `${cta} · @Fatalgame`);
+        // 1:1 и 16:9: фон кампании, кадр «телефоном» справа, текст слева
+        const bg = g.createLinearGradient(0, 0, W, H);
+        bg.addColorStop(0, '#3b2a7a'); bg.addColorStop(0.55, '#1b2350'); bg.addColorStop(1, '#0d1326');
+        g.fillStyle = bg; g.fillRect(0, 0, W, H);
+        const ph = H - (W > H ? 70 : 90), pw = Math.round(ph * img.width / img.height);
+        const px = W - pw - (W > H ? 70 : 50), py = (H - ph) / 2, r = 34;
+        g.save(); g.shadowColor = 'rgba(0,0,0,0.6)'; g.shadowBlur = 40; g.shadowOffsetY = 14;
+        g.beginPath(); g.roundRect(px, py, pw, ph, r); g.fillStyle = '#000'; g.fill(); g.restore();
+        g.save(); g.beginPath(); g.roundRect(px, py, pw, ph, r); g.clip(); g.drawImage(img, px, py, pw, ph); g.restore();
+        g.lineWidth = 6; g.strokeStyle = 'rgba(255,255,255,0.2)'; g.beginPath(); g.roundRect(px, py, pw, ph, r); g.stroke();
+        const tx = 60, tw = px - tx - 50;
+        const big = W > H ? 74 : 70;
+        text('SMILES', tx, W > H ? 90 : 110, W > H ? 64 : 76, '#ffd166', 'left', tw);
+        let y = para(lines[0], tx, H * (W > H ? 0.36 : 0.34), big, '#ffffff', tw);
+        y = para(lines[1], tx, y + 20, Math.round(big * 0.55), '#ffd166', tw, 1.25);
+        pill(tx, H - (W > H ? 170 : 200), Math.min(tw, 520), W > H ? 100 : 110, `${cta} · @Fatalgame`);
       }
       return c.toDataURL('image/jpeg', 0.9);
     }, [src, W, H, TEXT[theme], TEXT.cta]);

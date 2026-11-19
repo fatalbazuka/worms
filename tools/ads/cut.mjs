@@ -15,7 +15,7 @@
 import { chromium } from 'playwright';
 import { readFileSync, writeFileSync, mkdirSync, rmSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 
 const RAW = process.argv[2];
 const OUT = process.argv[3] || 'docs/ads';
@@ -67,7 +67,8 @@ for (let i = 0; i < shots.length; i++) {
   if (!hits.length && !decisive) continue;
   const hitT = decisive ? decisiveAt : hits[0].t;
   const from = Math.max(0, s.t - 350);
-  const to = Math.min(next - 100, hitT + (decisive ? 2600 : 900));
+  // Решающий — до экрана «Победа»: замедление игра делает сама
+  const to = Math.min(next - 100, hitT + (decisive ? 1100 : 900));
   // Долгий полёт — режем середину: начало выстрела и подлёт к цели
   const seg = { weapon: s.weapon, decisive, parts: [] };
   if (hitT - from > 2600 && !decisive) {
@@ -137,7 +138,7 @@ async function png(name, spec) {
       const bw = 760, bh = 150, bx = (W - bw) / 2, by = 1500;
       g.fillStyle = '#e8463c'; g.beginPath(); g.roundRect(bx, by, bw, bh, 44); g.fill();
       g.lineWidth = 10; g.strokeStyle = '#141821'; g.stroke();
-      text('@Fatalgame', W / 2, by + bh / 2, 76, '#ffffff', '#7a1712');
+      text('@Fatalgame', by + bh / 2, 76, '#ffffff', '#7a1712');
     }
     return c.toDataURL('image/png');
   }, spec);
@@ -187,7 +188,8 @@ function clip(name, a, b, overlay, fadeIn = false) {
 /** Финальная плашка: лёгкий наезд, 2.4 с. */
 function endcard(name) {
   const out = join(TMP, `${name}.mp4`);
-  ff(['-loop', '1', '-t', '2.4', '-i', endPng,
+  // Одна картинка на входе: zoompan сам растягивает её на d кадров
+  ff(['-i', endPng,
     '-vf', "zoompan=z='min(1+on*0.0012,1.08)':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=72:s=1080x1920:fps=30,format=yuv420p",
     ...enc, out]);
   return out;
@@ -195,7 +197,7 @@ function endcard(name) {
 
 function concat(parts, out) {
   const list = join(TMP, `list-${Math.random().toString(36).slice(2)}.txt`);
-  writeFileSync(list, parts.map((p) => `file '${p.replace(/'/g, "'\\''")}'`).join('\n'));
+  writeFileSync(list, parts.map((p) => `file '${resolve(p)}'`).join('\n'));
   ff(['-f', 'concat', '-safe', '0', '-i', list, ...enc, '-movflags', '+faststart', out]);
 }
 
