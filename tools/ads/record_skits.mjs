@@ -81,11 +81,14 @@ async function skit(name) {
       /** Ровная площадка: длина len, сверху свободно на 90 px. */
       // Самая длинная ровная площадка не короче min (до want): {x, y, len}
       flat(want, min = 150) {
+        return h.flatIn(want, min, 520) ?? h.flatIn(want, min, 0) ?? h.flatIn(want, 110, 0);
+      },
+      flatIn(want, min, top) {
         let best = null;
         for (let x = 60; x < T.width - 60; x += 6) {
           const y = T.surfaceYAt(x, 60);
           // Не у самого верха мира: иначе камера упрётся и сцена уедет к краю кадра
-          if (y === null || y > T.height - 200 || y < 520) continue;
+          if (y === null || y > T.height - 200 || y < top) continue;
           let len = 0;
           for (let d = 0; d <= want && x + d < T.width - 40; d += 6) {
             const yy = T.surfaceYAt(x + d, y - 60);
