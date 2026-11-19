@@ -27,7 +27,7 @@ const MODES = new Set(['quick', 'campaign', 'ascent', 'daily', 'challenge', 'onl
 export const STEPS = {
   first_shot: 'выстрелил', first_hook: 'пустил трос', tutorial_done: 'прошёл обучение',
   first_win: 'победил', shop_open: 'открыл магазин', buy_click: 'нажал «купить»',
-  invite: 'позвал друга',
+  invite: 'позвал друга', story: 'выложил сторис', clip: 'сохранил клип',
 };
 
 export function createAnalytics({ db, now = () => Date.now(), tz = 'Europe/Moscow' }) {

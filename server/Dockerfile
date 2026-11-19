@@ -4,6 +4,8 @@
 FROM node:22-alpine
 
 WORKDIR /app
+# ffmpeg — перекодировать клипы WebM в MP4: Telegram берёт в сторис только MP4
+RUN apk add --no-cache ffmpeg
 COPY server ./server
 
 ENV NODE_ENV=production \

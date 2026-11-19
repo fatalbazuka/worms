@@ -26,8 +26,9 @@ import { isCasualRoom, isTournamentRoom } from '../net/rooms.js';
 import { makeTransport } from '../net/connect.js';
 import {
   startRoom, forgetStartRoom, shareRoom, haptic, inviteLink, setBattle,
-  refLink, shareLink,
+  refLink, shareLink, telegramConfig,
 } from '../platform/telegram.js';
+import { canStory, snapshot as frameShot, fighterFrame, drawStory, shareStory } from '../platform/story.js';
 import { HOTSEAT, towerMatch, challengeMatch, ascentMatch } from '../core/match.js';
 import { ASCENT } from '../campaign/ascent.js';
 import { markAscentDone } from '../platform/ascent.js';
@@ -1586,6 +1587,36 @@ export default class GameScene extends Phaser.Scene {
     if (foesHit >= 3) this.fx.callout(x, y - 50, 'Тройной!', '#ff8ad4', 40);
     else if (foesHit === 2) this.fx.callout(x, y - 50, 'Дуплет!', '#8ad4ff', 38);
     else if (dmg >= 45) this.fx.callout(x, y - 50, 'Бабах!', '#ffd166', 36);
+    if (dmg >= 45 || foesHit >= 2) this.time.delayedCall(120, () => this._grabHighlight(false));
+  }
+
+  /** Запомнить кадр боя для сторис. Решающий удар важнее любого «Бабах!». */
+  _grabHighlight(decisive) {
+    if (!canStory() || (this._highlight && !decisive)) return;
+    frameShot(this).then((img) => { if (img && (decisive || !this._highlight)) this._highlight = img; });
+  }
+
+  /** Карточка победы — в сторис Telegram, со ссылкой-рефералкой. */
+  async _shareStory(sub) {
+    const mine = this.worms.find((w) => w.team === this.myTeamIndex) ?? this.worms[0];
+    const st = this.battleStats;
+    const lines = [];
+    if (this.match.mode === 'daily') lines.push(`Башня дня взята за ${this.myTurns} ${this.myTurns < 5 ? 'хода' : 'ходов'}`);
+    else lines.push(`Урон за бой: ${st.damage}${st.kills ? ` · добито: ${st.kills}` : ''}`);
+    lines.push(`Ходов: ${this.turn.turnNumber}`);
+    const bot = telegramConfig().bot;
+    const card = drawStory({
+      shot: this._highlight ?? null,
+      fighter: mine ? fighterFrame(this, mine.sheet, 13) : null,
+      title: 'ПОБЕДА!',
+      lines,
+      cta: 'Сыграй со мной!',
+      handle: bot ? `@${bot}` : '',
+    });
+    sub?.setText('готовлю сторис…');
+    const r = await shareStory(card, { text: 'Победа в Smiles 💥 Сыграй со мной!', button: 'Играть' });
+    if (r === 'upload') sub?.setText('не вышло загрузить картинку — попробуй ещё раз');
+    else if (r === 'ok') sub?.setText('сторис готова — осталось опубликовать');
   }
 
   /**
@@ -1762,6 +1793,8 @@ export default class GameScene extends Phaser.Scene {
     if (decisive) {
       this.rig.punch(0.14, 900);
       this.fx.callout(worm.x, worm.centerY - 70, 'Решающий!', '#ffd166', 44);
+      // Лучший кадр боя — для сторис: чуть позже, чтобы выкрик успел вырасти
+      this.time.delayedCall(140, () => this._grabHighlight(true));
     }
     if (this._myStrike() && worm.team !== this.myTeamIndex) this.battleStats.kills++;
     this.fx.explosion(worm.x, worm.centerY, 26);
@@ -1999,9 +2032,14 @@ export default class GameScene extends Phaser.Scene {
       // Позвать друга — прямо отсюда: после боя хочется, а до вкладки
       // «Задания» никто не доходит. По ссылке — обоим по коробке
       const link = refLink();
+      const won = winner >= 0 && winner === mine;
+      // Победа — в сторис: самая заметная реклама, ссылка ведёт по рефералке
+      const story = won && canStory() && this.match.mode !== 'hotseat';
+      if (story) {
+        this.gameOverUi.push(this._overButton(-140, 'В сторис', () => this._shareStory(sub), 'story', 92));
+      }
       if (link && this.match.mode !== 'hotseat' && solo) {
-        const won = winner >= 0 && winner === mine;
-        this.gameOverUi.push(this._overButton(0, 'Позвать друга', () => {
+        this.gameOverUi.push(this._overButton(story ? 140 : 0, 'Позвать друга', () => {
           trackStep('invite');
           shareLink(link, won
             ? 'Только что победил в «Башне» 💥 Залетай — по этой ссылке нам обоим по коробке со скином!'

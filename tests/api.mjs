@@ -42,8 +42,11 @@ const BOT = '123456:test-token';
 const ADMIN = 777;
 let clock = Date.now();
 const db = openDb(':memory:');
+const { mkdtempSync } = await import('node:fs');
+const { tmpdir } = await import('node:os');
+const mediaDir = mkdtempSync(`${tmpdir()}/smiles-media-`);
 const app = createApp({
-  db, botToken: BOT, adminIds: [ADMIN], publicUrl: 'https://example.test/worms',
+  db, botToken: BOT, mediaDir, adminIds: [ADMIN], publicUrl: 'https://example.test/worms',
   telegramApiBase: `http://127.0.0.1:${fakeTg.address().port}`, now: () => clock,
   log: { warn() {}, log() {}, error: console.error },
 });
@@ -499,6 +502,21 @@ check('«твой ход» бот не пишет', !calls('sendMessage').some((
   const noAuth = await fetch(`${base}/api/admin/backup`);
   check('админка: копия базы скачивается файлом SQLite, без входа — нет',
     res.status === 200 && buf.subarray(0, 15).toString() === 'SQLite format 3' && noAuth.status === 401, `${res.status} ${buf.length} байт`);
+}
+
+// Сторис и клипы: картинка ложится на сервер и отдаётся по ссылке; чужое — нет
+{
+  const T = (await call('POST', '/api/telegram', { initData: await signed({ id: 4242, first_name: 'Сторис' }) })).data?.token;
+  const jpg = Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xe0]), Buffer.alloc(400, 7)]);
+  const up = await fetch(`${base}/api/media`, { method: 'POST', headers: { authorization: `Bearer ${T}`, 'content-type': 'image/jpeg' }, body: jpg });
+  const r = await up.json();
+  const got = r.path ? await fetch(base + r.path) : null;
+  const body = got ? Buffer.from(await got.arrayBuffer()) : Buffer.alloc(0);
+  const html = await fetch(`${base}/api/media`, { method: 'POST', headers: { authorization: `Bearer ${T}`, 'content-type': 'text/html' }, body: '<b>x</b>'.repeat(20) });
+  const anon = await fetch(`${base}/api/media`, { method: 'POST', headers: { 'content-type': 'image/jpeg' }, body: jpg });
+  check('медиа: картинка для сторис загружается и отдаётся, HTML и без входа — нет',
+    up.status === 200 && got?.status === 200 && got.headers.get('content-type') === 'image/jpeg' && body.equals(jpg)
+      && html.status === 415 && anon.status === 401, `${up.status} ${JSON.stringify(r)} ${got?.status} ${html.status} ${anon.status}`);
 }
 
 server.close();
