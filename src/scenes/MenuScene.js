@@ -103,6 +103,7 @@ export default class MenuScene extends Phaser.Scene {
     this.events.on('addedtoscene', assignCamera);
     this.events.once('shutdown', () => this.events.off('addedtoscene', assignCamera));
     this._backdrop();
+    this._initScroll();
     // Коробки за миссии, пройденные раньше, чем появились скины
     syncCampaignBoxes();
     this.showRoot();
@@ -180,7 +181,44 @@ export default class MenuScene extends Phaser.Scene {
     // экран в приложении; раньше блок висел посередине, а сверху и снизу
     // зияла пустота. В высоком ландшафте (планшет) — по центру, как было.
     this.oy = this.portrait ? 56 : Math.max(0, Math.round((this.H - CFG.VIEW_BASE) / 2));
+    this.scrollY = 0;
     this.uiCam.scrollY = -this.oy;
+  }
+
+  /**
+   * Прокрутка раздела пальцем и колёсиком — там, где он длиннее экрана
+   * (скины на телефоне). Раздел сам говорит, докуда он доходит
+   * (_scrollable); «назад» прибита к экрану и не уезжает.
+   * Протянул — это прокрутка, а не нажатие: кнопка под пальцем не сработает.
+   */
+  _initScroll() {
+    this.scrollMax = 0;
+    this.scrollY = 0;
+    let start = null;
+    this.input.on('pointerdown', (p) => {
+      this._dragging = false;
+      start = this.scrollMax > 0 ? { y: p.y, s: this.scrollY } : null;
+    });
+    this.input.on('pointermove', (p) => {
+      if (!start || !p.isDown) return;
+      const dy = p.y - start.y;
+      if (!this._dragging && Math.abs(dy) < 10) return;
+      this._dragging = true;
+      this._setScroll(start.s - dy);
+    });
+    this.input.on('pointerup', () => { start = null; });
+    this.input.on('wheel', (p, objs, dx, dy) => { if (this.scrollMax > 0) this._setScroll(this.scrollY + dy); });
+  }
+
+  _setScroll(v) {
+    this.scrollY = Math.max(0, Math.min(this.scrollMax, v));
+    this.uiCam.scrollY = -this.oy + this.scrollY;
+  }
+
+  /** Раздел доходит до y (в своих координатах): если ниже экрана — можно крутить. */
+  _scrollable(bottom) {
+    this.scrollMax = Math.max(0, Math.round(bottom - this.bottomY(96)));
+    this._setScroll(this.scrollY);
   }
 
   /** y в координатах раздела для точки на расстоянии d от низа экрана. */
@@ -229,6 +267,9 @@ export default class MenuScene extends Phaser.Scene {
 
   _clear() {
     for (const o of this.items) o.destroy();
+    // Новый раздел — снова сверху и без прокрутки, пока он сам не попросит
+    this.scrollMax = 0;
+    this._setScroll?.(0);
     this.items = [];
     this.buttons = {};
     this.buttonTexts = {};
@@ -287,7 +328,7 @@ export default class MenuScene extends Phaser.Scene {
       img.on('pointerdown', () => { img.setScale(0.97).setTint(0xcccccc); haptic('tap'); });
       const release = () => img.setScale(1).clearTint();
       img.on('pointerout', release);
-      img.on('pointerup', () => { release(); onTap(); });
+      img.on('pointerup', () => { release(); if (!this._dragging) onTap(); });
     }
     // Координаты для тестов — экранные (раздел прокручен на oy)
     this.buttons[key] = { x, y: y + this.oy, w, h, enabled };
@@ -318,7 +359,11 @@ export default class MenuScene extends Phaser.Scene {
   }
 
   _back(onTap = () => this.showRoot()) {
+    const n = this.items.length;
     this._button('back', 108, this.bottomY(52), '← назад', '', onTap, { w: 180, h: 60, titleSize: 22 });
+    // Не прокручивается вместе с разделом: без прокрутки камеры (oy) — на
+    // своё экранное место, и поверх содержимого
+    for (const o of this.items.slice(n)) o.setScrollFactor(0).setY(o.y + this.oy).setDepth(50);
   }
 
   /**
@@ -337,7 +382,8 @@ export default class MenuScene extends Phaser.Scene {
   }
 
   /** y от верха экрана в координатах раздела (сам раздел сдвинут на oy). */
-  topY(d) { return d - this.oy; }
+  // С учётом прокрутки: окно поверх раздела встаёт по экрану, а не по разделу
+  topY(d) { return d - this.oy + (this.scrollY ?? 0); }
 
   /** Маленькая квадратная кнопка со значком. */
   _iconButton(key, x, y, icon, onTap, size = 52) {
@@ -826,6 +872,9 @@ export default class MenuScene extends Phaser.Scene {
    * кто именно: открытие коробки остаётся сюрпризом.
    */
   showSkins() {
+    // Перерисовка того же раздела (надел скин, закрыл окно) — место прокрутки
+    // сохраняем, а не прыгаем наверх
+    const keep = this.section === this.showSkins ? this.scrollY : 0;
     this.section = this.showSkins;
     this._clear();
     const st = skinState();
@@ -884,8 +933,8 @@ export default class MenuScene extends Phaser.Scene {
         owned ? (on ? 'надет' : skin.name) : `${skinPrice(skin.id)} 🪙`,
         font(17, 800, on ? '#2a1c06' : rar.color)).setOrigin(0.5));
       plate.setInteractive({ useHandCursor: true });
-      if (owned) plate.on('pointerup', () => { haptic('select'); equipSkin(skin.id); this.showSkins(); });
-      else plate.on('pointerup', () => { haptic('select'); this._skinOffer(skin); });
+      if (owned) plate.on('pointerup', () => { if (this._dragging) return; haptic('select'); equipSkin(skin.id); this.showSkins(); });
+      else plate.on('pointerup', () => { if (this._dragging) return; haptic('select'); this._skinOffer(skin); });
       this.buttons[`skin-${skin.id}`] = { x, y: y + this.oy, w: cw - 10, h: ch, enabled: true };
     });
 
@@ -900,14 +949,17 @@ export default class MenuScene extends Phaser.Scene {
     this.items.push(this.add.text(cx, sy + 148,
       'монеты — за бои, задания дня, серию дней и первое прохождение кампании',
       font(16, 700, UI.textDim)).setOrigin(0.5, 0).setAlign('center').setWordWrapWidth(W - 48));
+    // Ниже экрана на телефоне — крутится пальцем
     this._back();
+    this._scrollable(sy + 210);
+    this._setScroll(keep);
   }
 
   /** Ввести промокод: сервер проверяет, подарок сразу в коробки и кошелёк. */
   _askPromo() {
     let got = null;
     askText({
-      title: 'Промокод', label: 'Код', placeholder: 'например, SKIPPER77',
+      title: 'Промокод', label: 'Код',
       maxLength: 32, upper: true, okText: 'Активировать',
       note: 'Один код — один раз на игрока.',
       validate: async (v) => {
@@ -932,6 +984,7 @@ export default class MenuScene extends Phaser.Scene {
    * Силуэт остаётся силуэтом — сюрприз у коробки не отнимаем.
    */
   _skinOffer(skin) {
+    this.scrollMax = 0;          // окно поверх — раздел под ним не крутится
     const W = this.W, H = this.H, cx = W / 2, cy = this.topY(H * 0.45);
     const price = skinPrice(skin.id);
     const coins = dailyState().coins;
@@ -973,6 +1026,7 @@ export default class MenuScene extends Phaser.Scene {
     const res = openSkinBox();
     if (!res.skin) { this.showSkins(); return; }
     const skin = SKIN_BY_ID[res.skin];
+    this.scrollMax = 0;          // окно поверх — раздел под ним не крутится
     const W = this.W, H = this.H, cx = W / 2;
     const cy = this.topY(H * 0.42);
     const layer = [];
