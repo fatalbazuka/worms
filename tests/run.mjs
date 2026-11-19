@@ -45,9 +45,9 @@ const ALL = ['match', 'server', 'api', 'weapons', 'smoke', 'desktop', 'single', 
 // Быстрые: без браузера или с коротким браузерным прогоном, всё вместе — пара минут
 const QUICK = ['match', 'server', 'api', 'weapons', 'smoke'];
 const args = process.argv.slice(2);
+// quick можно дополнить: node tests/run.mjs quick net
 const suites = args.length === 0 ? ALL
-  : args.includes('quick') ? QUICK
-    : ALL.filter((s) => args.includes(s));
+  : ALL.filter((s) => args.includes(s) || (args.includes('quick') && QUICK.includes(s)));
 const unknown = args.filter((a) => a !== 'quick' && !ALL.includes(a));
 if (unknown.length) console.log(`нет таких наборов: ${unknown.join(', ')} (есть: ${ALL.join(', ')}, quick)`);
 // match и серверные идут первыми: они без браузера, считают секунды и ловят
