@@ -168,13 +168,16 @@ export function captureState(scene) {
     ammo: scene.turn.ammo.map((row) => row.slice()),
     crates: scene.crates
       .filter((c) => c.alive)
-      .map((c) => ({ x: Math.round(c.x), y: Math.round(c.y), kind: c.kind, landed: c.landed })),
+      .map((c) => ({
+        x: Math.round(c.x), y: Math.round(c.y), kind: c.kind, landed: c.landed,
+        weapon: c.weaponIndex ?? null, rarity: c.rarity ?? null,
+      })),
     // Мины переживают ход, поэтому едут в снимке наравне с ящиками
     mines: (scene.mines ?? [])
       .filter((m) => m.alive)
       .map((m) => ({
         x: Math.round(m.x), y: Math.round(m.y),
-        weapon: m.weapon.id, armed: m.armed, owner: scene.worms.indexOf(m.owner),
+        weapon: m.weapon.id, armed: m.armed, owner: scene.worms.indexOf(m.owner), magnetic: Boolean(m.magnetic),
       })),
     springs: (scene.springs ?? [])
       .filter((sp) => sp.alive)
@@ -228,7 +231,7 @@ export function applyState(scene, state) {
   // Ящики пересоздаём: они появляются и исчезают по ходу партии
   for (const c of scene.crates) c.destroy();
   scene.crates = (state.crates ?? []).map((c) => {
-    const crate = new Crate(scene, c.x, c.kind);
+    const crate = new Crate(scene, c.x, c.kind, c.weapon ?? null, c.rarity ?? null);
     crate.y = c.y;
     if (c.landed) crate._land();
     return crate;
@@ -238,7 +241,7 @@ export function applyState(scene, state) {
   for (const m of scene.mines ?? []) m.destroy();
   scene.mines = (state.mines ?? []).map((m) => {
     const mine = new Mine(scene, m.x, m.y,
-      WEAPONS_BY_ID[m.weapon] ?? WEAPONS_BY_ID.mine, scene.worms[m.owner] ?? null);
+      WEAPONS_BY_ID[m.weapon] ?? WEAPONS_BY_ID.mine, scene.worms[m.owner] ?? null, { magnetic: Boolean(m.magnetic) });
     if (m.armed) { mine.armed = true; mine.armTimer = 0; }
     return mine;
   });

@@ -17,7 +17,7 @@ import { Hud, TOP_H } from '../ui/Hud.js';
 import { Fx } from '../ui/Fx.js';
 import { AimController } from '../ui/AimController.js';
 import { font, UI, ensureButton } from '../ui/theme.js';
-import { WEAPONS } from '../weapons/index.js';
+import { WEAPONS, WEAPON_RARITY } from '../weapons/index.js';
 import { captureCommand, captureMove } from '../net/protocol.js';
 import { NetSession } from '../net/session.js';
 import { knock } from '../net/lobby.js';
@@ -1316,17 +1316,30 @@ export default class GameScene extends Phaser.Scene {
 
   /** Сброс ящика в начале хода. */
   maybeDropCrate() {
-    if (this.crates.length >= CFG.CRATE_MAX) return;
-    if (this.turnRng() > (this.rules.crateChance ?? CFG.CRATE_CHANCE)) return;
-
+    const chance = this.rules.crateChance ?? CFG.CRATE_CHANCE;
+    if (chance <= 0) return;
     const spots = [];
-    for (let x = 200; x < CFG.WORLD_W - 200; x += 24) {
+    const edge = Math.min(200, CFG.WORLD_W * 0.12);
+    for (let x = edge; x < CFG.WORLD_W - edge; x += 24) {
       if (this.terrain.isSpawnable(x)) spots.push(x);
     }
     if (!spots.length) return;
+    const drop = (kind) => {
+      const pick = kind === 'weapon' ? this._crateWeapon() : null;
+      const crate = new Crate(this, this.turnRng.pick(spots), kind, pick?.index ?? null, pick?.rarity ?? null);
+      this.crates.push(crate);
+      if (pick?.rarity === 'legendary') this.fx.banner('Легендарный ящик!', '#ffd166', 1600);
+    };
 
-    const kind = this.turnRng() < CFG.CRATE_HEALTH_CHANCE ? 'health' : 'weapon';
-    this.crates.push(new Crate(this, this.turnRng.pick(spots), kind));
+    // Оружейный дождь: каждый шестой ход — три оружейных ящика разом
+    if (this.turn.turnNumber > 0 && this.turn.turnNumber % 6 === 0) {
+      this.fx.banner('Оружейный дождь!', '#8cc8ff', 1600);
+      for (let i = 0; i < 3 && this.crates.length < CFG.CRATE_MAX + 3; i++) drop('weapon');
+      return;
+    }
+    if (this.crates.length >= CFG.CRATE_MAX) return;
+    if (this.turnRng() > chance) return;
+    drop(this.turnRng() < CFG.CRATE_HEALTH_CHANCE ? 'health' : 'weapon');
   }
 
   /** Боец, наступивший на ящик, забирает его. */
@@ -1348,10 +1361,14 @@ export default class GameScene extends Phaser.Scene {
       worm.heal(CFG.CRATE_HEALTH);
       this.fx.pickup(crate.x, crate.y, `+${CFG.CRATE_HEALTH} здоровья`, '#7de07d');
     } else {
-      const i = this.turn.randomCrateWeapon(this.turnRng);
+      const i = crate.weaponIndex ?? this.turn.randomCrateWeapon(this.turnRng);
       const w = WEAPONS[i];
       this.turn.addAmmo(i, w.crateAmmo, worm.team);
-      this.fx.pickup(crate.x, crate.y, `${w.name} +${w.crateAmmo}`, '#ffd166');
+      const rar = WEAPON_RARITY[w.rarity] ?? WEAPON_RARITY.common;
+      this.fx.pickup(crate.x, crate.y, `${w.name} +${w.crateAmmo}`, rar.text);
+      if (w.rarity === 'legendary' || w.rarity === 'epic') {
+        this.fx.callout(crate.x, crate.y - 40, w.rarity === 'legendary' ? 'Легенда!' : 'Эпик!', rar.text, 34);
+      }
     }
   }
 
@@ -1585,8 +1602,61 @@ export default class GameScene extends Phaser.Scene {
   }
 
   /** Поставить мину. Оружие само её не хранит — предмет живёт в сцене. */
-  addMine(x, y, weapon, owner) {
-    this.mines.push(new Mine(this, x, y, weapon, owner));
+  addMine(x, y, weapon, owner, opts = {}) {
+    this.mines.push(new Mine(this, x, y, weapon, owner, opts));
+  }
+
+  /**
+   * Бумеранг задел бойца: урон и отброс по ходу полёта. При показе чужого
+   * хода — только картинка: урон придёт снимком.
+   */
+  boomerangHit(w, dmg, vx, vy, owner) {
+    this.fx.dust(w.x, w.centerY, 6);
+    this.fx.sound('thunk');
+    if (this.replaying) return;
+    w.applyImpulse(Math.sign(vx || 1) * 170, -150);
+    w.damage(dmg, 'бумеранг');
+    this._countHit(w, dmg);
+    if (owner && w.team !== owner.team) this._impact(w.x, w.centerY, dmg, 1);
+  }
+
+  /** Тап в полёте: своя сплит-ракета делится. @returns {boolean} поймали ли тап */
+  trySplit() {
+    if (this.replaying || this.isBotTurn() || !this.isLocalTeam(this.turn.currentTeam)) return false;
+    const p = this.projectiles.find((x) => x.alive && x.weapon.projectile.split
+      && x.owner === this.turn.activeWorm);
+    if (!p) return false;
+    const t = p.age;
+    if (!p.split()) return false;
+    haptic('shot');
+    this.net?.sendSplit?.({ turn: this.turn.turnNumber, t });
+    return true;
+  }
+
+  /** Соперник разделил ракету: делим нашу копию в тот же момент полёта. */
+  remoteSplit(msg) {
+    if (msg.turn !== this.turn.turnNumber) return;
+    const p = this.projectiles.find((x) => x.alive && x.weapon.projectile.split);
+    if (!p) return;
+    if (p.age >= msg.t) p.split();
+    else p.splitAt = msg.t;
+  }
+
+  /** Что в оружейном ящике: сначала редкость по шансам, потом оружие этой редкости. */
+  _crateWeapon() {
+    const rng = this.turnRng;
+    const pool = (rar) => WEAPONS.map((w, i) => ({ w, i }))
+      .filter(({ w }) => w.startAmmo !== null && w.rarity === rar && this.turn.allowed?.(w) !== false);
+    let r = rng() * Object.values(WEAPON_RARITY).reduce((a, x) => a + x.odds, 0);
+    let rarity = 'common';
+    for (const [k, v] of Object.entries(WEAPON_RARITY)) {
+      r -= v.odds;
+      if (r < 0) { rarity = k; break; }
+    }
+    let list = pool(rarity);
+    if (!list.length) { list = pool('common'); rarity = 'common'; }
+    if (!list.length) return { index: this.turn.randomCrateWeapon(rng), rarity: 'common' };
+    return { index: list[rng.int(0, list.length - 1)].i, rarity };
   }
 
   addSpring(x, y, owner, launch = null) {

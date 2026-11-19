@@ -1,5 +1,5 @@
 import { CFG, DEPTH } from '../config.js';
-import { WEAPONS } from '../weapons/index.js';
+import { WEAPONS, WEAPON_RARITY } from '../weapons/index.js';
 import { weaponIcon, fitScale } from '../core/assets.js';
 import { UI, font, ensureButton, ensureRoundButton } from './theme.js';
 import { isDesktop } from '../platform/device.js';
@@ -246,6 +246,12 @@ export class Inventory {
       .setOrigin(1, 0), D + 2);
 
     this.items.push(plate, icon, name, ammo);
+    // Полоска редкости внизу плашки: обычному не нужна
+    const rar = WEAPON_RARITY[weapon.rarity];
+    if (rar && weapon.rarity !== 'common') {
+      this.items.push(this.fix(s.add.rectangle(cx, y + BH - fz(5), BW - fz(22), fz(4), rar.color)
+        .setOrigin(0.5), D + 2));
+    }
     this.cells.push({ index, weapon, plate, icon, name, ammo, enabled: true });
     this.rects.push({ x, y, w: BW, h: BH });
     this.buttons[weapon.id] = { x: cx, y: y + BH / 2 };

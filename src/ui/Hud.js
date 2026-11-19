@@ -1,5 +1,5 @@
 import { CFG, DEPTH, TEAM_COLORS, TEAM_NAMES } from '../config.js';
-import { WEAPONS } from '../weapons/index.js';
+import { WEAPONS, WEAPON_RARITY } from '../weapons/index.js';
 import { has as hasAsset, weaponIcon, fitScale } from '../core/assets.js';
 import { UI, font, ensureButton, ensureRoundButton, ensureIcon } from './theme.js';
 import { Inventory } from './Inventory.js';
@@ -686,7 +686,10 @@ export class Hud {
       if (idx == null) { c.icon.setVisible(false); c.badge.setVisible(false); return; }
       const on = idx === turn.weaponIndex;
       g.fillStyle(on ? 0xffd166 : 0x10131a, on ? 1 : 0.78).fillCircle(c.cx, st.y, st.r);
-      g.lineStyle(on ? 4 : 2, on ? 0x1a1410 : 0xffffff, on ? 1 : 0.3).strokeCircle(c.cx, st.y, st.r);
+      // Ободок — цвет редкости оружия
+      const rc = WEAPON_RARITY[WEAPONS[idx].rarity]?.color ?? 0xffffff;
+      const plain = WEAPONS[idx].rarity === 'common' || !WEAPONS[idx].rarity;
+      g.lineStyle(on ? 4 : 3, on ? 0x1a1410 : plain ? 0xffffff : rc, on ? 1 : plain ? 0.3 : 0.95).strokeCircle(c.cx, st.y, st.r);
       const key = weaponIcon(scene, WEAPONS[idx]);
       if (key) {
         if (c.icon.texture.key !== key) c.icon.setTexture(key);
@@ -1099,10 +1102,12 @@ export class Hud {
       // Батут ведёт себя не как снаряд — подсказка, пока он в руках
       const spring = scene.slingAim && scene.turn.weapon?.id === 'spring';
       // На тренировке своя панель с шагами — строка подсказки не нужна
-      const show = !this.helpVisible && scene.canPlayerAct() && !scene.coach
-        && (spring || sling || (scene.hookHint && scene.hooksLeft > 0));
+      const splitting = !scene.replaying && !scene.isBotTurn?.() && scene.isLocalTeam?.(scene.turn.currentTeam)
+        && scene.projectiles?.some((p) => p.alive && p.weapon.projectile.split);
+      const show = splitting || (!this.helpVisible && scene.canPlayerAct() && !scene.coach
+        && (spring || sling || (scene.hookHint && scene.hooksLeft > 0)));
       if (show) {
-        this.hintText.setText(spring
+        this.hintText.setText(splitting ? 'тапни по экрану — ракета разделится на три' : spring
           ? 'батут: тяни рычаг — полетишь сам по дуге, пружина останется'
           : sling
             ? 'тяни жёлтый рычаг от цели и отпусти'

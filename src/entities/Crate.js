@@ -13,10 +13,13 @@ import { has, fitScale } from '../core/assets.js';
  *   health — лечит.
  */
 export class Crate {
-  constructor(scene, x, kind) {
+  /** weaponIndex — что внутри оружейного ящика (решено при сбросе); rarity — его цвет. */
+  constructor(scene, x, kind, weaponIndex = null, rarity = null) {
     this.scene = scene;
     this.terrain = scene.terrain;
     this.kind = kind;
+    this.weaponIndex = weaponIndex;
+    this.rarity = rarity;
     this.x = x;
     this.y = -40;
     this.vy = CFG.CRATE_FALL_SPEED;
@@ -40,6 +43,22 @@ export class Crate {
     }
     this.view.setOrigin(0.5, 1);
     s.rig.world(this.view.setDepth(DEPTH.WORM - 1));
+    // Редкость видна издалека: обычный ящик как есть, у редкого — синяя
+    // рамка, у эпического — фиолетовая, у легендарного — золотая; эпик и
+    // легенда ещё и сияют
+    const rc = { rare: 0x6fb7ff, epic: 0xc58bff, legendary: 0xffc23a }[rarity];
+    if (rc) {
+      const fw = this.w + 12, fh = this.h + 10;
+      if (rarity !== 'rare') {
+        this.glow = s.rig.world(s.add.circle(0, 0, this.w * 0.95, rc, 0.45).setDepth(DEPTH.WORM - 2));
+        s.tweens.add({ targets: this.glow, scale: 1.3, alpha: 0.12, yoyo: true, repeat: -1, duration: 650 });
+      }
+      this.frame = s.rig.world(s.add.graphics().setDepth(DEPTH.WORM));
+      this.frame.lineStyle(5, 0x1a1410, 0.9).strokeRoundedRect(-fw / 2, -fh, fw, fh, 7);
+      this.frame.lineStyle(3, rc, 1).strokeRoundedRect(-fw / 2, -fh, fw, fh, 7);
+      this.frame.fillStyle(rc, 1).fillCircle(0, -fh - 2, 5).lineStyle(2, 0x1a1410, 0.9).strokeCircle(0, -fh - 2, 5);
+      this.frame.setPosition(x, this.y + 4);
+    }
 
     const chute = has(s, 'shot_chute') ? 'shot_chute' : 'crate_chute';
     if (has(s, chute)) {
@@ -80,6 +99,8 @@ export class Crate {
     }
 
     this.view.setPosition(Math.round(this.x), Math.round(this.y));
+    this.glow?.setPosition(Math.round(this.x), Math.round(this.y) - this.h / 2);
+    this.frame?.setPosition(Math.round(this.x), Math.round(this.y) + 4);
     if (this.chute) this.chute.setPosition(Math.round(this.x), Math.round(this.y) - this.h);
   }
 
@@ -98,6 +119,8 @@ export class Crate {
     if (!this.alive) return;
     this.alive = false;
     this.view.destroy();
+    this.glow?.destroy();
+    this.frame?.destroy();
     if (this.chute) this.chute.destroy();
   }
 }

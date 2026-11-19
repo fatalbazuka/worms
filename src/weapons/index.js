@@ -34,6 +34,17 @@ const SHARD = new Weapon({
   explosion: { radius: 18, damageRadius: 34, damage: 14, knockback: 150, shake: 0.002 },
 });
 
+/** Осколок сплит-ракеты: одна из трёх после тапа в полёте. */
+const SPLITLET = new Weapon({
+  id: 'splitlet',
+  name: 'Осколок ракеты',
+  icon: '·',
+  color: 0x9fd2ff,
+  spriteKey: 'proj_mortar',
+  projectile: { radius: 4, windScale: 0.6, trail: true },
+  explosion: { radius: 28, damageRadius: 52, damage: 26, knockback: 220, shake: 0.004 },
+});
+
 /** Ракета авиаудара: падает почти отвесно, ветер её едва сносит. */
 const AIR_MISSILE = new Weapon({
   id: 'airmissile',
@@ -49,7 +60,7 @@ const AIR_MISSILE = new Weapon({
 export const WEAPONS = [
   new Weapon({
     id: 'bazooka',
-    name: 'Базука',
+    rarity: 'common',    name: 'Базука',
     icon: '➶',
     color: 0xffe066,
     spriteKey: 'proj_bazooka',
@@ -62,7 +73,7 @@ export const WEAPONS = [
 
   new Weapon({
     id: 'grenade',
-    name: 'Граната',
+    rarity: 'common',    name: 'Граната',
     icon: '◕',
     color: 0x8ee06a,
     spriteKey: 'proj_grenade',
@@ -76,12 +87,12 @@ export const WEAPONS = [
 
   new ClusterWeapon({
     id: 'cluster',
-    name: 'Кассета',
+    rarity: 'common',    name: 'Кассета',
     icon: '❋',
     color: 0xff8ad4,
     spriteKey: 'proj_cluster',
     iconKey: 'icon_cluster',
-    startAmmo: 2,
+    startAmmo: 1,
     projectile: { radius: 6, windScale: 0.8 },
     explosion: { radius: 26, damageRadius: 46, damage: 22, knockback: 180, shake: 0.004 },
     clusterCount: 5,
@@ -91,12 +102,12 @@ export const WEAPONS = [
 
   new Weapon({
     id: 'mole',
-    name: 'Крот',
+    rarity: 'rare',    name: 'Крот',
     icon: '⇩',
     color: 0xc0c8d8,
     spriteKey: 'proj_mole',
     iconKey: 'icon_mole',
-    startAmmo: 1,
+    startAmmo: 0,
     projectile: {
       radius: 6, windScale: 0.15, gravityScale: 1.15,
       digRadius: 9, digTime: 0.55,
@@ -108,24 +119,26 @@ export const WEAPONS = [
   // зато прилетает больно.
   new Weapon({
     id: 'banana',
-    name: 'Банан',
+    rarity: 'rare',    name: 'Попрыгунчик',
     icon: '⌒',
     color: 0xf7e14a,
     spriteKey: 'proj_banana',
     iconKey: 'icon_banana',
-    startAmmo: 1,
+    startAmmo: 0,
     crateAmmo: 1,
+    // Резиновый: от стен и потолков отскакивает почти без потерь, рвётся,
+    // коснувшись бойца, или на пятом отскоке
     projectile: {
-      radius: 5, windScale: 0.4, bounciness: 0.72, friction: 0.86, fuse: 4,
+      radius: 5, windScale: 0.3, bounciness: 0.95, friction: 0.97, maxBounces: 5,
     },
-    explosion: { radius: 58, damageRadius: 105, damage: 72, knockback: 470, shake: 0.011 },
+    explosion: { radius: 46, damageRadius: 84, damage: 55, knockback: 420, shake: 0.009 },
   }),
 
   // Святая граната: три секунды ожидания и очень большая воронка.
   // Дорогая по патронам намеренно — это оружие «на один раз».
   new Weapon({
     id: 'holy',
-    name: 'Святая',
+    rarity: 'legendary',    name: 'Святая',
     icon: '✚',
     color: 0xffe9a8,
     spriteKey: 'proj_holy',
@@ -141,13 +154,13 @@ export const WEAPONS = [
   // Динамит кладётся под ноги: сила заряда не важна, важно успеть отойти.
   new PlacedWeapon({
     id: 'dynamite',
-    name: 'Динамит',
+    rarity: 'rare',    name: 'Динамит',
     icon: '❚',
     color: 0xff6b4a,
     spriteKey: 'proj_dynamite',
     iconKey: 'icon_dynamite',
     category: 'снаряжение',
-    startAmmo: 1,
+    startAmmo: 0,
     retreat: 5,
     projectile: {
       radius: 6, windScale: 0, drag: 4, fuse: 4, trail: false,
@@ -157,26 +170,27 @@ export const WEAPONS = [
 
   // Мортира бьёт слабее базуки, но осыпает осколками сверху — хороша
   // против тех, кто прячется за холмом.
-  new ClusterWeapon({
+  // Сплит-ракета: летит как базука, тап по экрану в полёте — делится на
+  // три веером по курсу. Не тапнул — рвётся при ударе одна.
+  new Weapon({
     id: 'mortar',
-    name: 'Мортира',
+    name: 'Сплит-ракета',
     icon: '◭',
     color: 0x9fd2ff,
     spriteKey: 'proj_mortar',
     iconKey: 'icon_mortar',
-    startAmmo: 2,
-    projectile: { radius: 5, windScale: 0.7, gravityScale: 1.1 },
-    explosion: { radius: 24, damageRadius: 44, damage: 20, knockback: 170, shake: 0.004 },
-    clusterCount: 6,
-    clusterSpeed: 200,
-    bombletWeapon: SHARD,
+    rarity: 'rare',
+    startAmmo: 0,
+    crateAmmo: 2,
+    projectile: { radius: 5, windScale: 0.8, gravityScale: 1, split: SPLITLET },
+    explosion: { radius: 36, damageRadius: 64, damage: 40, knockback: 280, shake: 0.006 },
   }),
 
   // Дробовик: два выстрела за ход, попадание считается сразу. Ветер и
   // дальность на него не влияют — это оружие ближней перестрелки.
   new InstantWeapon({
     id: 'shotgun',
-    name: 'Дробовик',
+    rarity: 'common',    name: 'Дробовик',
     icon: '⋙',
     color: 0xffcf7a,
     iconKey: 'icon_shotgun',
@@ -191,20 +205,22 @@ export const WEAPONS = [
   // работает, когда твой ход уже прошёл.
   new MineWeapon({
     id: 'mine',
-    name: 'Мина',
+    rarity: 'rare',    name: 'Магнитная мина',
     icon: '◉',
     color: 0xb04040,
     iconKey: 'icon_mine',
     category: 'снаряжение',
-    startAmmo: 2,
-    retreat: 5,
+    startAmmo: 0,
+    crateAmmo: 2,
+    // Бросается рогаткой, где легла — там мина; взвелась — ползёт к врагу
+    projectile: { radius: 6, windScale: 0.4, deploy: 'mine' },
     explosion: { radius: 46, damageRadius: 84, damage: 50, knockback: 380, shake: 0.008 },
   }),
 
   // Бита: земля цела, зато сосед летит. Дешёвый способ утопить.
   new BatWeapon({
     id: 'bat',
-    name: 'Бита',
+    rarity: 'common',    name: 'Бита',
     icon: '↷',
     color: 0xc98b5a,
     iconKey: 'icon_bat',
@@ -218,7 +234,7 @@ export const WEAPONS = [
   // смотрит ствол, дальность — сила заряда. За холмом от него не укрыться.
   new AirstrikeWeapon({
     id: 'airstrike',
-    name: 'Авиаудар',
+    rarity: 'epic',    name: 'Авиаудар',
     icon: '✈',
     color: 0x9fd2ff,
     iconKey: 'icon_airstrike',
@@ -236,12 +252,12 @@ export const WEAPONS = [
   // на этом кончается.
   new TeleportWeapon({
     id: 'teleport',
-    name: 'Телепорт',
+    rarity: 'rare',    name: 'Телепорт',
     icon: '◌',
     color: 0x9fd2ff,
     iconKey: 'icon_teleport',
     category: 'снаряжение',
-    startAmmo: 1,
+    startAmmo: 0,
     crateAmmo: 1,
     reach: 900,
     explosion: { radius: 0, damageRadius: 0, damage: 0, knockback: 0, shake: 0 },
@@ -254,11 +270,11 @@ export const WEAPONS = [
 // проламывает насквозь и рвётся этажом ниже — на того, кто под ним прятался.
 WEAPONS.push(new Weapon({
   id: 'weight',
-  name: 'Гиря',
+    rarity: 'epic',  name: 'Гиря',
   icon: '⚖',
   color: 0x9aa0ac,
   spriteKey: 'shot_weight',
-  startAmmo: 1,
+  startAmmo: 0,
   crateAmmo: 1,
   projectile: { radius: 7, windScale: 0, gravityScale: 1.5, pierce: 64, trail: false },
   explosion: { radius: 36, damageRadius: 66, damage: 50, knockback: 280, shake: 0.009 },
@@ -268,11 +284,11 @@ WEAPONS.push(new Weapon({
 // рвётся через три секунды. Можно заминировать уступ над чужой головой.
 WEAPONS.push(new Weapon({
   id: 'sticky',
-  name: 'Липучка',
+    rarity: 'rare',  name: 'Липучка',
   icon: '◍',
   color: 0x7ed650,
   spriteKey: 'shot_sticky',
-  startAmmo: 1,
+  startAmmo: 0,
   crateAmmo: 2,
   projectile: { radius: 6, windScale: 0.5, sticky: true, stickFuse: 3 },
   explosion: { radius: 42, damageRadius: 76, damage: 46, knockback: 320, shake: 0.007 },
@@ -281,15 +297,52 @@ WEAPONS.push(new Weapon({
 // Батут: пружина на полу. Свой — лифт на этаж выше, чужой — ловушка.
 WEAPONS.push(new SpringWeapon({
   id: 'spring',
-  name: 'Батут',
+    rarity: 'rare',  name: 'Батут',
   icon: '⇞',
   color: 0xec4848,
   category: 'снаряжение',
-  startAmmo: 1,
+  startAmmo: 0,
   crateAmmo: 1,
   retreat: 5,
   explosion: { radius: 0, damageRadius: 0, damage: 0, knockback: 0, shake: 0 },
 }));
 
+// Бумеранг: летит по прицелу, тормозит и возвращается. Бьёт каждого на пути
+// туда и обратно — достаёт того, кто спрятался за углом. Стена его ловит.
+WEAPONS.push(new Weapon({
+  id: 'boomerang',
+  name: 'Бумеранг',
+  icon: '⟲',
+  color: 0xd99a4e,
+  category: 'стрелковое',
+  rarity: 'epic',
+  startAmmo: 0,
+  crateAmmo: 2,
+  projectile: { radius: 6, windScale: 0.15, gravityScale: 0, boomerang: 900, hitDamage: 28 },
+  explosion: { radius: 0, damageRadius: 0, damage: 0, knockback: 0, shake: 0 },
+}));
+
+// Самонаводка: первые полсекунды летит по прицелу, потом сама доворачивает
+// к ближайшему врагу. Сильная, но стены и потолки её всё равно ловят.
+WEAPONS.push(new Weapon({
+  id: 'homing',
+  name: 'Самонаводка',
+  icon: '➹',
+  color: 0xff7a5a,
+  rarity: 'epic',
+  startAmmo: 0,
+  crateAmmo: 1,
+  projectile: { radius: 5, windScale: 0.6, homing: 3.0, homeDelay: 0.6 },
+  explosion: { radius: 40, damageRadius: 72, damage: 45, knockback: 300, shake: 0.007 },
+}));
+
 export const WEAPONS_BY_ID = Object.fromEntries(WEAPONS.map((w) => [w.id, w]));
-export { BOMBLET, AIR_MISSILE };
+export { BOMBLET, AIR_MISSILE, SPLITLET };
+
+/** Редкость оружия: шанс в ящике (%), цвет ящика и надписи. */
+export const WEAPON_RARITY = {
+  common: { name: 'обычное', odds: 52, color: 0xd9c7a3, text: '#e8dcc5' },
+  rare: { name: 'редкое', odds: 30, color: 0x6fb7ff, text: '#8cc8ff' },
+  epic: { name: 'эпическое', odds: 14, color: 0xc58bff, text: '#d3a8ff' },
+  legendary: { name: 'легендарное', odds: 4, color: 0xffc23a, text: '#ffd166' },
+};

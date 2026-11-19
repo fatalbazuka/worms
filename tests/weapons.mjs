@@ -249,8 +249,10 @@ for (const id of ['bazooka', 'grenade', 'cluster', 'mole', 'banana', 'holy', 'mo
   const start = await shoot('mine', 200, true, nextSpot());
   if (start.error) check('мина: стенд собрался', false, start.error);
   else {
-    check('мина: ложится на карту, а не летит', start.flying === 0 && start.gap === 200);
-    await page.waitForTimeout(400);
+    // Магнитная мина бросается: летит и становится миной там, где легла
+    check('мина: бросается и ложится на землю', start.flying === 1 && start.gap === 200);
+    await page.waitForFunction(() => window.__WORMS__.scene.getScene('Game').mines.length > 0,
+      null, { timeout: 8000 }).catch(() => {});
     const placed = await page.evaluate(
       () => window.__WORMS__.scene.getScene('Game').mines.length);
     check('мина: появилась в мире', placed > 0, `мин на карте: ${placed}`);
@@ -454,6 +456,74 @@ for (const id of ['bazooka', 'grenade', 'cluster', 'mole', 'banana', 'holy', 'mo
     r.springFire.flew && r.springFire.pad && r.springFire.same, JSON.stringify(r.springFire));
   check('укрытия впечатаны в землю, взрыв выгрызает из них кусок',
     r.stamped >= 3 && r.before > 20 && r.after < r.before * 0.7, `${r.name}: ${r.before} → ${r.after} (всего ${r.stamped})`);
+  // Новые механики снарядов — шагами вручную, без ожидания по часам
+  const m = await tp.evaluate(async () => {
+    const s = window.__WORMS__.scene.getScene('Game');
+    const { WEAPONS, WEAPONS_BY_ID, WEAPON_RARITY } = await import('/src/weapons/index.js');
+    const { Projectile } = await import('/src/entities/Projectile.js');
+    const w = s.turn.activeWorm;
+    const foe = s.worms.find((o) => o.alive && o.team !== w.team);
+    const step = (p, n, f) => { for (let i = 0; i < n && p.alive; i++) { p.update(1 / 60); f?.(p); } };
+    // Сплит-ракета: тап — три осколка веером
+    const n0 = s.projectiles.length;
+    const sp = new Projectile(s, w.x, w.y - 300, 300, -200, WEAPONS_BY_ID.mortar, w);
+    s.projectiles.push(sp);
+    step(sp, 10);
+    const split = sp.split();
+    const kids = s.projectiles.slice(n0).filter((p) => p.alive && p.weapon.id === 'splitlet');
+    for (const k of kids) k.destroy();
+    s.projectiles.length = n0;
+    // Попрыгунчик: в коробке из стен рвётся сам на пятом отскоке
+    const bp = new Projectile(s, w.x + 90, w.y - 60, 0, 900, WEAPONS_BY_ID.banana, null);
+    let maxB = 0;
+    step(bp, 900, (p) => { maxB = Math.max(maxB, p.bounces ?? 0); });
+    // Остальных врагов — подальше, чтобы цель была одна
+    const benched = s.worms.filter((o) => o !== foe && o.alive && o.team !== w.team);
+    for (const o of benched) o.alive = false;
+    // Самонаводка: пущенная вверх, доворачивает к врагу
+    foe.x = w.x + 300; foe.y = w.y;
+    // Курс считаем без земли: этажи башни поймали бы ракету раньше доворота
+    const hp = new Projectile(s, w.x, w.y - 200, 0, -400, WEAPONS_BY_ID.homing, w);
+    for (let i = 0; i < 20; i++) hp._steer(1 / 30, hp.weapon.projectile);
+    const homing = { vx: Math.round(hp.vx), toward: hp.vx > 100 };
+    hp.destroy();
+    // Бумеранг: пролетает сквозь врага, возвращается и бьёт его второй раз
+    const hits = [];
+    const orig = s.boomerangHit.bind(s);
+    s.boomerangHit = (t, dmg) => hits.push(t === foe ? 'foe' : 'other');
+    foe.x = w.x + 120; foe.y = w.y - 140;
+    const br = new Projectile(s, w.x, foe.centerY, 700, 0, WEAPONS_BY_ID.boomerang, w);
+    br.insideGround = false;
+    step(br, 300);
+    s.boomerangHit = orig;
+    for (const o of benched) o.alive = true;
+    // Магнитная мина: взведена — ползёт к врагу
+    s.addMine(w.x + 60, w.y - 2, WEAPONS_BY_ID.mine, w, { magnetic: true });
+    const mine = s.mines[s.mines.length - 1];
+    mine.armed = true; mine.armTimer = 0;
+    foe.x = mine.x + 150; foe.y = w.y;
+    const mx0 = mine.x;
+    for (let i = 0; i < 30; i++) mine._crawl(1 / 60);
+    const crawled = Math.round(mine.x - mx0);
+    mine.destroy?.(); s.mines = s.mines.filter((x) => x !== mine);
+    // Ящики: редкость по шансам, внутри оружие этой редкости
+    const tally = { common: 0, rare: 0, epic: 0, legendary: 0 };
+    let match = true;
+    for (let i = 0; i < 400; i++) {
+      const c = s._crateWeapon();
+      tally[c.rarity]++;
+      if (WEAPONS[c.index].rarity !== c.rarity) match = false;
+    }
+    return { split, kids: kids.length, maxB, bounced: !bp.alive, homing, hits, crawled, tally, match,
+      odds: Object.keys(WEAPON_RARITY).join(',') };
+  });
+  check('сплит-ракета: тап делит её на три осколка', m.split && m.kids === 3, JSON.stringify(m));
+  check('попрыгунчик: отскакивает и рвётся сам', m.bounced && m.maxB >= 1, `отскоков ${m.maxB}`);
+  check('самонаводка: доворачивает к врагу', m.homing.toward, JSON.stringify(m.homing));
+  check('бумеранг: бьёт врага по пути туда и обратно', m.hits.filter((h) => h === 'foe').length === 2, m.hits.join(','));
+  check('магнитная мина: ползёт к врагу', m.crawled > 5, `${m.crawled} px`);
+  check('ящики: редкость по шансам, оружие той же редкости',
+    m.match && m.tally.common > m.tally.rare && m.tally.rare > m.tally.epic && m.tally.legendary > 0, JSON.stringify(m.tally));
   await tp.close();
 }
 

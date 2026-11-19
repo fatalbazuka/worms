@@ -79,6 +79,8 @@ export class AimController {
 
   onDown(pointer) {
     if (this.scene.hud.isOverUI(pointer) || this.scene.rig.pinching) return;
+    // Своя сплит-ракета в полёте: тап по полю делит её
+    if (this.scene.trySplit?.()) return;
     if (this.desktop) { this._mouseDown(pointer); return; }
 
     const w = this.worm;

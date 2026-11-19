@@ -145,6 +145,7 @@ export class NetSession {
       case 'sync': return this._onSync();
       case 'move': return this._onMove(msg);
       case 'shot': return this._onShot(msg);
+      case 'split': return this.sceneReady ? this.scene.remoteSplit?.(msg) : undefined;
       case 'state': return this._onState(msg);
       case 'rematch': return this._onRematch();
       case 'emote': return this.sceneReady ? this.scene.showEmote?.(this.myTeam === 0 ? 1 : 0, msg.emote) : undefined;
@@ -352,6 +353,12 @@ export class NetSession {
   sendMove(m) {
     if (!this.paired || !m) return;
     this.transport.send({ type: 'move', m });
+  }
+
+  /** Сплит-ракету разделили в полёте: в какой ход и через сколько секунд полёта. */
+  sendSplit(m) {
+    if (!this.paired) return;
+    this.transport.send({ type: 'split', turn: m.turn, t: m.t });
   }
 
   /** Вызывается сценой при выстреле локального игрока. */
