@@ -121,10 +121,12 @@ export function simulateFlight(scene, x0, y0, vx, vy, weapon, owner = null, opts
   const gravity = CFG.GRAVITY * (p.gravityScale ?? 1);
   const windA = scene.wind * (p.windScale ?? 1);
   // Отскок чувствителен к шагу: с вдвое крупным шагом граната отскакивала
-  // от другой точки склона и катилась не туда. Поэтому здесь шаг игры
-  const subs = CFG.SUBSTEPS;
-  const sub = DT / subs;
-  const dragK = p.drag > 0 ? Math.exp(-p.drag * sub) : 1;
+  // от другой точки склона и катилась не туда. Поэтому после первого
+  // касания — шаг игры, а до него, на гладкой дуге, хватает крупного
+  let subs = SUBSTEPS;
+  let sub = DT / subs;
+  const dragOf = (h) => (p.drag > 0 ? Math.exp(-p.drag * h) : 1);
+  let dragK = dragOf(sub);
   const rules = scene.rules ?? {};
   const bounce = (p.bounciness ?? 0) * (rules.bounce ?? 1);
   const friction = (p.friction ?? 0.75) * (rules.roll ?? 1);
@@ -138,9 +140,11 @@ export function simulateFlight(scene, x0, y0, vx, vy, weapon, owner = null, opts
 
   let x = x0, y = y0;
   let fuse = p.fuse || 0;
-  let bounces = 0, pierced = false;
+  let bounces = 0, pierced = false, touched = false;
 
   for (let t = 0; t < maxTime; t += DT) {
+    // Коснулся земли — со следующего кадра мелкий шаг, как в игре
+    if (touched && subs !== CFG.SUBSTEPS) { subs = CFG.SUBSTEPS; sub = DT / subs; dragK = dragOf(sub); }
     if (fuse > 0) {
       fuse -= DT;
       if (fuse <= 0) return { kind: 'fuse', x, y, worm: null, time: t };
@@ -258,6 +262,7 @@ export function simulateFlight(scene, x0, y0, vx, vy, weapon, owner = null, opts
         rx = tvn * nX + tx * friction;
         ry = tvn * nY + ty * friction;
         vx = rx; vy = ry;
+        touched = true;
         if (p.maxBounces > 0 && ++bounces >= p.maxBounces) return { kind: 'terrain', x: fx, y: fy, worm: null, time: age };
         x = fx + nX * 1.5;
         y = fy + nY * 1.5;
