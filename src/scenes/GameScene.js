@@ -4,7 +4,7 @@ import { BIOMES, pickBiome } from '../core/biomes.js';
 import { pickShape, shapeRng, towerVariant } from '../core/shapes.js';
 import { Terrain } from '../core/Terrain.js';
 import { TurnManager, STATE } from '../core/TurnManager.js';
-import { has, meta } from '../core/assets.js';
+import { has, meta, weaponIcon, fitScale } from '../core/assets.js';
 import { Worm } from '../entities/Worm.js';
 import { Crate } from '../entities/Crate.js';
 import { Mine } from '../entities/Mine.js';
@@ -19,6 +19,7 @@ import { AimController } from '../ui/AimController.js';
 import { ShotTrace } from '../ui/ShotTrace.js';
 import { KoLog } from '../ui/KoLog.js';
 import { koCause, koSummary } from '../core/knockouts.js';
+import { battleLoadout, loadoutApplies, loadoutAmmo } from '../core/loadout.js';
 import { font, UI, ensureButton } from '../ui/theme.js';
 import { WEAPONS, WEAPON_RARITY } from '../weapons/index.js';
 import { captureCommand, captureMove } from '../net/protocol.js';
@@ -199,6 +200,7 @@ export default class GameScene extends Phaser.Scene {
     this._setupKeyboard();
     this._setupBots();
     this._applyAmmoRules();
+    this._applyLoadout();
 
     this.rig.bgCam.setBackgroundColor(biome.fallback.sky[1]);
     // Дуэль по переписке начнёт с перемотки истории: табличка первого хода
@@ -678,6 +680,67 @@ export default class GameScene extends Phaser.Scene {
       if (t.control !== 'bot' && Array.isArray(this.rules.only)) {
         WEAPONS.forEach((w, i) => { if (!this.rules.only.includes(w.id)) this.turn.ammo[team][i] = 0; });
       }
+    });
+  }
+
+  /**
+   * «Арсенал боя»: обеим сторонам — те же три оружия по зерну партии
+   * (core/loadout.js). Не в сети и не в дуэли: старый клиент из кэша их бы
+   * не выдал, а снимок хода переносит патроны от одного к другому.
+   */
+  _applyLoadout() {
+    this.loadout = [];
+    this.loadoutIdx = [];
+    const online = Boolean(startRoom()) || this.match.mode === 'duel';
+    if (!loadoutApplies(this.match, { online })) return;
+    this.loadout = battleLoadout(this.seed, WEAPONS);
+    this.loadoutIdx = this.loadout.map((id) => WEAPONS.findIndex((w) => w.id === id));
+    for (const row of this.turn.ammo) {
+      for (const i of this.loadoutIdx) if (row[i] !== null) row[i] += loadoutAmmo(WEAPONS[i]);
+    }
+    this.time.delayedCall(this.variant?.intro ? 3300 : 700, () => this._announceLoadout());
+  }
+
+  /** Плашка «Арсенал боя: …» с иконками — на пару секунд, бою не мешает. */
+  _announceLoadout() {
+    if (!this.loadout.length || this.gameOverUi || !this.sys.isActive()) return;
+    const W = CFG.VIEW_W, H = CFG.VIEW_H;
+    const y = Math.round(H * (H > W ? 0.4 : 0.44));
+    const parts = [];
+    const add = (o, d = 6) => { this.rig.ui(o.setScrollFactor(0).setDepth(DEPTH.HUD + d)); parts.push(o); return o; };
+    const g = add(this.add.graphics(), 5);
+    const title = add(this.add.text(0, y - 30, 'Арсенал боя — у обеих сторон', font(20, 800, '#ffe27a')).setOrigin(0.5));
+    // Ряд: иконка и название каждого оружия
+    const row = this.loadoutIdx.map((i) => {
+      const wpn = WEAPONS[i];
+      const key = weaponIcon(this, wpn);
+      const icon = key ? add(this.add.image(0, y + 14, key).setScale(fitScale(this, key, 40))) : null;
+      const n = this.turn.ammo[this.myTeamIndex >= 0 ? this.myTeamIndex : 0][i];
+      const name = add(this.add.text(0, y + 14, `${wpn.name}${n > 1 ? ` ×${n}` : ''}`, font(20, 800, UI.text)).setOrigin(0, 0.5));
+      return { icon, name, w: (icon ? 46 : 0) + name.width };
+    });
+    const gap = 26;
+    const total = row.reduce((a, r) => a + r.w, 0) + gap * (row.length - 1);
+    let x = W / 2 - total / 2;
+    for (const r of row) {
+      if (r.icon) { r.icon.setPosition(x + 20, y + 14); x += 46; }
+      r.name.setX(x);
+      x += r.name.width + gap;
+    }
+    title.setX(W / 2);
+    const bw = Math.max(total, title.width) + 48, bh = 104;
+    g.setPosition(W / 2, y);
+    g.fillStyle(0x10131a, 0.88).fillRoundedRect(-bw / 2, -56, bw, bh, 20);
+    g.lineStyle(3, 0xffd23f, 0.85).strokeRoundedRect(-bw / 2, -56, bw, bh, 20);
+    // Не влезло (узкий портрет) — сжимаем всю плашку
+    const k = Math.min(1, (W - 24) / bw);
+    for (const o of parts) { o.setPosition(W / 2 + (o.x - W / 2) * k, y + (o.y - y) * k); if (o !== g) o.setScale(o.scaleX * k); }
+    g.setScale(k);
+    for (const o of parts) o.setAlpha(0);
+    this.tweens.add({ targets: parts, alpha: 1, duration: 220 });
+    this.tweens.add({
+      targets: parts, alpha: 0, delay: 2300, duration: 400,
+      onComplete: () => parts.forEach((o) => o.destroy()),
     });
   }
 

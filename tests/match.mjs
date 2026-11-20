@@ -398,6 +398,25 @@ check('один в лобби никого не находит', findMatch(p('a'
       && Object.keys(A.normalizeAch('мусор').got).length === 0, JSON.stringify(m));
 }
 
+// --- «Арсенал боя»: по зерну, одинаковый у обеих сторон и у всех клиентов ---
+{
+  const { battleLoadout, loadoutApplies } = await import('../src/core/loadout.js');
+  const { WEAPONS } = await import('../src/weapons/index.js');
+  const { towerMatch, onlineMatch, challengeMatch, tutorialMatch, dailyMatch, ascentMatch } = await import('../src/core/match.js');
+  const a = battleLoadout(123456, WEAPONS), b = battleLoadout(123456, WEAPONS);
+  const zero = new Set(WEAPONS.filter((w) => w.startAmmo === 0).map((w) => w.id));
+  check('арсенал боя: то же зерно — тот же набор из трёх без стартовых',
+    a.length === 3 && a.join() === b.join() && a.every((id) => zero.has(id)) && new Set(a).size === 3, a.join());
+  const seen = new Set();
+  for (let s = 1; s <= 200; s++) for (const id of battleLoadout(s, WEAPONS)) seen.add(id);
+  check('арсенал боя: разные зёрна — разные гости', seen.size >= 8, String(seen.size));
+  check('арсенал боя: только в боях без своих правил оружия',
+    loadoutApplies(towerMatch('rookie')) && loadoutApplies(dailyMatch('2026-11-20'))
+      && !loadoutApplies(onlineMatch()) && !loadoutApplies(towerMatch(null), { online: true })
+      && !loadoutApplies(challengeMatch('first')) && !loadoutApplies(tutorialMatch())
+      && !loadoutApplies(ascentMatch('up-1')));
+}
+
 console.log(failures.length
   ? `\nне прошло: ${failures.length}`
   : '\nпроверки подбора пройдены');
