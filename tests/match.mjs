@@ -134,8 +134,8 @@ check('один в лобби никого не находит', findMatch(p('a'
     `${first.skin} → ${dup.skin} +${dup.refund}`);
   check('пустую коробку открыть нельзя', openBox(emptyState()).skin === null);
   check('цена скина по редкости: обычный дешевле редкого, редкий — эпического, легендарный дороже всех',
-    skinPrice('cool') < skinPrice('ninja') && skinPrice('ninja') < skinPrice('devil') && skinPrice('devil') < skinPrice('rainbow')
-      && skinPrice('classic') === 0, ['cool', 'ninja', 'devil', 'rainbow'].map(skinPrice).join());
+    skinPrice('cool') < skinPrice('bubblegum') && skinPrice('bubblegum') < skinPrice('devil') && skinPrice('devil') < skinPrice('rainbow')
+      && skinPrice('classic') === 0, ['cool', 'bubblegum', 'devil', 'rainbow'].map(skinPrice).join());
   st = { ...emptyState(), owned: ['classic', 'devil'] };
   check('надеть можно только свой скин',
     equip(emptyState(), 'devil').equipped === 'classic' && equip(st, 'devil').equipped === 'devil');
