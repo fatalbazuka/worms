@@ -220,9 +220,20 @@ check('выстрел бота меняет мир', after.solid < botDamage.sol
 check('ход вернулся игроку', (await info()).team === 0);
 
 // --- победа в миссии засчитывается ---
-await page.evaluate(() => {
+// Добиваем, как будто выстрелил, вися на тросе: трюк «Человек-паук» должен
+// открыться в конце хода и принести свою награду ровно один раз
+const coinsNow = () => page.evaluate(() => JSON.parse(localStorage.getItem('worms.daily.v1') ?? '{}').coins ?? 0);
+const trick = await page.evaluate(() => {
   const s = window.__WORMS__.scene.getScene('Game');
+  const coins = () => JSON.parse(localStorage.getItem('worms.daily.v1') ?? '{}').coins ?? 0;
+  const me = s.turn.activeWorm;
+  const c0 = coins();
+  me.hang = 'ceil';
+  s._trickShot(me);
+  me.hang = null;
   s.worms.filter((w) => w.team === 1).forEach((w) => w.damage(999));
+  s._finishTrick();
+  return { delta: coins() - c0, got: s.achGot.map((a) => a.id) };
 });
 await page.waitForFunction(
   () => window.__WORMS__.scene.getScene('Game').turn.state === 'over',
@@ -230,6 +241,21 @@ await page.waitForFunction(
 );
 const progress = await page.evaluate(() => localStorage.getItem('worms.campaign.v1'));
 check('пройденная миссия записана', (progress ?? '').includes('range'), progress ?? 'пусто');
+// Достижения: трюк в бою открыт с наградой, победа — «Первая победа»;
+// повтор того же трюка ничего не открывает и монет не даёт
+const c1 = await coinsNow();
+const again = await page.evaluate(async () => {
+  const { bumpAch } = await import('/src/platform/achievements.js');
+  return bumpAch({ rope_kill: 1 }).map((a) => a.id);
+});
+const ach = await page.evaluate(() => ({
+  saved: Object.keys(JSON.parse(localStorage.getItem('worms.ach.v1') ?? '{}').got ?? {}),
+  over: window.__WORMS__.scene.getScene('Game').achGot.map((a) => a.id),
+}));
+check('добил, вися на тросе, — «Человек-паук» и +200 монет один раз; победа открыла «Первую победу»',
+  trick.got.join() === 'rope_kill' && trick.delta === 200 && again.length === 0 && await coinsNow() === c1
+    && ach.saved.includes('rope_kill') && ach.over.includes('wins_1'),
+  JSON.stringify({ trick, again, ach }));
 
 await page.waitForTimeout(1200);
 await tapToMenu();

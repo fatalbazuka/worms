@@ -87,6 +87,8 @@ export class Spring {
       w.squash = -0.9;
     }
     this.cool.set(w, 0.6);
+    // Когда его подбросило: выстрел в этом же полёте — трюк «С батута»
+    w.sprungTurn = this.scene.turn?.turnNumber ?? null;
     this.uses -= 1;
     this.scene.fx?.sound('jump');
     this.scene.tweens?.add({

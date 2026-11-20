@@ -356,6 +356,48 @@ check('один в лобби никого не находит', findMatch(p('a'
     m.xp === 900 && m.rewarded === 7 && L.normalizeLevel('мусор').xp === 0, JSON.stringify(m));
 }
 
+// --- достижения: таблица, открытие один раз, трюки, облачная копия ---
+{
+  const A = await import('../src/core/achievements.js');
+  const { EMOJI } = await import('../src/core/assets.js');
+  const groups = new Set(A.GROUPS.map((g) => g.id));
+  check('достижения: id не повторяются, у каждого группа, значок, порог и награда',
+    new Set(A.ACHIEVEMENTS.map((a) => a.id)).size === A.ACHIEVEMENTS.length
+      && A.ACHIEVEMENTS.every((a) => groups.has(a.group) && EMOJI.includes(a.icon) && a.target >= 1 && a.coins > 0));
+  // Порог взят — открыто один раз; повтор того же события ничего не открывает
+  const t0 = 1_700_000_000_000;
+  const one = A.addStats(A.emptyAch(), { wins: 1, rope_kill: 1 }, { level: 10 }, t0);
+  const two = A.addStats(one.state, { wins: 1, rope_kill: 1 }, { level: 3 }, t0 + 5);
+  check('достижение открывается один раз, «лучшее» не убавляется',
+    one.unlocked.join() === 'rope_kill,wins_1,level_10' && two.unlocked.length === 0
+      && two.state.n.wins === 2 && two.state.n.level === 10 && two.state.got.wins_1 === t0,
+    JSON.stringify({ one: one.unlocked, two: two.state }));
+  // Трюки выстрела: что засчитывается, а что нет
+  const s = A.shotStats({ weapon: 'bat', hang: true, kills: 2, drowns: 1, hits: 2 });
+  check('трюки: на тросе + двое + бита в воду; батут без попадания — не трюк',
+    s.rope_kill === 1 && s.double_kill === 1 && s.homerun === 1 && s.drown === 1 && !s.triple
+      && !A.shotStats({ sprung: true, hits: 0 }).spring_shot && A.shotStats({ sprung: true, hits: 1 }).spring_shot === 1,
+    JSON.stringify(s));
+  // Конец боя: испытание не идёт в победы; «На волоске» — 1–10 здоровья
+  const end = (o) => A.battleEndStats({ won: true, mode: 'tower', myTurns: 6, hurt: true, ...o });
+  check('конец боя: испытание не победа, «На волоске» и «Ни царапины» по правилам',
+    !A.battleEndStats({ won: true, mode: 'challenge', myTurns: 1, hurt: false }).wins
+      && end({ mine: [{ alive: true, health: 7 }, { alive: false, health: 0 }] }).last_stand === 1
+      && !end({ mine: [{ alive: true, health: 11 }] }).last_stand
+      && end({ hurt: false, myTurns: 2, mine: [{ alive: true, health: 100 }] }).flawless === 1
+      && !end({ hurt: false, mine: [{ alive: true, health: 100 }, { alive: false, health: 0 }] }).flawless);
+  // Глава «Подъёма» засчитывается, только когда пройдена вся
+  const { ASCENT } = await import('../src/campaign/ascent.js');
+  const foot = ASCENT.filter((m) => m.chapter === 'foot').map((m) => m.id);
+  check('глава «Подъёма» — только целиком',
+    A.progressStats({ ascent: foot }).ascent === 1 && A.progressStats({ ascent: foot.slice(1) }).ascent === 0);
+  // Облако: открытое — объединение с более ранней датой, счётчики — максимум
+  const m = A.mergeAch({ got: { wins_1: 50, junk: 1 }, n: { wins: 3 } }, { got: { wins_1: 20, promo: 9 }, n: { wins: 1, kills: 4 } });
+  check('облачная копия достижений: объединение, ранняя дата, максимум счётчиков',
+    m.got.wins_1 === 20 && m.got.promo === 9 && !m.got.junk && m.n.wins === 3 && m.n.kills === 4
+      && Object.keys(A.normalizeAch('мусор').got).length === 0, JSON.stringify(m));
+}
+
 console.log(failures.length
   ? `\nне прошло: ${failures.length}`
   : '\nпроверки подбора пройдены');

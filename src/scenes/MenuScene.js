@@ -51,6 +51,9 @@ import { fitScale } from '../core/assets.js';
 import { XP, TABLE_END, rewardFor, COS_LABEL } from '../core/levels.js';
 import { levelState } from '../platform/levels.js';
 import { LANG, setLang } from '../i18n/index.js';
+import { GROUPS } from '../core/achievements.js';
+import { achState, checkAchievements, notePromo, onAchievement } from '../platform/achievements.js';
+import { AchToasts } from '../ui/AchToast.js';
 
 /**
  * Меню.
@@ -118,6 +121,14 @@ export default class MenuScene extends Phaser.Scene {
     };
     this.events.on('addedtoscene', assignCamera);
     this.events.once('shutdown', () => this.events.off('addedtoscene', assignCamera));
+    // Открылось достижение (скин из коробки, серия дней, промокод) —
+    // плашкой сверху, поверх любого раздела
+    this.achToasts = new AchToasts(this, {
+      adopt: (o) => o.setDepth(80),
+      place: () => ({ x: this.W / 2, y: 14, center: true }),
+    });
+    const offAch = onAchievement((list) => this.achToasts.push(list));
+    this.events.once('shutdown', offAch);
     this._backdrop();
     this._initScroll();
     // Коробки за миссии, пройденные раньше, чем появились скины
@@ -294,6 +305,9 @@ export default class MenuScene extends Phaser.Scene {
     this.buttons = {};
     this.buttonTexts = {};
     this.copiedLabel = null;
+    // Любой раздел рисуется заново после того, что могло сдвинуть вехи и
+    // коллекцию (коробка, покупка, серия дней): тут их и проверяем
+    checkAchievements();
   }
 
   _title(text, sub = '') {
@@ -834,6 +848,90 @@ export default class MenuScene extends Phaser.Scene {
     this._setScroll(keep ?? Math.max(0, rowY(lv.level + 1) + rh - this.bottomY(110)));
   }
 
+  // --------------------------------------------------------- достижения
+
+  /**
+   * Витрина достижений: группами (трюки, вехи, коллекция), карточки сеткой.
+   * Открытое — в цвете и с датой; закрытое — силуэтом, с условием и
+   * прогрессом «7/10». Награда видна у каждого: ради неё и тянутся.
+   * Забирать нечего — награда выдаётся сама, как только открыл.
+   */
+  showAchievements() {
+    const keep = this.section === this.showAchievements ? this.scrollY : null;
+    this.section = this.showAchievements;
+    this._clear();
+    const W = this.W;
+    const st = achState();
+    this._title('Достижения', `открыто ${st.got} из ${st.total} · награда — сразу, как откроешь`);
+    // На телефоне — два столбца, в ландшафте — сколько влезет, до четырёх
+    const cols = this.portrait ? 2 : Math.max(2, Math.min(4, Math.floor((W - 64) / 330)));
+    const gap = 14;
+    const cw = Math.floor((Math.min(W - 48, cols * 380) - gap * (cols - 1)) / cols);
+    const ch = this.portrait ? 196 : 166;
+    const span = cols * cw + gap * (cols - 1);
+    const x0 = Math.round((W - span) / 2);
+    let y = this.portrait ? 170 : 160;
+    for (const g of GROUPS) {
+      const list = st.list.filter((a) => a.group === g.id);
+      const got = list.filter((a) => a.done).length;
+      this.items.push(this.add.text(x0, y, g.title, font(30, 900, UI.accent)).setOrigin(0, 0.5));
+      this.items.push(this.add.text(x0 + span, y, `${got}/${list.length} · ${g.hint}`,
+        font(this.fs(14), 700, UI.textDim)).setOrigin(1, 0.5));
+      y += 30;
+      list.forEach((a, i) => {
+        this._achCard(a, x0 + (i % cols) * (cw + gap), y + Math.floor(i / cols) * (ch + gap), cw, ch);
+      });
+      y += Math.ceil(list.length / cols) * (ch + gap) + 34;
+    }
+    this._back(this.achFrom === 'tasks' ? () => this.showTasks()
+      : this.achFrom === 'account' ? () => { this.showRoot(); this.openAccount(); } : undefined);
+    this._scrollable(y + 40);
+    this._setScroll(keep ?? 0);
+  }
+
+  /** Карточка достижения: x, y — левый верхний угол. */
+  _achCard(a, x, y, w, h) {
+    const done = a.done;
+    const g = this.add.graphics();
+    g.fillStyle(done ? 0x241a4e : 0x121826, 0.94).fillRoundedRect(x, y, w, h, 18);
+    g.lineStyle(3, done ? 0xffc247 : 0x2a3350, done ? 0.9 : 1).strokeRoundedRect(x, y, w, h, 18);
+    this.items.push(g);
+    // Значок: открытое — цветной эмодзи, закрытое — силуэт
+    const key = `emoji_${a.icon}`;
+    if (this.textures.exists(key)) {
+      const img = this.add.image(x + 46, y + 46, key).setScale(62 / 128);
+      if (!done) img.setTintFill(0x3a4560);
+      this.items.push(img);
+    }
+    this.items.push(this.add.text(x + 88, y + 46, a.title, font(21, 800, done ? '#ffe27a' : UI.text))
+      .setOrigin(0, 0.5).setWordWrapWidth(w - 100));
+    this.items.push(this.add.text(x + 16, y + 86, a.desc, font(this.fs(13), 700, done ? UI.text : UI.textDim))
+      .setOrigin(0, 0).setWordWrapWidth(w - 32));
+    // Низ: когда открыто — или сколько набрано; справа — награда
+    const by = y + h - 24;
+    if (done) {
+      const date = a.at > 1
+        ? new Date(a.at).toLocaleDateString(LANG === 'en' ? 'en-GB' : 'ru-RU', { day: 'numeric', month: 'short' }) : '';
+      this.items.push(this.add.text(x + 16, by, date ? `✓ открыто ${date}` : '✓ открыто', font(this.fs(13), 800, '#8ef0a0'))
+        .setOrigin(0, 0.5));
+    } else if (a.target > 1) {
+      const bw = Math.max(60, w - 190);
+      this.items.push(this.add.rectangle(x + 16, by, bw, 12, 0x0b1220, 0.95).setOrigin(0, 0.5));
+      if (a.n > 0) this.items.push(this.add.rectangle(x + 16, by, Math.max(4, bw * (a.n / a.target)), 12, 0x8fe3ff).setOrigin(0, 0.5));
+      this.items.push(this.add.text(x + 24 + bw, by, `${a.n}/${a.target}`, font(this.fs(13), 800, '#8fe3ff')).setOrigin(0, 0.5));
+    }
+    let rx = x + w - 14;
+    if (a.boxes && this.textures.exists('shot_crate_weapon')) {
+      const box = this.add.image(rx - 14, by, 'shot_crate_weapon').setScale(fitScale(this, 'shot_crate_weapon', 28));
+      this.items.push(box.setAlpha(done ? 1 : 0.7));
+      rx -= 34;
+    }
+    if (a.coins) {
+      const t = this.add.text(rx, by, `${a.coins}`, font(19, 800, done ? '#ffe27a' : '#c9b37a')).setOrigin(1, 0.5);
+      this.items.push(t, this.add.image(rx - t.width - 16, by, this._coinTexture()).setScale(0.55).setAlpha(done ? 1 : 0.7));
+    }
+  }
+
   // ------------------------------------------------------------- монеты
 
   /** Значок монеты, нарисованный один раз. */
@@ -1017,6 +1115,10 @@ export default class MenuScene extends Phaser.Scene {
     // Куда тратить монеты, кроме коробок
     this._button('cosmetics', cx, y + 212, 'Украшения', 'трос, след, надгробие · заморозка серии',
       () => this.showCosmetics(), { w: Math.min(cw, 460), h: 90, titleSize: 25, hintSize: 17 });
+    // Достижения — длинные цели рядом с дневными
+    const ach = achState();
+    this._button('achievements', cx, y + 318, '🏅 Достижения', `открыто ${ach.got} из ${ach.total}`,
+      () => { this.achFrom = 'tasks'; this.showAchievements(); }, { w: Math.min(cw, 460), h: 90, titleSize: 25, hintSize: 17 });
     this._tabs('tasks');
   }
 
@@ -1328,6 +1430,7 @@ export default class MenuScene extends Phaser.Scene {
     }).then(() => {
       if (!got) return;
       if (got.owned) applyServerOwned(got.owned);
+      notePromo();
       haptic('win');
       (this.section === this.showShop ? this.showShop : this.showSkins).call(this);
       const parts = [got.boxes && `коробок: ${got.boxes}`, got.coins && `монет: ${got.coins}`].filter(Boolean).join(' · ');
@@ -2215,6 +2318,7 @@ export default class MenuScene extends Phaser.Scene {
     openAccountDialog({
       onTop: () => { this.topFrom = 'tab'; this.showTop(); },
       onTours: () => this.openTournaments(),
+      onAch: () => { this.achFrom = 'account'; this.showAchievements(); },
     });
   }
 
