@@ -16,6 +16,9 @@ import { Affixes, DEFAULT_AFFIXES } from '../entities/Affixes.js';
 import { Hud, TOP_H } from '../ui/Hud.js';
 import { Fx } from '../ui/Fx.js';
 import { AimController } from '../ui/AimController.js';
+import { ShotTrace } from '../ui/ShotTrace.js';
+import { KoLog } from '../ui/KoLog.js';
+import { koCause, koSummary } from '../core/knockouts.js';
 import { font, UI, ensureButton } from '../ui/theme.js';
 import { WEAPONS, WEAPON_RARITY } from '../weapons/index.js';
 import { captureCommand, captureMove } from '../net/protocol.js';
@@ -172,6 +175,10 @@ export default class GameScene extends Phaser.Scene {
     this.hud = new Hud(this);
     this.turn = new TurnManager(this);
     this.aim = new AimController(this);
+    // След прошлого выстрела и журнал выбывших — чтобы бой был понятен
+    this.shotTrace = new ShotTrace(this);
+    this.koLog = new KoLog(this);
+    this.kos = [];
     this.offscreen = new OffscreenMarkers(this);
     // Новичок: пошаговая тренировка поверх «Первого выстрела»
     this.coach = this.match.tutorial && this.slingAim && !isDesktop() ? new Coach(this) : null;
@@ -438,8 +445,9 @@ export default class GameScene extends Phaser.Scene {
   }
 
   /** Бойцу досталось (Worm.damage): для трюков и «Ни царапины». */
-  onWormHurt(w, amount) {
+  onWormHurt(w, amount, cause = '') {
     if (this.replaying || amount <= 0) return;
+    this._noteHit(w, cause);
     if (w.team === this.myTeamIndex) this._myHurt = true;
     else if (this._trickLive()) {
       const t = this._trick;
@@ -1302,6 +1310,7 @@ export default class GameScene extends Phaser.Scene {
     this._updateCamera(dt, realDt);
     this.fx.updateWind(realDt);
     this.aim.update();
+    this.shotTrace?.update();
     this.turn.update(realDt);
     this.hud.update();
     this.offscreen.update();
@@ -1740,6 +1749,10 @@ export default class GameScene extends Phaser.Scene {
     }
     const shots = this.turn.weapon.fire(this, sx, sy, vx, vy, w);
     this.projectiles.push(...shots);
+    // След выстрела — только своему игроку на этом устройстве
+    if (!this.replaying && !this.isBotTurn() && this.isLocalTeam(this.turn.currentTeam)) {
+      this.shotTrace?.onFire(w, vx, vy, shots, this.turn.weapon);
+    }
     this.turn.onFired();
     if (!this.replaying && !this.isBotTurn()) this.coach?.onShot();
     this.setCameraManual(false);
@@ -1807,6 +1820,9 @@ export default class GameScene extends Phaser.Scene {
       m.armed = true;
     }
 
+    // Кто задел — для причины выбывания: снаряд бойца или стихия (null)
+    this._blastBy = owner ?? 'env';
+    this._blastCfg = cfg;
     let felt = 0;
     let ouch = null, ouchDmg = 0;
     const shooter = owner?.team ?? this.turn.currentTeam;
@@ -1835,6 +1851,8 @@ export default class GameScene extends Phaser.Scene {
       }
       if (dmg > ouchDmg) { ouch = w; ouchDmg = dmg; }
     }
+    this._blastBy = undefined;
+    this._blastCfg = undefined;
     this._impact(x, y, ouchDmg, foesHit);
     // Сильно досталось — боец вскрикивает. Царапины молча, иначе «ой» на каждый чих
     if (ouch && ouchDmg >= 25 && !this.gameOverUi) voice.say('hurt', { team: ouch.team });
@@ -2075,6 +2093,7 @@ export default class GameScene extends Phaser.Scene {
   }
 
   onWormDied(worm, cause = '') {
+    this._noteKo(worm, cause);
     // Трюки: кого добил своим выстрелом и кто из них ушёл в воду; свой
     // выбыл — «Ни царапины» уже не будет (утонувшему урона не наносят)
     if (!this.replaying) {
@@ -2109,6 +2128,62 @@ export default class GameScene extends Phaser.Scene {
       && (this.turn.activeWorm === worm || this.checkVictory() !== null)) {
       this.turn.endTurn();
     }
+  }
+
+  // ------------------------------------------------- почему выбыл боец
+
+  /** Кто задел — словами: свой игрок «ты», бот или человек — «соперник». */
+  _whoLabel(team) {
+    const solo = this.bots?.some(Boolean) || this.net?.connected;
+    if (!solo) return TEAM_NAMES[team] ?? '';
+    return team === this.myTeamIndex ? 'ты' : 'соперник';
+  }
+
+  /**
+   * Запомнить, кто задел бойца последним. Падение — следствие удара, автора
+   * не меняет. Бита, гиря и бумеранг бьют мимо explode — тогда автор тот,
+   * чей ход; монстры, бочки и молнии (взрыв без хозяина) — стихия.
+   */
+  _noteHit(w, cause) {
+    if (cause === 'падение') return;
+    const turn = this.turn.turnNumber;
+    const by = this._blastBy;
+    if (cause === 'кактус' || by === 'env' || (!by && !this.turn.activeWorm)) {
+      w.lastHit = { team: -1, weapon: cause === 'кактус' ? 'кактус' : 'взрыв', who: null, turn };
+      return;
+    }
+    const shooter = by?.team !== undefined ? by : this.turn.activeWorm;
+    // Мина и ракета живут дольше хода: оружие — по взрыву, а не по руке
+    const weapon = (this._blastCfg && WEAPONS.find((x) => x.explosion === this._blastCfg)) || this.turn.weapon;
+    w.lastHit = { team: shooter.team, weapon: weapon?.name ?? '', who: this._whoLabel(shooter.team), turn };
+  }
+
+  /** Боец выбыл: причина — выкриком у него, строкой в журнал и в итог боя. */
+  _noteKo(worm, cause) {
+    if (!worm || this.kos.some((k) => k.worm === worm)) return;
+    const ko = koCause({
+      cause, hit: worm.lastHit ?? null, turn: this.turn?.turnNumber ?? 0,
+      victimTeam: worm.team, tower: Boolean(this.terrain?.tops),
+    });
+    this.kos.push({ worm, team: worm.team, kind: ko.kind, byTeam: ko.byTeam });
+    if (this.fastForward) return;    // перемотка истории дуэли — без выкриков
+    // Утонувший уже под водой: выкрик — над её кромкой
+    const y = Math.min(worm.centerY, (CFG.WATER_Y ?? worm.centerY) - 10) - 34;
+    this.fx.callout(worm.x, y, ko.text, '#ffe9c2', 22);
+    this.koLog?.add(worm.team, `${TEAM_NAMES[worm.team] ?? ''}: ${ko.text}`);
+  }
+
+  /** Строка итога «Победа: 1 добил ты · 1 утонул» — под заголовком. */
+  _koResult(winner, y) {
+    const solo = this.bots?.some(Boolean) || this.net?.connected;
+    if (!solo || winner < 0) return;
+    const text = koSummary(this.kos, { won: winner === this.myTeamIndex, myTeam: this.myTeamIndex, boss: Boolean(this.match.boss) });
+    if (!text) return;
+    const t = this.rig.ui(this.add.text(CFG.VIEW_W / 2, y, text, font(19, 800, '#e8f0ff'))
+      .setOrigin(0.5).setScrollFactor(0).setDepth(DEPTH.HUD + 11).setStroke('#10131a', 5)
+      .setWordWrapWidth(CFG.VIEW_W - 40).setAlign('center').setAlpha(0));
+    this.tweens.add({ targets: t, alpha: 1, duration: 300, delay: 450 });
+    this.gameOverUi?.push(t);
   }
 
   teamAlive(team) {
@@ -2285,6 +2360,10 @@ export default class GameScene extends Phaser.Scene {
     this.rig.ui(sub);
 
     this.gameOverUi = [shade, title, sub];
+    this.koLog?.clear();
+    // За что победа или поражение — одной строкой под заголовком (с
+    // рейтингом под заголовком тесно — тогда над ним)
+    this._koResult(winner, CFG.VIEW_H / 2 + (ratingLine ? -70 : 6));
 
     // Испытание: звёзды и монеты за новые звёзды — строкой над заголовком
     const newStars = this.match.mode === 'challenge' ? this._challengeResult(winner >= 0 && winner === mine) : 0;
@@ -2684,6 +2763,9 @@ export default class GameScene extends Phaser.Scene {
     this.ambience = null;
     this.affixes = null;
     this.aim?.destroy();
+    this.shotTrace?.destroy();
+    this.shotTrace = null;
+    this.koLog = null;
     this.crates = [];
     this.rig?.destroy();
     this.offscreen?.destroy();
