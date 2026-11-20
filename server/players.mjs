@@ -6,8 +6,10 @@ import { randomBytes } from 'node:crypto';
 import { START_RATING } from './lib/elo.js';
 import { displayName } from './lib/telegram.js';
 
-const SKIN_SQL = `(select case when json_valid(s.value) then json_extract(s.value, '$.equipped') end
-  from save_kv s where s.player_id = player.id and s.key = 'worms.skins.v1')`;
+/** Надетый скин игрока idCol из его прогресса на сервере; битая копия — null. */
+export const skinSql = (idCol) => `(select case when json_valid(s.value) then json_extract(s.value, '$.equipped') end
+  from save_kv s where s.player_id = ${idCol} and s.key = 'worms.skins.v1')`;
+const SKIN_SQL = skinSql('player.id');
 
 export function createPlayers({ db, now = () => Date.now(), adminIds = new Set() }) {
   const q = {

@@ -18,7 +18,7 @@ import { Lobby } from '../net/lobby.js';
 import { pendingSession, forgetSession } from '../net/session.js';
 import {
   syncMe, fetchTop, myRank, loggedIn, onAccountChange, track,
-  trackStep, prepareChallenge, fetchDailyTower, redeemPromo,
+  trackStep, prepareChallenge, fetchDailyTower, redeemPromo, fetchFriends, inviteFriend,
 } from '../net/server.js';
 import { openAccountDialog } from '../ui/AccountDialog.js';
 import { openTournaments } from '../ui/Tournaments.js';
@@ -69,6 +69,17 @@ function plural(n, one, few, many) {
   if (m10 === 1 && m100 !== 11) return one;
   if (m10 >= 2 && m10 <= 4 && (m100 < 12 || m100 > 14)) return few;
   return many;
+}
+
+/** Когда друг был в игре: «сегодня», «вчера», «3 дн. назад», «давно». */
+function seenText(at) {
+  if (!at) return '';
+  const midnight = new Date();
+  midnight.setHours(0, 0, 0, 0);
+  if (at >= midnight.getTime()) return 'в игре сегодня';
+  const days = Math.ceil((midnight.getTime() - at) / 86400_000);
+  if (days <= 1) return 'в игре вчера';
+  return days > 30 ? 'в игре давно' : `в игре ${days} дн. назад`;
 }
 
 /** Через сколько секунд поиска без соперника предлагается бой с ботом. */
@@ -132,6 +143,10 @@ export default class MenuScene extends Phaser.Scene {
     } else if (fromLink && !this.registry.get('tourLinkUsed')) {
       this.registry.set('tourLinkUsed', true);
       this.time.delayedCall(300, () => this.openTournaments(/^\d+$/.test(fromLink) ? Number(fromLink) : null));
+    } else if (params.get('top') === 'friends' && !this.registry.get('topLinkUsed')) {
+      // Кнопка из сообщения бота «друг тебя обогнал» — сразу к топу друзей
+      this.registry.set('topLinkUsed', true);
+      this.time.delayedCall(300, () => { this.topFrom = 'tab'; this.showTop('rating', 'friends'); });
     }
 
     this.input.keyboard?.on('keydown-ESC', () => this.showRoot());
@@ -408,6 +423,7 @@ export default class MenuScene extends Phaser.Scene {
    */
   _tabs(active) {
     const W = this.W;
+    const n = this.items.length;
     // Логический пиксель на телефоне — около половины экранного, поэтому
     // подписи здесь 19–20: меньше уже не читается
     const h = this.portrait ? 116 : 96;
@@ -448,6 +464,8 @@ export default class MenuScene extends Phaser.Scene {
       if (on) this.items.push(this.add.rectangle(x, y0 + 3, 54, 4, 0xffc247).setOrigin(0.5, 0));
       this.buttons[key] = { x, y: y0 + h / 2 + this.oy, w: cell, h, enabled: true };
     });
+    // Как «назад»: не уезжают, когда раздел прокручивается (топ друзей)
+    for (const o of this.items.slice(n)) o.setScrollFactor(0).setY(o.y + this.oy).setDepth(50);
     return h;
   }
 
@@ -780,18 +798,23 @@ export default class MenuScene extends Phaser.Scene {
     }
 
     // Позвать друга: новичку и тебе — по коробке
+    this._inviteButton(cx, y + 106, Math.min(cw, 460));
+    // Куда тратить монеты, кроме коробок
+    this._button('cosmetics', cx, y + 212, 'Украшения', 'трос, след, надгробие · заморозка серии',
+      () => this.showCosmetics(), { w: Math.min(cw, 460), h: 90, titleSize: 25, hintSize: 17 });
+    this._tabs('tasks');
+  }
+
+  /** «Позвать друга» по своей ссылке: новичку и тебе — по коробке (shop.referral). */
+  _inviteButton(x, y, w, h = 90) {
     const link = refLink();
-    this._button('invite', cx, y + 106, 'Позвать друга', link ? 'вам обоим — по коробке со скином' : 'работает в Telegram',
+    return this._button('invite', x, y, 'Позвать друга', link ? 'вам обоим — по коробке со скином' : 'работает в Telegram',
       () => {
         trackStep('invite');
         if (!shareLink(link, 'Залетай в бой на башне! По этой ссылке нам обоим дадут коробку со скином 🎁')) {
           copyText(link);
         }
-      }, { w: Math.min(cw, 460), h: 90, titleSize: 25, hintSize: 17, enabled: Boolean(link), variant: 'primary' });
-    // Куда тратить монеты, кроме коробок
-    this._button('cosmetics', cx, y + 212, 'Украшения', 'трос, след, надгробие · заморозка серии',
-      () => this.showCosmetics(), { w: Math.min(cw, 460), h: 90, titleSize: 25, hintSize: 17 });
-    this._tabs('tasks');
+      }, { w, h, titleSize: 25, hintSize: 17, enabled: Boolean(link), variant: 'primary' });
   }
 
   // -------------------------------------------------------------- магазин
@@ -1745,32 +1768,145 @@ export default class MenuScene extends Phaser.Scene {
   /**
    * Таблица лидеров с сервера. Видна всем, попасть в неё — сыграть бой по
    * сети с аккаунтом против соперника с аккаунтом.
+   *
+   * Сверху два переключателя в один ряд: «Все / Друзья» и, для всех,
+   * «Рейтинг / Турниры». Друзья — свой список с местом и «Вызвать».
    */
-  showTop(kind = this.topKind ?? 'rating') {
+  showTop(kind = this.topKind ?? 'rating', scope = this.topScope ?? 'all') {
     this.section = this.showTop;
     this.topKind = kind;
+    this.topScope = scope;
     this._clear();
-    this._title('Топ игроков', kind === 'tourney' ? 'по победам в турнирах' : 'рейтинг по подтверждённым боям');
+    const friends = scope === 'friends';
+    this._title(friends ? 'Друзья' : 'Топ игроков', friends ? 'кого ты позвал, кто позвал тебя и с кем ты сыграл на рейтинг'
+      : kind === 'tourney' ? 'по победам в турнирах' : 'рейтинг по подтверждённым боям');
     const cx = this.W / 2;
-    const tab = (key, label, k) => this._button(key, cx + (k === 'tourney' ? 106 : -106), 160, label, '',
-      () => this.showTop(k), { w: 208, h: 40, variant: kind === k ? 'active' : 'normal' });
-    tab('top-rating', 'Рейтинг', 'rating');
-    tab('top-tourney', 'Турниры', 'tourney');
+    // Ряд: [Все][Друзья]  [Рейтинг][Турниры] — 652 в ширину, влезает и в портрет 720
+    const bw = 150, x0 = cx - 326;
+    const seg = (key, label, x, on, onTap) => this._button(key, x, 160, label, '', onTap,
+      { w: bw, h: 40, variant: on ? 'active' : 'normal' });
+    seg('top-all', 'Все', x0 + 75, !friends, () => this.showTop(kind, 'all'));
+    seg('top-friends', 'Друзья', x0 + 233, friends, () => this.showTop(kind, 'friends'));
+    if (!friends) {
+      seg('top-rating', 'Рейтинг', x0 + 419, kind === 'rating', () => this.showTop('rating', 'all'));
+      seg('top-tourney', 'Турниры', x0 + 577, kind === 'tourney', () => this.showTop('tourney', 'all'));
+    }
     const note = this.add.text(cx, 204, 'загружаю…', font(this.fs(14), 700, UI.textDim)).setOrigin(0.5, 0);
     this.items.push(note);
     // Пришли со вкладки — внизу вкладки; из лобби — кнопка «назад» в лобби
     if (this.topFrom === 'tab') this._tabs('top');
     else this._back(() => this.showOnline());
+    const still = () => this.section === this.showTop && this.topKind === kind && this.topScope === scope;
+
+    if (friends) {
+      // Сводка — на месте второго переключателя
+      this.friendsHead = this.add.text(x0 + 498, 160, '', font(this.fs(13), 800, UI.accent)).setOrigin(0.5);
+      this.items.push(this.friendsHead);
+      if (!loggedIn()) {
+        note.destroy();
+        this._renderFriends(null);
+        return;
+      }
+      fetchFriends().then((data) => {
+        if (!still()) return;
+        this.friendRows = data.friends;
+        note.destroy();
+        this._renderFriends(data);
+      }).catch((e) => {
+        if (still()) note.setText(`сервер недоступен: ${e.message}`);
+      });
+      return;
+    }
 
     fetchTop(10, kind).then((rows) => {
-      if (this.section !== this.showTop || this.topKind !== kind) return;
+      if (!still()) return;
       this.topRows = rows;
       note.destroy();
       this._renderTop(rows, kind);
     }).catch((e) => {
-      if (this.section !== this.showTop) return;
+      if (!still()) return;
       note.setText(`сервер недоступен: ${e.message}`);
     });
+  }
+
+  /** Лист модельки по скину; нет такого — обычный смайлик. */
+  _skinSheet(skin) {
+    const sheet = SKIN_BY_ID[skin]?.sheet;
+    return sheet && this.textures.exists(sheet) ? sheet : 'smiley';
+  }
+
+  /**
+   * Топ друзей списком: место, моделька в надетом скине, ник, лига, когда
+   * был в игре, рейтинг и «Вызвать». Ты — в списке со своим местом и
+   * подсвечен. Длинный список крутится пальцем, вкладки стоят на месте.
+   * Друзей нет (или нет входа) — пара строк о том, кто здесь появится, и
+   * «Позвать друга».
+   */
+  _renderFriends(data) {
+    const W = this.W, cx = W / 2;
+    const add = (o) => { this.items.push(o); return o; };
+    const short = (name, n) => (name.length > n ? `${name.slice(0, n - 1)}…` : name);
+    const rows = data?.friends ?? [];
+    const others = rows.filter((r) => !r.me);
+    const tabs = this.topFrom === 'tab';
+    const listTop = 200;
+
+    if (!others.length) {
+      this.friendsHead?.setText('');
+      const lines = data
+        ? ['Здесь пока только ты.',
+          'Позови друга по своей ссылке — он появится здесь, а вам обоим дадут по коробке со скином.',
+          'Сюда же попадает каждый, с кем ты доиграл бой по сети на рейтинг.']
+        : ['Друзья видны в Telegram.', 'Открой игру в Telegram — и здесь появятся те, кого ты позвал и с кем сыграл.'];
+      // В ландшафте по высоте тесно: плотнее строки и кнопки
+      const p = this.portrait;
+      const t = add(this.add.text(cx, listTop + (p ? 40 : 14), lines, font(this.fs(15), 700, UI.text))
+        .setOrigin(0.5, 0).setAlign('center').setLineSpacing(p ? 10 : 3).setWordWrapWidth(Math.min(W - 80, 640)));
+      const y = t.y + t.height + (p ? 70 : 52);
+      const w = Math.min(W - 64, 460);
+      this._inviteButton(cx, y, w, p ? 90 : 80);
+      this._button('friends-duel', cx, y + (p ? 104 : 88), 'Вызвать на бой', 'карточкой в любой чат · без рейтинга',
+        () => this.challengeFriend(), { w, h: p ? 80 : 70, titleSize: 23, hintSize: 16 });
+      this._scrollable(y + 140 + (tabs ? 40 : 0));
+      return;
+    }
+
+    this.friendsHead?.setText(data.place ? `ты ${data.place}-й из ${data.total}` : `друзей: ${others.length}`);
+    const roomy = this.portrait;
+    const rowH = roomy ? 100 : 76;
+    const lw = Math.min(W - 48, 980);
+    const lx0 = cx - lw / 2, lx1 = cx + lw / 2;
+    const g = add(this.add.graphics());
+    rows.forEach((r, i) => {
+      const y = listTop + i * rowH;
+      const h = rowH - 10;
+      const mine = Boolean(r.me);
+      g.fillStyle(mine ? 0x2a2a1a : 0x161d2e, 1).fillRoundedRect(lx0, y, lw, h, 12);
+      g.lineStyle(mine ? 3 : 2, mine ? 0xffd166 : 0xffffff, mine ? 1 : 0.08).strokeRoundedRect(lx0, y, lw, h, 12);
+      const placeColor = r.place <= 3 ? ['#ffc93c', '#c9d4e6', '#d98c4a'][r.place - 1] : UI.textDim;
+      add(this.add.text(lx0 + 34, y + h / 2, `${r.place}`, font(this.fs(16), 800, placeColor)).setOrigin(0.5));
+      const sheet = this._skinSheet(r.skin);
+      add(this.add.sprite(lx0 + 92, y + h - 2, sheet, 0).setOrigin(0.5, 0.92).setScale((h * 0.95) / 100).setFlipX(true))
+        .play(`${sheet}_idle`);
+      const nx = lx0 + 140;
+      add(this.add.text(nx, y + h / 2 - 2, short(r.name, roomy ? 14 : 20), font(this.fs(15), 800, mine ? UI.accent : UI.text))
+        .setOrigin(0, 1));
+      const sub = [leagueOf(r.rating).name, `побед ${r.wins}`, mine ? '' : seenText(r.seenAt)].filter(Boolean).join(' · ');
+      add(this.add.text(nx, y + h / 2 + 4, sub, font(this.fs(11), 700, leagueOf(r.rating).text)).setOrigin(0, 0));
+      const bx = lx1 - 86;
+      add(this.add.text(bx - 92, y + h / 2, `${r.rating}`, font(this.fs(16), 800, UI.text)).setOrigin(1, 0.5));
+      if (mine) {
+        add(this.add.text(bx, y + h / 2, 'это ты', font(this.fs(13), 800, UI.accent)).setOrigin(0.5));
+      } else {
+        this._button(`duel-${r.id}`, bx, y + h / 2, 'Вызвать', '', () => this.challengeFriend(r),
+          { w: 148, h: Math.min(56, h - 18), titleSize: roomy ? 22 : 19, variant: 'primary' });
+      }
+    });
+    // Под списком — позвать ещё кого-нибудь
+    const endY = listTop + rows.length * rowH + 56;
+    this._inviteButton(cx, endY, Math.min(lw, 460), 84);
+    // Низ раздела — над вкладками (или «назад»), чтобы последняя строка не пряталась
+    this._scrollable(endY + 42 + (tabs ? (this.portrait ? 116 : 96) - 96 + 24 : 0));
   }
 
   /**
@@ -1790,10 +1926,7 @@ export default class MenuScene extends Phaser.Scene {
       return;
     }
     const score = (r) => (kind === 'tourney' ? `🏆 ${r.tourney_wins}` : `${r.rating}`);
-    const sheetOf = (r) => {
-      const sheet = SKIN_BY_ID[r.skin]?.sheet;
-      return sheet && this.textures.exists(sheet) ? sheet : 'smiley';
-    };
+    const sheetOf = (r) => this._skinSheet(r.skin);
     const short = (name, n) => (name.length > n ? `${name.slice(0, n - 1)}…` : name);
     const add = (o) => { this.items.push(o); return o; };
 
@@ -2101,6 +2234,10 @@ export default class MenuScene extends Phaser.Scene {
 
     const code = this.add.text(cx, 176, room, font(72, 800, UI.accent)).setOrigin(0.5, 0);
     this.items.push(code);
+    // Вызов другу через бота — что с ним (challengeFriend)
+    this.roomNoteText = this.add.text(cx, 142, this.roomNote?.room === room ? this.roomNote.text : '',
+      font(this.fs(14), 800, '#8ef0a0')).setOrigin(0.5, 0);
+    this.items.push(this.roomNoteText);
     this.items.push(this.add.text(cx, 268, 'код для друга', font(this.fs(12), 700, UI.textDim)).setOrigin(0.5, 0));
 
     const link = this.inviteLink(room);
@@ -2135,11 +2272,39 @@ export default class MenuScene extends Phaser.Scene {
     return tgInviteLink(room);
   }
 
-  /** Вызов с главного экрана: комната башни и сразу выбор чата для карточки. */
-  challengeFriend() {
+  /**
+   * Вызов с главного экрана: комната башни и сразу выбор чата для карточки.
+   * friend — «Вызвать» из топа друзей: сначала бот пишет этому другу с
+   * кнопкой прямо в комнату; не вышло (лимит, друг отписался от бота, нет
+   * сети) — тот же выбор чата с карточкой, что и без друга.
+   */
+  challengeFriend(friend = null) {
     const room = randomRoom(true, true);
+    this.roomNote = null;
     this.showRoom(room);
-    if (inTelegram()) this.time.delayedCall(250, () => this.buttonHandlers?.copy?.());
+    const share = () => { if (inTelegram()) this.buttonHandlers?.copy?.(); };
+    if (!friend || !loggedIn()) {
+      this.time.delayedCall(250, share);
+      return;
+    }
+    this._setRoomNote(room, `отправляю вызов: ${friend.name}…`);
+    inviteFriend(friend.id, room).then((sent) => {
+      if (this.hosting !== room) return;
+      if (sent) {
+        trackStep('invite');
+        haptic('win');
+        this._setRoomNote(room, `Вызов ушёл в Telegram: ${friend.name}. Ждём здесь`);
+      } else {
+        this._setRoomNote(room, null);
+        share();
+      }
+    });
+  }
+
+  /** Строка над кодом комнаты: что с вызовом другу. Живёт и после поворота экрана. */
+  _setRoomNote(room, text) {
+    this.roomNote = text ? { room, text } : null;
+    if (this.roomNoteText?.active) this.roomNoteText.setText(text ?? '');
   }
 
   // ---------------------------------------------------------------- старт

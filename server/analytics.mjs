@@ -13,7 +13,8 @@
  * Напоминание. Вечером (REMIND_HOUR по часовому поясу бота) бот пишет тем,
  * кто вчера заходил, а сегодня ещё нет: серия сгорит в полночь. Не чаще
  * раза в день, только с серией и только тем, кто не отписался (/mute).
- * Больше бот сам ничего не пишет: «твой ход» и прочий шум — нет.
+ * Кроме него бот сам пишет только «друг тебя обогнал» (server/friends.mjs,
+ * с теми же /mute и тишиной ночью); «твой ход» и прочий шум — нет.
  *
  * День — строка YYYY-MM-DD в поясе бота: «сегодня» у сервера и в отчёте
  * одно и то же для всех игроков.
@@ -169,6 +170,9 @@ export function createAnalytics({ db, now = () => Date.now(), tz = 'Europe/Mosco
     return q.due.all(today, shiftDay(today, -1), today);
   }
 
+  /** Час (0–23) в поясе бота: ночью бот сам не пишет. */
+  function hourOf(ms = now()) { return Number(parts(ms).hour); }
+
   function markReminded(playerId) { q.reminded.run(dayOf(), playerId); }
   function setRemind(playerId, on) { q.mute.run(on ? 1 : 0, playerId); }
 
@@ -209,5 +213,5 @@ export function createAnalytics({ db, now = () => Date.now(), tz = 'Europe/Mosco
     };
   }
 
-  return { record, report, stats, remindDue, markReminded, setRemind, dayOf };
+  return { record, report, stats, remindDue, markReminded, setRemind, dayOf, hourOf };
 }
