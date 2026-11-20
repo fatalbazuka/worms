@@ -683,7 +683,8 @@ export class Hud {
     const team = turn.currentTeam;
     const has = (i) => (turn.ammoOf ? turn.ammoOf(i) : 1) > 0;
     const out = [];
-    for (const i of [turn.weaponIndex, ...(st.recent[team] ?? [])]) {
+    // Арсенал боя — сразу на ленте: ради него он и выдан
+    for (const i of [turn.weaponIndex, ...(st.recent[team] ?? []), ...(this.scene.loadoutIdx ?? [])]) {
       if (has(i) && !out.includes(i)) out.push(i);
     }
     for (let i = 0; i < WEAPONS.length && out.length < st.n; i++) if (has(i) && !out.includes(i)) out.push(i);
@@ -721,6 +722,11 @@ export class Hud {
         const pop = Math.max(0, (c.popUntil ?? 0) - scene.time.now) / 260;
         c.icon.setScale(k * (1 + Math.sin(pop * Math.PI) * 0.35)).setVisible(true);
       } else c.icon.setVisible(false);
+      // Арсенал боя — золотая точка сверху слева
+      if (scene.loadoutIdx?.includes(idx)) {
+        g.fillStyle(0xffd23f, 1).fillCircle(c.cx - st.r * 0.7, st.y - st.r * 0.7, 7);
+        g.lineStyle(2, 0x10131a, 1).strokeCircle(c.cx - st.r * 0.7, st.y - st.r * 0.7, 7);
+      }
       const n = turn.ammoOf ? turn.ammoOf(idx) : Infinity;
       c.badge.setText(Number.isFinite(n) ? String(n) : '∞').setVisible(true);
     });

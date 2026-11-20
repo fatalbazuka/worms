@@ -637,12 +637,12 @@ const struck = await page.evaluate(() => {
 });
 check('гроза: молния бьёт в самую высокую точку и выбивает кусок',
   storm.turn > 0 && struck.after > struck.before + 10, JSON.stringify({ turn: storm.turn, ...struck }));
-// Скачок гравитации: на ход тяжесть слабее, потом возвращается
+// Скачок гравитации: на ход тяжесть слабее, потом возвращается (up-18: у up-17 его сняли по кривой сложности)
 const grav = await page.evaluate(async () => {
   const { ascentMatch } = await import('/src/core/match.js');
   const g = window.__WORMS__.scene.getScene('Game');
-  g.registry.set('match', ascentMatch('up-17'));
-  g.registry.set('seed', ascentMatch('up-17').seed);
+  g.registry.set('match', ascentMatch('up-18'));
+  g.registry.set('seed', ascentMatch('up-18').seed);
   g.scene.restart();
 });
 await gameReady();

@@ -252,7 +252,7 @@ export class Inventory {
       this.items.push(this.fix(s.add.rectangle(cx, y + BH - fz(5), BW - fz(22), fz(4), rar.color)
         .setOrigin(0.5), D + 2));
     }
-    this.cells.push({ index, weapon, plate, icon, name, ammo, enabled: true });
+    this.cells.push({ index, weapon, plate, icon, name, ammo, enabled: true, x, y });
     this.rects.push({ x, y, w: BW, h: BH });
     this.buttons[weapon.id] = { x: cx, y: y + BH / 2 };
   }
@@ -281,7 +281,14 @@ export class Inventory {
   /** Перечитать патроны и подсветить выбранное. Вызывается при каждом открытии. */
   refresh() {
     const current = this.scene.turn?.weaponIndex;
+    const guests = this.scene.loadout ?? [];
     for (const c of this.cells) {
+      // Арсенал боя — звёздочкой: «это у обеих сторон только в этом бою»
+      if (guests.includes(c.weapon.id) && !c.tag) {
+        c.tag = this.fix(this.scene.add.text(c.x + fz(8), c.y + fz(22), '★', font(fz(16), 800, '#ffd23f'))
+          .setOrigin(0.5), D + 3);
+        this.items.push(c.tag);
+      }
       const n = this._ammoOf(c.index);
       const empty = n <= 0;
       const on = c.index === current && !empty;

@@ -398,6 +398,75 @@ check('один в лобби никого не находит', findMatch(p('a'
       && Object.keys(A.normalizeAch('мусор').got).length === 0, JSON.stringify(m));
 }
 
+// --- «Арсенал боя»: по зерну, одинаковый у обеих сторон и у всех клиентов ---
+{
+  const { battleLoadout, loadoutApplies } = await import('../src/core/loadout.js');
+  const { WEAPONS } = await import('../src/weapons/index.js');
+  const { towerMatch, onlineMatch, challengeMatch, tutorialMatch, dailyMatch, ascentMatch } = await import('../src/core/match.js');
+  const a = battleLoadout(123456, WEAPONS), b = battleLoadout(123456, WEAPONS);
+  const zero = new Set(WEAPONS.filter((w) => w.startAmmo === 0).map((w) => w.id));
+  check('арсенал боя: то же зерно — тот же набор из трёх без стартовых',
+    a.length === 3 && a.join() === b.join() && a.every((id) => zero.has(id)) && new Set(a).size === 3, a.join());
+  const seen = new Set();
+  for (let s = 1; s <= 200; s++) for (const id of battleLoadout(s, WEAPONS)) seen.add(id);
+  check('арсенал боя: разные зёрна — разные гости', seen.size >= 8, String(seen.size));
+  check('арсенал боя: только в боях без своих правил оружия',
+    loadoutApplies(towerMatch('rookie')) && loadoutApplies(dailyMatch('2026-11-20'))
+      && !loadoutApplies(onlineMatch()) && !loadoutApplies(towerMatch(null), { online: true })
+      && !loadoutApplies(challengeMatch('first')) && !loadoutApplies(tutorialMatch())
+      && !loadoutApplies(ascentMatch('up-1')));
+}
+
+// --- «Что дальше»: одна ближайшая цель по порядку важности ---
+{
+  const { nextGoal } = await import('../src/core/nextgoal.js');
+  const level = { level: 5, into: 100, need: 170 };
+  const base = { daily: { tasks: [], coins: 0 }, boxes: 0, level, ach: [] };
+  check('что дальше: выполненное задание — первым',
+    nextGoal({ ...base, boxes: 2, daily: { coins: 0, tasks: [{ id: 'hits6', progress: 6, claimed: false }] } })?.action === 'tasks');
+  check('что дальше: коробка ждёт', nextGoal({ ...base, boxes: 1 })?.action === 'skins');
+  const t = nextGoal({ ...base, daily: { coins: 0, tasks: [
+    { id: 'play3', progress: 1, claimed: false }, { id: 'hits6', progress: 4, claimed: false }] } });
+  check('что дальше: задание ближе всего к концу', t?.text === 'Попади ещё 2 раза — +60 монет', t?.text);
+  const lv = nextGoal({ ...base, level: { level: 5, into: 150, need: 170 } });
+  check('что дальше: уровень в паре боёв', lv?.text === 'ещё 1 бой до ур. 6: +100 монет', lv?.text);
+  check('что дальше: монеты до коробки', nextGoal({ ...base, level: { level: 9, into: 0, need: 290 }, daily: { tasks: [], coins: 460 } })?.text === 'до коробки 140 монет');
+  check('что дальше: всегда есть что сказать', nextGoal(base)?.kind === 'level');
+}
+
+// --- «Башня дня»: серия дней с победой и бонус на 3-й и 7-й ---
+{
+  const D = await import('../src/core/dailytower.js');
+  let st = D.normalizeDT(null);
+  const run = (day, won) => { const r = D.recordDailyRun(st, day, won); st = r.state; return r; };
+  const a = run('2026-11-18', true);
+  const again = run('2026-11-18', true);
+  run('2026-11-19', false);
+  const b = run('2026-11-19', true);
+  const c = run('2026-11-20', true);
+  check('башня дня: монеты за первую победу дня — один раз', a.coins === 60 && again.coins === 0 && again.bonus === 0);
+  check('башня дня: серия растёт по дням, бонус на 3-й', b.streak === 2 && c.streak === 3 && c.bonus === 100 && b.bonus === 0,
+    `${b.streak} ${c.streak} ${c.bonus}`);
+  check('башня дня: пропуск дня — серия с начала', D.streakNow(st, '2026-11-21') === 3 && D.streakNow(st, '2026-11-22') === 0
+    && D.recordDailyRun(st, '2026-11-23', true).streak === 1);
+  check('башня дня: облако — по более поздней победе',
+    D.mergeDT({ lastWin: '2026-11-20', streak: 3 }, { lastWin: '2026-11-19', streak: 9 }).streak === 3);
+}
+
+// --- «Подъём»: звёзды боя и глава целиком ---
+{
+  const { ASCENT, ascentStarsFor, ascentStarTurns, chapterCleared } = await import('../src/campaign/ascent.js');
+  const m = ASCENT[0], n = ascentStarTurns(m);
+  check('подъём: звёзды — победа, ходы, без потерь',
+    ascentStarsFor(m, { won: false, myTurns: 1, lost: false }) === 0
+      && ascentStarsFor(m, { won: true, myTurns: n + 1, lost: false }) === 1
+      && ascentStarsFor(m, { won: true, myTurns: n, lost: true }) === 2
+      && ascentStarsFor(m, { won: true, myTurns: n, lost: false }) === 3);
+  const foot = ASCENT.filter((x) => x.chapter === 'foot').map((x) => x.id);
+  check('подъём: глава пройдена только целиком',
+    chapterCleared('foot', new Set(foot)) && !chapterCleared('foot', new Set(foot.slice(1))));
+}
+
 console.log(failures.length
   ? `\nне прошло: ${failures.length}`
   : '\nпроверки подбора пройдены');

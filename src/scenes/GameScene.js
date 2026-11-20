@@ -4,7 +4,7 @@ import { BIOMES, pickBiome } from '../core/biomes.js';
 import { pickShape, shapeRng, towerVariant } from '../core/shapes.js';
 import { Terrain } from '../core/Terrain.js';
 import { TurnManager, STATE } from '../core/TurnManager.js';
-import { has, meta } from '../core/assets.js';
+import { has, meta, weaponIcon, fitScale } from '../core/assets.js';
 import { Worm } from '../entities/Worm.js';
 import { Crate } from '../entities/Crate.js';
 import { Mine } from '../entities/Mine.js';
@@ -16,6 +16,12 @@ import { Affixes, DEFAULT_AFFIXES } from '../entities/Affixes.js';
 import { Hud, TOP_H } from '../ui/Hud.js';
 import { Fx } from '../ui/Fx.js';
 import { AimController } from '../ui/AimController.js';
+import { ShotTrace } from '../ui/ShotTrace.js';
+import { KoLog } from '../ui/KoLog.js';
+import { koCause, koSummary } from '../core/knockouts.js';
+import { battleLoadout, loadoutApplies, loadoutAmmo } from '../core/loadout.js';
+import { currentGoal } from '../platform/nextgoal.js';
+import { plural } from '../core/nextgoal.js';
 import { font, UI, ensureButton } from '../ui/theme.js';
 import { WEAPONS, WEAPON_RARITY } from '../weapons/index.js';
 import { captureCommand, captureMove } from '../net/protocol.js';
@@ -33,11 +39,11 @@ import { canStory, snapshot as frameShot, fighterFrame, drawStory, shareStory } 
 import { ClipRecorder, canClip, saveClip, clipToStory } from '../platform/clip.js';
 import { HOTSEAT, towerMatch, rookieMatch, challengeMatch, ascentMatch } from '../core/match.js';
 import { ASCENT } from '../campaign/ascent.js';
-import { markAscentDone } from '../platform/ascent.js';
+import { markAscentDone, saveAscentStars, claimChapterBoxes } from '../platform/ascent.js';
 import { markWon, claimTutorialBox } from '../platform/onboard.js';
 import { Bot } from '../ai/Bot.js';
 import { markDone, MISSION_BY_ID, loadProgress } from '../campaign/missions.js';
-import { ASCENT_BY_ID } from '../campaign/ascent.js';
+import { ASCENT_BY_ID, ascentStarsFor, ascentStarTurns } from '../campaign/ascent.js';
 import { checkObjective, snapshot, objectiveText } from '../campaign/objectives.js';
 import { player, eloDelta, recordResult } from '../platform/player.js';
 import { reportResult, serverAvailable, track, trackStep, submitDailyTower, createDuel } from '../net/server.js';
@@ -53,6 +59,7 @@ import { EMOTE_BY_ID, EMOTE_COOLDOWN } from '../core/emotes.js';
 import { CHALLENGES, CHALLENGE_BY_ID, starsFor } from '../campaign/challenges.js';
 import { saveChallenge } from '../platform/challenges.js';
 import { grantCoins } from '../platform/daily.js';
+import { recordDailyTower } from '../platform/dailytower.js';
 import { battleXp, COS_LABEL } from '../core/levels.js';
 import { gainXp } from '../platform/levels.js';
 import { item as cosItem } from '../core/cosmetics.js';
@@ -172,6 +179,10 @@ export default class GameScene extends Phaser.Scene {
     this.hud = new Hud(this);
     this.turn = new TurnManager(this);
     this.aim = new AimController(this);
+    // След прошлого выстрела и журнал выбывших — чтобы бой был понятен
+    this.shotTrace = new ShotTrace(this);
+    this.koLog = new KoLog(this);
+    this.kos = [];
     this.offscreen = new OffscreenMarkers(this);
     // Новичок: пошаговая тренировка поверх «Первого выстрела»
     this.coach = this.match.tutorial && this.slingAim && !isDesktop() ? new Coach(this) : null;
@@ -192,6 +203,7 @@ export default class GameScene extends Phaser.Scene {
     this._setupKeyboard();
     this._setupBots();
     this._applyAmmoRules();
+    this._applyLoadout();
 
     this.rig.bgCam.setBackgroundColor(biome.fallback.sky[1]);
     // Дуэль по переписке начнёт с перемотки истории: табличка первого хода
@@ -438,8 +450,9 @@ export default class GameScene extends Phaser.Scene {
   }
 
   /** Бойцу досталось (Worm.damage): для трюков и «Ни царапины». */
-  onWormHurt(w, amount) {
+  onWormHurt(w, amount, cause = '') {
     if (this.replaying || amount <= 0) return;
+    this._noteHit(w, cause);
     if (w.team === this.myTeamIndex) this._myHurt = true;
     else if (this._trickLive()) {
       const t = this._trick;
@@ -670,6 +683,67 @@ export default class GameScene extends Phaser.Scene {
       if (t.control !== 'bot' && Array.isArray(this.rules.only)) {
         WEAPONS.forEach((w, i) => { if (!this.rules.only.includes(w.id)) this.turn.ammo[team][i] = 0; });
       }
+    });
+  }
+
+  /**
+   * «Арсенал боя»: обеим сторонам — те же три оружия по зерну партии
+   * (core/loadout.js). Не в сети и не в дуэли: старый клиент из кэша их бы
+   * не выдал, а снимок хода переносит патроны от одного к другому.
+   */
+  _applyLoadout() {
+    this.loadout = [];
+    this.loadoutIdx = [];
+    const online = Boolean(startRoom()) || this.match.mode === 'duel';
+    if (!loadoutApplies(this.match, { online })) return;
+    this.loadout = battleLoadout(this.seed, WEAPONS);
+    this.loadoutIdx = this.loadout.map((id) => WEAPONS.findIndex((w) => w.id === id));
+    for (const row of this.turn.ammo) {
+      for (const i of this.loadoutIdx) if (row[i] !== null) row[i] += loadoutAmmo(WEAPONS[i]);
+    }
+    this.time.delayedCall(this.variant?.intro ? 3300 : 700, () => this._announceLoadout());
+  }
+
+  /** Плашка «Арсенал боя: …» с иконками — на пару секунд, бою не мешает. */
+  _announceLoadout() {
+    if (!this.loadout.length || this.gameOverUi || !this.sys.isActive()) return;
+    const W = CFG.VIEW_W, H = CFG.VIEW_H;
+    const y = Math.round(H * (H > W ? 0.4 : 0.44));
+    const parts = [];
+    const add = (o, d = 6) => { this.rig.ui(o.setScrollFactor(0).setDepth(DEPTH.HUD + d)); parts.push(o); return o; };
+    const g = add(this.add.graphics(), 5);
+    const title = add(this.add.text(0, y - 30, 'Арсенал боя — у обеих сторон', font(20, 800, '#ffe27a')).setOrigin(0.5));
+    // Ряд: иконка и название каждого оружия
+    const row = this.loadoutIdx.map((i) => {
+      const wpn = WEAPONS[i];
+      const key = weaponIcon(this, wpn);
+      const icon = key ? add(this.add.image(0, y + 14, key).setScale(fitScale(this, key, 40))) : null;
+      const n = this.turn.ammo[this.myTeamIndex >= 0 ? this.myTeamIndex : 0][i];
+      const name = add(this.add.text(0, y + 14, `${wpn.name}${n > 1 ? ` ×${n}` : ''}`, font(20, 800, UI.text)).setOrigin(0, 0.5));
+      return { icon, name, w: (icon ? 46 : 0) + name.width };
+    });
+    const gap = 26;
+    const total = row.reduce((a, r) => a + r.w, 0) + gap * (row.length - 1);
+    let x = W / 2 - total / 2;
+    for (const r of row) {
+      if (r.icon) { r.icon.setPosition(x + 20, y + 14); x += 46; }
+      r.name.setX(x);
+      x += r.name.width + gap;
+    }
+    title.setX(W / 2);
+    const bw = Math.max(total, title.width) + 48, bh = 104;
+    g.setPosition(W / 2, y);
+    g.fillStyle(0x10131a, 0.88).fillRoundedRect(-bw / 2, -56, bw, bh, 20);
+    g.lineStyle(3, 0xffd23f, 0.85).strokeRoundedRect(-bw / 2, -56, bw, bh, 20);
+    // Не влезло (узкий портрет) — сжимаем всю плашку
+    const k = Math.min(1, (W - 24) / bw);
+    for (const o of parts) { o.setPosition(W / 2 + (o.x - W / 2) * k, y + (o.y - y) * k); if (o !== g) o.setScale(o.scaleX * k); }
+    g.setScale(k);
+    for (const o of parts) o.setAlpha(0);
+    this.tweens.add({ targets: parts, alpha: 1, duration: 220 });
+    this.tweens.add({
+      targets: parts, alpha: 0, delay: 2300, duration: 400,
+      onComplete: () => parts.forEach((o) => o.destroy()),
     });
   }
 
@@ -1302,6 +1376,7 @@ export default class GameScene extends Phaser.Scene {
     this._updateCamera(dt, realDt);
     this.fx.updateWind(realDt);
     this.aim.update();
+    this.shotTrace?.update();
     this.turn.update(realDt);
     this.hud.update();
     this.offscreen.update();
@@ -1740,6 +1815,10 @@ export default class GameScene extends Phaser.Scene {
     }
     const shots = this.turn.weapon.fire(this, sx, sy, vx, vy, w);
     this.projectiles.push(...shots);
+    // След выстрела — только своему игроку на этом устройстве
+    if (!this.replaying && !this.isBotTurn() && this.isLocalTeam(this.turn.currentTeam)) {
+      this.shotTrace?.onFire(w, vx, vy, shots, this.turn.weapon);
+    }
     this.turn.onFired();
     if (!this.replaying && !this.isBotTurn()) this.coach?.onShot();
     this.setCameraManual(false);
@@ -1807,6 +1886,9 @@ export default class GameScene extends Phaser.Scene {
       m.armed = true;
     }
 
+    // Кто задел — для причины выбывания: снаряд бойца или стихия (null)
+    this._blastBy = owner ?? 'env';
+    this._blastCfg = cfg;
     let felt = 0;
     let ouch = null, ouchDmg = 0;
     const shooter = owner?.team ?? this.turn.currentTeam;
@@ -1835,6 +1917,8 @@ export default class GameScene extends Phaser.Scene {
       }
       if (dmg > ouchDmg) { ouch = w; ouchDmg = dmg; }
     }
+    this._blastBy = undefined;
+    this._blastCfg = undefined;
     this._impact(x, y, ouchDmg, foesHit);
     // Сильно досталось — боец вскрикивает. Царапины молча, иначе «ой» на каждый чих
     if (ouch && ouchDmg >= 25 && !this.gameOverUi) voice.say('hurt', { team: ouch.team });
@@ -1885,6 +1969,7 @@ export default class GameScene extends Phaser.Scene {
     const st = this.battleStats;
     const lines = [];
     if (this.match.mode === 'daily') lines.push(`Башня дня взята за ${this.myTurns} ${this.myTurns < 5 ? 'хода' : 'ходов'}`);
+    if (this.match.mode === 'daily' && this._daily?.place) lines.push(`${this._daily.place}-е место из ${this._daily.players}`);
     else lines.push(`Урон за бой: ${st.damage}${st.kills ? ` · добито: ${st.kills}` : ''}`);
     lines.push(`Ходов: ${this.turn.turnNumber}`);
     const bot = telegramConfig().bot;
@@ -2075,6 +2160,7 @@ export default class GameScene extends Phaser.Scene {
   }
 
   onWormDied(worm, cause = '') {
+    this._noteKo(worm, cause);
     // Трюки: кого добил своим выстрелом и кто из них ушёл в воду; свой
     // выбыл — «Ни царапины» уже не будет (утонувшему урона не наносят)
     if (!this.replaying) {
@@ -2109,6 +2195,62 @@ export default class GameScene extends Phaser.Scene {
       && (this.turn.activeWorm === worm || this.checkVictory() !== null)) {
       this.turn.endTurn();
     }
+  }
+
+  // ------------------------------------------------- почему выбыл боец
+
+  /** Кто задел — словами: свой игрок «ты», бот или человек — «соперник». */
+  _whoLabel(team) {
+    const solo = this.bots?.some(Boolean) || this.net?.connected;
+    if (!solo) return TEAM_NAMES[team] ?? '';
+    return team === this.myTeamIndex ? 'ты' : 'соперник';
+  }
+
+  /**
+   * Запомнить, кто задел бойца последним. Падение — следствие удара, автора
+   * не меняет. Бита, гиря и бумеранг бьют мимо explode — тогда автор тот,
+   * чей ход; монстры, бочки и молнии (взрыв без хозяина) — стихия.
+   */
+  _noteHit(w, cause) {
+    if (cause === 'падение') return;
+    const turn = this.turn.turnNumber;
+    const by = this._blastBy;
+    if (cause === 'кактус' || by === 'env' || (!by && !this.turn.activeWorm)) {
+      w.lastHit = { team: -1, weapon: cause === 'кактус' ? 'кактус' : 'взрыв', who: null, turn };
+      return;
+    }
+    const shooter = by?.team !== undefined ? by : this.turn.activeWorm;
+    // Мина и ракета живут дольше хода: оружие — по взрыву, а не по руке
+    const weapon = (this._blastCfg && WEAPONS.find((x) => x.explosion === this._blastCfg)) || this.turn.weapon;
+    w.lastHit = { team: shooter.team, weapon: weapon?.name ?? '', who: this._whoLabel(shooter.team), turn };
+  }
+
+  /** Боец выбыл: причина — выкриком у него, строкой в журнал и в итог боя. */
+  _noteKo(worm, cause) {
+    if (!worm || this.kos.some((k) => k.worm === worm)) return;
+    const ko = koCause({
+      cause, hit: worm.lastHit ?? null, turn: this.turn?.turnNumber ?? 0,
+      victimTeam: worm.team, tower: Boolean(this.terrain?.tops),
+    });
+    this.kos.push({ worm, team: worm.team, kind: ko.kind, byTeam: ko.byTeam });
+    if (this.fastForward) return;    // перемотка истории дуэли — без выкриков
+    // Утонувший уже под водой: выкрик — над её кромкой
+    const y = Math.min(worm.centerY, (CFG.WATER_Y ?? worm.centerY) - 10) - 34;
+    this.fx.callout(worm.x, y, ko.text, '#ffe9c2', 22);
+    this.koLog?.add(worm.team, `${TEAM_NAMES[worm.team] ?? ''}: ${ko.text}`);
+  }
+
+  /** Строка итога «Победа: 1 добил ты · 1 утонул» — под заголовком. */
+  _koResult(winner, y) {
+    const solo = this.bots?.some(Boolean) || this.net?.connected;
+    if (!solo || winner < 0) return;
+    const text = koSummary(this.kos, { won: winner === this.myTeamIndex, myTeam: this.myTeamIndex, boss: Boolean(this.match.boss) });
+    if (!text) return;
+    const t = this.rig.ui(this.add.text(CFG.VIEW_W / 2, y, text, font(19, 800, '#e8f0ff'))
+      .setOrigin(0.5).setScrollFactor(0).setDepth(DEPTH.HUD + 11).setStroke('#10131a', 5)
+      .setWordWrapWidth(CFG.VIEW_W - 40).setAlign('center').setAlpha(0));
+    this.tweens.add({ targets: t, alpha: 1, duration: 300, delay: 450 });
+    this.gameOverUi?.push(t);
   }
 
   teamAlive(team) {
@@ -2199,6 +2341,9 @@ export default class GameScene extends Phaser.Scene {
         firstClear = boss ? 2 : 1;
       }
       box = syncCampaignBoxes();
+      // Глава пройдена целиком — ещё коробка, один раз
+      const chapters = claimChapterBoxes();
+      if (chapters.length) { grantBoxes(chapters.length); box += chapters.length; }
     }
     grantCoins(firstCoins);
     // Партия доиграна: запись сессии больше не нужна
@@ -2285,9 +2430,14 @@ export default class GameScene extends Phaser.Scene {
     this.rig.ui(sub);
 
     this.gameOverUi = [shade, title, sub];
+    this.koLog?.clear();
+    // За что победа или поражение — одной строкой под заголовком (с
+    // рейтингом под заголовком тесно — тогда над ним)
+    this._koResult(winner, CFG.VIEW_H / 2 + (ratingLine ? -70 : 6));
 
     // Испытание: звёзды и монеты за новые звёзды — строкой над заголовком
-    const newStars = this.match.mode === 'challenge' ? this._challengeResult(winner >= 0 && winner === mine) : 0;
+    const newStars = this.match.mode === 'challenge' ? this._challengeResult(winner >= 0 && winner === mine)
+      : this.match.mode === 'ascent' ? this._ascentResult(winner >= 0 && winner === mine) : 0;
     // Башня дня: итог — в таблицу дня, за первую победу дня монеты
     if (this.match.mode === 'daily') this._dailyResult(winner >= 0 && winner === mine);
 
@@ -2372,7 +2522,7 @@ export default class GameScene extends Phaser.Scene {
       const next = this._nextAction(winner >= 0 && winner === mine);
       this.gameOverUi.push(next
         ? this._overButton(-140, next.label, () => this._startNext(next.match), 'next')
-        : this._overButton(-140, 'Ещё раз', () => this.scene.restart(), 'again'));
+        : this._overButton(-140, this.match.mode === 'daily' ? 'Ещё попытка' : 'Ещё раз', () => this.scene.restart(), 'again'));
       this.gameOverUi.push(this._overButton(140, 'В меню', () => this.toMenu(), 'menu'));
       // Позвать друга — прямо отсюда: после боя хочется, а до вкладки
       // «Задания» никто не доходит. По ссылке — обоим по коробке
@@ -2389,7 +2539,13 @@ export default class GameScene extends Phaser.Scene {
         if (!this.gameOverUi || !this.clip?.best) return;
         this.gameOverUi.push(this._overButton(0, '🎬 Клип', () => this._clipMenu(sub), 'clip', 184));
       });
-      if (link && this.match.mode !== 'hotseat' && solo) {
+      if (link && this.match.mode === 'daily') {
+        // Башня дня одна на всех: делимся местом — друг идёт её побить
+        this.gameOverUi.push(this._overButton(story ? 140 : 0, 'Поделиться', () => {
+          trackStep('invite');
+          shareLink(link, this._dailyShareText());
+        }, 'share', 92));
+      } else if (link && this.match.mode !== 'hotseat' && solo) {
         this.gameOverUi.push(this._overButton(story ? 140 : 0, 'Позвать друга', () => {
           trackStep('invite');
           shareLink(link, won
@@ -2428,31 +2584,82 @@ export default class GameScene extends Phaser.Scene {
     this.scene.restart();
   }
 
-  /** Башня дня: монеты за первую победу дня и место в таблице. */
+  /**
+   * Башня дня: монеты за первую победу дня, серия дней и карточка итога
+   * «Башня дня · 4 хода · 3-е место из 27» — над заголовком, место
+   * приходит с сервера. Кнопки «Поделиться» и «Ещё попытка» — в общем ряду.
+   */
   _dailyResult(won) {
     const day = this.match.day;
     const hp = this.worms.filter((w) => w.team === this.myTeamIndex && w.alive).reduce((a, w) => a + w.health, 0);
-    let st = {};
-    try { st = JSON.parse(localStorage.getItem('worms.dailyTower.v1') ?? '{}') || {}; } catch { st = {}; }
-    let coins = 0;
-    if (won && st.rewarded !== day) {
-      coins = 60;
-      grantCoins(coins);
-      st.rewarded = day;
-      try { localStorage.setItem('worms.dailyTower.v1', JSON.stringify(st)); } catch { /* инкогнито */ }
+    const res = recordDailyTower(won, day);
+    const turns = `${this.myTurns} ${plural(this.myTurns, ['ход', 'хода', 'ходов'])}`;
+    this._daily = { won, turns, place: null, players: null };
+    const W = CFG.VIEW_W, cx = W / 2, y = CFG.VIEW_H / 2 - 168;
+    const cw = Math.min(W - 40, 560), ch = 96;
+    const ui = (o, d = 11) => { this.rig.ui(o.setScrollFactor(0).setDepth(DEPTH.HUD + d)); this.gameOverUi?.push(o); return o; };
+    const g = ui(this.add.graphics());
+    g.fillStyle(0x10131a, 0.9).fillRoundedRect(cx - cw / 2, y - ch / 2, cw, ch, 20);
+    g.lineStyle(3, 0xffd23f, 0.85).strokeRoundedRect(cx - cw / 2, y - ch / 2, cw, ch, 20);
+    const head = won ? `Башня дня · ${turns}` : 'Башня дня не взята';
+    const t = ui(this.add.text(cx, y - 18, `${head} · отправляю…`, font(22, 800, '#ffe27a')).setOrigin(0.5));
+    const extra = [];
+    if (res.coins) extra.push(`+${res.coins} монет за первую победу дня`);
+    if (res.streak) extra.push(`серия: ${res.streak} ${plural(res.streak, ['день', 'дня', 'дней'])}`);
+    if (res.bonus) extra.push(`+${res.bonus} монет за серию`);
+    if (!won) extra.push('серия держится, пока башня берётся каждый день');
+    const t2 = ui(this.add.text(cx, y + 20, extra.join(' · '), font(17, 700, res.bonus ? '#8ef0a0' : UI.textDim)).setOrigin(0.5));
+    for (const o of [t, t2]) if (o.width > cw - 24) o.setScale((cw - 24) / o.width);
+    submitDailyTower({ day, won, turns: this.myTurns, hp }).then((r) => {
+      if (!t.active) return;
+      if (!r?.me) { t.setText(`${head} · без сервера не в таблице`); return; }
+      this._daily.place = r.me.place;
+      this._daily.players = r.players;
+      // Таблица хранит лучшую попытку: место — её, а не этой
+      t.setText(`${head} · ${r.me.place}-е место из ${r.players}${r.accepted ? '' : ' (лучшая — прежняя)'}`);
+      if (t.width > cw - 24) t.setScale((cw - 24) / t.width);
+    });
+  }
+
+  /** Текст «Поделиться» после «Башни дня». */
+  _dailyShareText() {
+    const d = this._daily;
+    if (!d?.won) return 'Попробуй «Башню дня» в Smiles — одна башня на всех, кто быстрее?';
+    const place = d.place ? `, ${d.place}-е место из ${d.players}` : '';
+    return `Башня дня: ${d.turns}${place} 💥 Побьёшь?`;
+  }
+
+  /**
+   * Звёзды боя «Подъёма» — как у испытаний, над заголовком: ★ победа,
+   * ★★ за N своих ходов, ★★★ — ещё и без потерь бойцов. Монеты — за новые.
+   * @returns {number} сколько звёзд добыто впервые
+   */
+  _ascentResult(won) {
+    const m = ASCENT_BY_ID[this.match.ascentId];
+    if (!m) return 0;
+    const lost = this.worms.some((w) => w.team === this.myTeamIndex && !w.alive);
+    const stars = ascentStarsFor(m, { won, myTurns: this.myTurns, lost });
+    const res = saveAscentStars(m.id, stars);
+    if (res.coins) grantCoins(res.coins);
+    const y = CFG.VIEW_H / 2 - 210;
+    for (let i = 0; i < 3; i++) {
+      const on = i < stars;
+      const t = this.rig.ui(this.add.text(CFG.VIEW_W / 2 + (i - 1) * 74, y, '★',
+        font(64, 800, on ? '#ffd23f' : '#3a4052')).setOrigin(0.5).setScrollFactor(0)
+        .setDepth(DEPTH.HUD + 11).setStroke('#10131a', 6).setScale(on ? 0.2 : 1));
+      if (on) this.tweens.add({ targets: t, scale: 1, duration: 320, delay: 300 + i * 260, ease: 'Back.easeOut' });
+      this.gameOverUi?.push(t);
     }
-    const head = won ? `Башня дня: ${this.myTurns} ${this.myTurns < 5 ? 'хода' : 'ходов'}` : 'Башня дня: не взята';
-    const t = this.rig.ui(this.add.text(CFG.VIEW_W / 2, CFG.VIEW_H / 2 + 62,
-      `${head}${coins ? ` · +${coins} монет` : ''} · отправляю…`, font(18, 800, UI.accent))
-      .setOrigin(0.5).setScrollFactor(0).setDepth(DEPTH.HUD + 11)
+    const turns = ascentStarTurns(m);
+    const hint = !won ? 'попробуй ещё раз'
+      : stars === 1 ? `★★ — победи за ${turns} ${plural(turns, ['свой ход', 'своих хода', 'своих ходов'])}`
+        : stars === 2 ? '★★★ — ещё и не потеряв ни одного бойца' : 'идеально!';
+    const line = res.coins ? `${hint} · +${res.coins} монет за новые звёзды` : hint;
+    const t = this.rig.ui(this.add.text(CFG.VIEW_W / 2, y + 52, line, font(19, 800, '#ffe27a'))
+      .setOrigin(0.5).setScrollFactor(0).setDepth(DEPTH.HUD + 11).setStroke('#10131a', 5)
       .setWordWrapWidth(CFG.VIEW_W - 40).setAlign('center'));
     this.gameOverUi?.push(t);
-    submitDailyTower({ day, won, turns: this.myTurns, hp }).then((res) => {
-      if (!t.active) return;
-      if (!res?.me) { t.setText(`${head}${coins ? ` · +${coins} монет` : ''} · без сервера не в таблице`); return; }
-      const best = res.accepted ? 'лучшая попытка' : 'прежняя попытка лучше';
-      t.setText(`${head}${coins ? ` · +${coins} монет` : ''} · место ${res.me.place} из ${res.players} · ${best}`);
-    });
+    return res.gained;
   }
 
   /** Звёзды испытания на экране итога. @returns {number} сколько звёзд добыто впервые */
@@ -2530,6 +2737,8 @@ export default class GameScene extends Phaser.Scene {
     const toNext = (st) => `до ур. ${st.level + 1} ещё ${st.need - st.into}`;
     const note = ui(this.add.text(left + bw / 2, by + 16, toNext(gain.before), font(16, 700, UI.textDim))
       .setOrigin(0.5, 0));
+    // Что дальше — строкой под полосой: тяга в следующий бой
+    this._goalResult(cx, by + (H > W ? 62 : 44), ui);
     this.tweens.add({ targets: plus, scale: 1, duration: 320, delay: 600, ease: 'Back.easeOut' });
 
     const to = (k, onComplete) => this.tweens.add({
@@ -2548,6 +2757,28 @@ export default class GameScene extends Phaser.Scene {
         this._levelUpCard(gain);
       });
     });
+  }
+
+  /**
+   * «Что дальше»: одна ближайшая цель (core/nextgoal.js) с полоской
+   * прогресса. Ведёт в меню (задания, коробки, дорога наград) — строка
+   * нажимается; цель «просто сыграй» нажимать незачем, для неё есть «Ещё раз».
+   */
+  _goalResult(cx, y, ui) {
+    if (this.match.tutorial) return;
+    const goal = currentGoal();
+    if (!goal) return;
+    const menu = { tasks: 'tasks', skins: 'skins', road: 'road', achievements: 'achievements' }[goal.action];
+    const t = ui(this.add.text(cx, y, `🎯 ${goal.text}${menu ? ' ›' : ''}`, font(19, 800, menu ? '#8ef0a0' : '#ffe9c2'))
+      .setOrigin(0.5).setStroke('#10131a', 5));
+    if (t.width > CFG.VIEW_W - 40) t.setScale((CFG.VIEW_W - 40) / t.width);
+    const bw = Math.min(t.displayWidth, 320);
+    ui(this.add.rectangle(cx - bw / 2, y + 17, bw, 5, 0x0b1220, 0.9).setOrigin(0, 0.5));
+    ui(this.add.rectangle(cx - bw / 2, y + 17, Math.max(3, bw * Math.min(1, goal.progress)), 5, 0x8ef0a0).setOrigin(0, 0.5));
+    if (!menu) return;
+    t.setInteractive({ useHandCursor: true });
+    t.on('pointerup', () => this.toMenu(menu));
+    (this.overButtons ??= {}).goal = { x: cx, y };
   }
 
   /** Что в подарке — одной строкой: «+150 монет · коробка со скином». */
@@ -2653,10 +2884,13 @@ export default class GameScene extends Phaser.Scene {
       this.registry.set('returnTo', returnTo ?? 'duels');
     }
     forgetStartRoom();
+    // «Что дальше» ведёт в свой раздел меню — это важнее списка режима
+    const goal = ['tasks', 'skins', 'road', 'achievements'].includes(returnTo) && this.match.mode !== 'duel';
+    if (goal) this.registry.set('returnTo', returnTo);
     // Из испытания — обратно к списку испытаний
-    if (this.match.mode === 'challenge' && !this.match.tutorial) this.registry.set('returnTo', 'challenges');
-    if (this.match.mode === 'ascent') this.registry.set('returnTo', 'ascent');
-    if (this.match.mode === 'daily') this.registry.set('returnTo', 'daily');
+    else if (this.match.mode === 'challenge' && !this.match.tutorial) this.registry.set('returnTo', 'challenges');
+    else if (this.match.mode === 'ascent') this.registry.set('returnTo', 'ascent');
+    else if (this.match.mode === 'daily') this.registry.set('returnTo', 'daily');
     if (new URLSearchParams(location.search).has('room')) {
       const url = new URL(location.href);
       url.searchParams.delete('room');
@@ -2684,6 +2918,9 @@ export default class GameScene extends Phaser.Scene {
     this.ambience = null;
     this.affixes = null;
     this.aim?.destroy();
+    this.shotTrace?.destroy();
+    this.shotTrace = null;
+    this.koLog = null;
     this.crates = [];
     this.rig?.destroy();
     this.offscreen?.destroy();
