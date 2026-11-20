@@ -48,7 +48,8 @@ export function send(res, status, data) {
   res.end(body);
 }
 
-export function readJson(req) {
+/** limit — свой предел тела (ход дуэли по переписке длиннее обычного запроса). */
+export function readJson(req, limit = BODY_LIMIT) {
   return new Promise((resolveBody, reject) => {
     let size = 0;
     let tooBig = false;
@@ -57,7 +58,7 @@ export function readJson(req) {
     // увидит ответа 413. Больше мегабайта не пропустит nginx впереди.
     req.on('data', (c) => {
       size += c.length;
-      if (size > BODY_LIMIT) {
+      if (size > limit) {
         if (!tooBig) { tooBig = true; chunks.length = 0; reject(new HttpError(413, 'слишком большой запрос')); }
         return;
       }

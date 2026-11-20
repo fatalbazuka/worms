@@ -666,6 +666,146 @@ check('«твой ход» бот не пишет', !calls('sendMessage').some((
   fdb.close();
 }
 
+// --- дуэли по переписке: очередь, повтор хода, лимиты, срок хода, пропуски, только друзья ---
+{
+  const ddb = openDb(':memory:');
+  const warns = [];
+  const dapp = createApp({
+    db: ddb, botToken: BOT, mediaDir, publicUrl: 'https://example.test/worms',
+    telegramApiBase: `http://127.0.0.1:${fakeTg.address().port}`, now: () => clock,
+    log: { warn: (m) => warns.push(String(m)), log() {}, error: console.error },
+  });
+  const dsrv = createServer(dapp);
+  await new Promise((res) => dsrv.listen(0, '127.0.0.1', res));
+  const at = `http://127.0.0.1:${dsrv.address().port}`;
+  const call = (method, path, body, token) => callAt(method, path, body, token, {}, at);
+  const hook = (update) => callAt('POST', '/api/bot/webhook', update, null, { 'x-telegram-bot-api-secret-token': dapp.webhookSecret }, at);
+  const login = async (id, first_name, extra = {}) => (await call('POST', '/api/telegram', { initData: await signInitData({
+    query_id: 'q', user: { id, first_name }, auth_date: String(Math.floor(clock / 1000)), ...extra,
+  }, BOT) })).data;
+  const realNow = clock;
+  clock = Date.UTC(2026, 10, 20, 10, 0);            // 13:00 МСК — днём бот пишет со звуком
+  const A = await login(7001, 'Хозяин'), B = await login(7002, 'Гость', { start_param: 'ref_7001' });
+  const C = await login(7003, 'Чужой');
+  const msgsTo = (tg) => calls('sendMessage').filter((m) => m.params.chat_id === tg);
+  // Ход как его шлёт игра: приказы для показа и снимок итога — очередь у соперника
+  const turn = (n, extra = {}) => ({ turn: n, cmds: [{ k: 'shot', at: 900, cmd: { type: 'shot', turn: n, worm: 0, vx: 300, vy: -200 } }],
+    state: { turn: n + 1, team: n % 2, worms: [{ x: 1, y: 2, hp: 100, alive: true }] }, hash: `h${n}`, ...extra });
+
+  let r = await call('POST', '/api/duels', { opponent: C.player.id }, A.token);
+  check('дуэль по переписке: не с другом — нельзя', r.status === 403, `${r.status} ${r.data?.error}`);
+  r = await call('POST', '/api/duels', { opponent: B.player.id }, A.token);
+  const d1 = r.data?.duel;
+  const bView = (await call('GET', '/api/duels', null, B.token)).data;
+  check('дуэль с другом: создатель ходит первым, у друга — «ждём»',
+    r.status === 200 && d1.myTurn === true && d1.me === 0 && d1.turn === 1 && d1.opponent.id === B.player.id
+      && bView.items[0]?.id === d1.id && bView.items[0].myTurn === false && bView.myTurn === 0, JSON.stringify(d1));
+
+  const notMine = await call('POST', `/api/duels/${d1.id}/turn`, turn(1), B.token);
+  const badQueue = await call('POST', `/api/duels/${d1.id}/turn`, { ...turn(1), state: { turn: 3, team: 0, worms: [] } }, A.token);
+  const sentBefore = msgsTo(7002).length;
+  const ok1 = await call('POST', `/api/duels/${d1.id}/turn`, turn(1), A.token);
+  const again = await call('POST', `/api/duels/${d1.id}/turn`, turn(1), A.token);
+  const toB = msgsTo(7002).slice(sentBefore);
+  check('ход: чужой — отказ, не сходится с очередью — отказ, свой — принят; повтор того же хода — тот же ответ',
+    notMine.status === 409 && badQueue.status === 400 && ok1.status === 200 && ok1.data.duel.turn === 2
+      && again.status === 200 && again.data.repeated === true
+      && ddb.prepare('select count(*) as n from duel_turn where duel_id = ?').get(d1.id).n === 1,
+    `${notMine.status} ${badQueue.status} ${ok1.status} ${again.status}`);
+  check('бот: «⚔️ Твой ход против Хозяин» с кнопкой прямо в дуэль, один раз',
+    toB.length === 1 && /твой ход против Хозяин/i.test(toB[0].params.text)
+      && toB[0].params.reply_markup.inline_keyboard[0][0].web_app.url.endsWith(`?duel=${d1.id}`)
+      && !toB[0].params.disable_notification, JSON.stringify(toB.map((m) => m.params.text)));
+
+  // Второй игрок получает партию целиком и шлёт свой ход с тем, что у него вышло
+  const full = (await call('GET', `/api/duels/${d1.id}`, null, B.token)).data.duel;
+  check('дуэль целиком: зерно и история ходов с приказами и снимком',
+    Number.isSafeInteger(full.seed) && full.turns.length === 1 && full.turns[0].team === 0
+      && full.turns[0].cmds[0].k === 'shot' && full.turns[0].state.turn === 2 && full.turns[0].hash === 'h1', JSON.stringify(full.turns));
+  // Хозяин сейчас смотрит дуэль (опрашивает её) — бот ему не пишет
+  await call('GET', `/api/duels/${d1.id}`, null, A.token);
+  const toA0 = msgsTo(7001).length;
+  await call('POST', `/api/duels/${d1.id}/turn`, turn(2, { prevHash: 'other' }), B.token);
+  check('свёртка не сошлась — в журнале сервера и в истории; партия идёт дальше',
+    warns.some((w) => /разошлось h1 != other/.test(w))
+      && ddb.prepare('select seen_hash from duel_turn where duel_id = ? and n = 1').get(d1.id).seen_hash === 'other'
+      && (await call('GET', `/api/duels/${d1.id}`, null, A.token)).data.duel.myTurn === true, warns.join(' | '));
+  check('кто сейчас смотрит дуэль, тому «твой ход» не пишем', msgsTo(7001).length === toA0);
+
+  // Срок хода: за два часа — напоминание (одно), после срока — пропуск и ход сопернику
+  clock += 22 * 3600_000 + 60_000;
+  const t1 = await dapp.duels.tick();
+  const t1again = await dapp.duels.tick();
+  const remind = msgsTo(7001).at(-1)?.params.text ?? '';
+  clock += 2 * 3600_000;
+  const t2 = await dapp.duels.tick();
+  const skipMsg = msgsTo(7002).at(-1)?.params.text ?? '';
+  let d = (await call('GET', `/api/duels/${d1.id}`, null, B.token)).data.duel;
+  check('за 2 часа до срока — одно напоминание; срок вышел — ход пропущен, очередь у соперника',
+    t1.reminded === 1 && t1again.reminded === 0 && /Осталось 2 часа/.test(remind) && t2.skipped === 1
+      && d.turn === 4 && d.myTurn === true && d.turns.at(-1).kind === 'skip' && d.skips[0] === 1
+      && /Хозяин не успел походить/.test(skipMsg), `${JSON.stringify(t1)} ${JSON.stringify(t2)} ${skipMsg.split('\n')[0]}`);
+  // Пропуски подряд: Гость ходит, Хозяин молчит ещё дважды — поражение по времени
+  await call('POST', `/api/duels/${d1.id}/turn`, turn(4), B.token);
+  clock += 24 * 3600_000 + 1000; await dapp.duels.tick();           // пропуск Хозяина №2
+  await call('POST', `/api/duels/${d1.id}/turn`, turn(6), B.token);
+  clock += 24 * 3600_000 + 1000;
+  const t3 = await dapp.duels.tick();                                // №3 — конец
+  d = (await call('GET', `/api/duels/${d1.id}`, null, A.token)).data.duel;
+  const finA = msgsTo(7001).at(-1)?.params.text ?? '', finB = msgsTo(7002).at(-1)?.params.text ?? '';
+  check('три пропуска подряд — поражение; итог бот пишет обоим',
+    t3.lost === 1 && d.status === 'finished' && d.winner === 1 && d.reason === 'timeout'
+      && /проиграна/.test(finA) && /Победа в дуэли против Хозяин/.test(finB), `${d.status} ${d.reason} | ${finA} | ${finB}`);
+
+  // Ссылкой: чужой принимает по коду после первого хода; потом с ним можно реванш
+  const link = (await call('POST', '/api/duels', { link: true }, A.token)).data.duel;
+  await call('POST', `/api/duels/${link.id}/turn`, turn(1), A.token);
+  const joined = await call('POST', '/api/duels/join', { code: link.code }, C.token);
+  const joinedAgain = await call('POST', '/api/duels/join', { code: link.code }, B.token);
+  check('по ссылке: код у создателя, принявший сразу ходит, второй раз ссылка не принимается',
+    /^[A-Z2-9]{6}$/.test(link.code ?? '') && joined.status === 200 && joined.data.duel.myTurn === true
+      && joined.data.duel.me === 1 && joined.data.duel.deadline > clock && joinedAgain.status === 404,
+    `${link.code} ${joined.status} ${joinedAgain.status}`);
+  // Итог боем: ходивший сообщает победителя — дуэль окончена, обоим итог
+  const before = msgsTo(7001).length;
+  r = await call('POST', `/api/duels/${link.id}/turn`, { ...turn(2), state: { turn: 2, team: 1, over: true, worms: [] }, over: true, winner: 1 }, C.token);
+  check('последний ход с победой — дуэль окончена, проигравшему итог',
+    r.data?.duel?.status === 'finished' && r.data.duel.winner === 1 && r.data.duel.reason === 'kill'
+      && msgsTo(7001).slice(before).some((m) => /проиграна/.test(m.params.text)), JSON.stringify(r.data?.duel));
+  r = await call('POST', '/api/duels', { opponent: C.player.id }, A.token);
+  check('с соперником по прошлой дуэли можно реванш, хоть он и не друг', r.status === 200, r.data?.error);
+
+  // Сдаться: дуэль соперника, пишем только ему. Ночью — без звука
+  clock = Date.UTC(2026, 10, 27, 21, 30);           // 00:30 МСК
+  const rev = r.data.duel;
+  await call('POST', `/api/duels/${rev.id}/turn`, turn(1), A.token);
+  const night = msgsTo(7003).at(-1)?.params;
+  const toCbefore = msgsTo(7003).length, toAbefore = msgsTo(7001).length;
+  r = await call('POST', `/api/duels/${rev.id}/resign`, {}, A.token);
+  check('ночью «твой ход» приходит без звука', night?.disable_notification === true && /твой ход/i.test(night.text));
+  check('сдался — победа сопернику, итог пишем только ему',
+    r.data?.duel?.status === 'finished' && r.data.duel.winner === 1 && r.data.duel.reason === 'resign'
+      && msgsTo(7003).length === toCbefore + 1 && msgsTo(7001).length === toAbefore, JSON.stringify(r.data?.duel));
+
+  // /mute: о дуэлях бот молчит
+  await hook({ message: { from: { id: 7002, first_name: 'Гость' }, chat: { id: 7002, type: 'private' }, text: '/mute' } });
+  clock = Date.UTC(2026, 10, 28, 10, 0);
+  const d2 = (await call('POST', '/api/duels', { opponent: B.player.id }, A.token)).data.duel;
+  const toBmuted = msgsTo(7002).length;
+  await call('POST', `/api/duels/${d2.id}/turn`, turn(1), A.token);
+  check('после /mute «твой ход» не приходит', msgsTo(7002).length === toBmuted);
+
+  // Не больше пяти идущих дуэлей у игрока
+  const made = [];
+  for (let i = 0; i < 6; i++) made.push((await call('POST', '/api/duels', { link: true }, A.token)).status);
+  const list = (await call('GET', '/api/duels', null, A.token)).data;
+  check('идущих дуэлей не больше 5: шестая — отказ', made.filter((s) => s === 200).length === 4 && made.at(-1) === 409
+    && list.items.filter((x) => ['open', 'active'].includes(x.status)).length === 5, made.join(','));
+  clock = realNow;
+  dsrv.close();
+  ddb.close();
+}
+
 // Клип из Android приходит WebM — сервер с ffmpeg отдаёт MP4 (Telegram берёт в сторис только его)
 {
   const { spawnSync } = await import('node:child_process');
