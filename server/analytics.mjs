@@ -15,7 +15,8 @@
  * кто вчера заходил, а сегодня ещё нет: серия сгорит в полночь. Не чаще
  * раза в день, только с серией и только тем, кто не отписался (/mute).
  * Кроме него бот сам пишет только «друг тебя обогнал» (server/friends.mjs,
- * с теми же /mute и тишиной ночью); «твой ход» и прочий шум — нет.
+ * с теми же /mute и тишиной ночью) и «твой ход» в дуэлях по переписке
+ * (server/duels.mjs); прочий шум — нет.
  *
  * День — строка YYYY-MM-DD в поясе бота: «сегодня» у сервера и в отчёте
  * одно и то же для всех игроков.
@@ -23,7 +24,7 @@
 
 export const REMIND_HOUR = 19;
 const EVENTS_PER_DAY = 300;           // больше от одного игрока за сутки не пишем
-const MODES = new Set(['quick', 'campaign', 'ascent', 'daily', 'challenge', 'online', 'fallback', 'hotseat']);
+const MODES = new Set(['quick', 'campaign', 'ascent', 'daily', 'challenge', 'online', 'duel', 'fallback', 'hotseat']);
 
 /** Шаги воронки и их подписи в отчёте — по порядку, как их проходит новичок. */
 export const STEPS = {

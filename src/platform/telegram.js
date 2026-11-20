@@ -252,6 +252,30 @@ export function forgetStartRoom() {
 }
 
 /**
+ * Ссылка на дуэль по переписке с кодом: в Telegram — t.me/бот/игра с
+ * startapp=duel_КОД (друг откроет её под своим аккаунтом), снаружи —
+ * адрес сайта с ?duelcode=.
+ */
+export function duelLink(code) {
+  const { bot, app } = telegramConfig();
+  if (bot && inTelegram()) {
+    const base = app ? `https://t.me/${bot}/${app}` : `https://t.me/${bot}`;
+    return `${base}?startapp=duel_${encodeURIComponent(code)}`;
+  }
+  const url = new URL(location.href);
+  url.search = '';
+  url.searchParams.set('duelcode', code);
+  return url.toString();
+}
+
+/** Код дуэли, по ссылке на которую открыли игру (?duelcode= или startapp=duel_…), — или null. */
+export function startDuelCode() {
+  const fromUrl = new URLSearchParams(location.search).get('duelcode');
+  const p = fromUrl ?? (/^duel_([A-Z0-9]{4,10})$/i.exec(tgApi()?.initDataUnsafe?.start_param ?? '')?.[1] ?? null);
+  return p && /^[A-Z0-9]{4,10}$/i.test(p) ? p.toUpperCase() : null;
+}
+
+/**
  * Ссылка-приглашение в комнату.
  *
  * В Telegram, если бот назван, — глубокая ссылка t.me: друг откроет игру

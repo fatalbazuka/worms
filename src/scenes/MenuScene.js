@@ -19,7 +19,9 @@ import { pendingSession, forgetSession } from '../net/session.js';
 import {
   syncMe, fetchTop, myRank, loggedIn, onAccountChange, track,
   trackStep, prepareChallenge, fetchDailyTower, redeemPromo, fetchFriends, inviteFriend,
+  fetchDuels, fetchDuel, createDuel, joinDuel, resignDuel,
 } from '../net/server.js';
+import { duelMatch, flushPendingTurns } from '../net/duel.js';
 import { openAccountDialog } from '../ui/AccountDialog.js';
 import { openTournaments } from '../ui/Tournaments.js';
 import { askText, closeOverlay } from '../ui/Overlay.js';
@@ -27,7 +29,7 @@ import { makeTransport } from '../net/connect.js';
 import { player } from '../platform/player.js';
 import {
   inviteLink as tgInviteLink, shareRoom, shareMessage, canOfferHomeScreen, addToHomeScreen, onHomeScreenChange,
-  haptic, inTelegram, botLink, refLink, shareLink,
+  haptic, inTelegram, botLink, refLink, shareLink, duelLink, startDuelCode,
 } from '../platform/telegram.js';
 import { leagueOf, nextLeague, leagueProgress, toNextLeague, leagueLabel } from '../platform/league.js';
 import { BOT_LEVELS } from '../ai/Bot.js';
@@ -85,6 +87,13 @@ function seenText(at) {
   return days > 30 ? 'в игре давно' : `в игре ${days} дн. назад`;
 }
 
+/** Сколько осталось на ход: «23 ч», «40 мин». */
+function leftText(deadline) {
+  const ms = Math.max(0, (deadline ?? 0) - Date.now());
+  if (ms >= 3600_000) return `${Math.floor(ms / 3600_000)} ч`;
+  return `${Math.max(1, Math.round(ms / 60_000))} мин`;
+}
+
 /** Через сколько секунд поиска без соперника предлагается бой с ботом. */
 const FALLBACK_AFTER = 20;
 
@@ -139,6 +148,11 @@ export default class MenuScene extends Phaser.Scene {
       this.registry.set('returnTo', null);
       this.time.delayedCall(30, () => this.showAscent());
     }
+    if (this.registry.get('returnTo') === 'duels') {
+      this.registry.set('returnTo', null);
+      this.time.delayedCall(30, () => this.showDuels());
+    }
+    if (this.registry.get('returnTo') === 'root') this.registry.set('returnTo', null);
     const back = this.registry.get('returnTour');
     const params = new URLSearchParams(globalThis.location?.search ?? '');
     const fromLink = params.get('tour');
@@ -152,6 +166,14 @@ export default class MenuScene extends Phaser.Scene {
       // Кнопка из сообщения бота «друг тебя обогнал» — сразу к топу друзей
       this.registry.set('topLinkUsed', true);
       this.time.delayedCall(300, () => { this.topFrom = 'tab'; this.showTop('rating', 'friends'); });
+    } else if (/^\d+$/.test(params.get('duel') ?? '') && !this.registry.get('duelLinkUsed')) {
+      // Кнопка «⚔️ Ходить» из сообщения бота — сразу в дуэль
+      this.registry.set('duelLinkUsed', true);
+      this.time.delayedCall(100, () => this.openDuel(Number(params.get('duel'))));
+    } else if (startDuelCode() && !this.registry.get('duelLinkUsed')) {
+      // Ссылка на дуэль от друга: принимаем и сразу в неё
+      this.registry.set('duelLinkUsed', true);
+      this.time.delayedCall(100, () => this.joinDuelByCode(startDuelCode()));
     }
 
     this.input.keyboard?.on('keydown-ESC', () => this.showRoot());
@@ -592,6 +614,21 @@ export default class MenuScene extends Phaser.Scene {
       this._button('resume-no', cx + 184, y, '✕', '',
         () => { forgetSession(pending.room); this.showRoot(); }, { w: 56, h: 56 });
       areaBottom = y - 44;
+    }
+
+    // Дуэли по переписке — только с аккаунтом: они живут на сервере.
+    // Твой ход хоть в одной — красный значок с числом
+    if (loggedIn()) {
+      const y = areaBottom - 30;
+      const n = this.duelsTurn ?? 0;
+      this._button('duels', cx, y, 'Мои дуэли', n ? `по переписке · твой ход: ${n}` : 'по переписке · ходи, когда удобно',
+        () => this.showDuels(), { w: 360, h: 60 });
+      if (n) {
+        this.items.push(this.add.circle(cx + 172, y - 26, 17, 0xff4d4d).setStrokeStyle(3, 0x0b1018));
+        this.items.push(this.add.text(cx + 172, y - 26, String(n), font(18, 900, '#ffffff')).setOrigin(0.5));
+      }
+      areaBottom = y - 44;
+      this._refreshDuelBadge();
     }
 
     // --- твой боец ---
@@ -1584,10 +1621,11 @@ export default class MenuScene extends Phaser.Scene {
       ['tower', 'Башня', 'высокая арена и трос · выбрать соперника', () => this.showTower()],
       ['challenges', 'Испытания', `задачи на три звезды · ★ ${stars} из ${CHALLENGES.length * 3}`, () => this.showChallenges()],
       ['online', 'Онлайн', 'бой с человеком на башне · рейтинг', () => this.showOnline()],
+      ['duels', 'Дуэли по переписке', 'с другом, ход — когда удобно · 24 часа на ход', () => this.showDuels()],
       ['campaign', 'Классика', 'старые миссии на широких картах', () => this.showCampaign()],
       ['quick', 'Свои правила', 'обычная карта, бот или вдвоём', () => this.showQuick()],
     ];
-    // В портрете — столбиком, в ландшафте — в две колонки: семь не влезают
+    // В портрете — столбиком, в ландшафте — в две колонки: восемь не влезают
     const cols = this.portrait ? 1 : 2;
     const w = this.portrait ? Math.min(this.W - 64, 620) : Math.min(420, (this.W - 96) / 2);
     const h = this.portrait ? 92 : 72, step = this.portrait ? 104 : 84;
@@ -2115,12 +2153,21 @@ export default class MenuScene extends Phaser.Scene {
       const sub = [leagueOf(r.rating).name, `побед ${r.wins}`, mine ? '' : seenText(r.seenAt)].filter(Boolean).join(' · ');
       add(this.add.text(nx, y + h / 2 + 4, sub, font(this.fs(11), 700, leagueOf(r.rating).text)).setOrigin(0, 0));
       const bx = lx1 - 86;
-      add(this.add.text(bx - 92, y + h / 2, `${r.rating}`, font(this.fs(16), 800, UI.text)).setOrigin(1, 0.5));
+      // В ландшафте левее: рядом с «Вызвать» стоит «По переписке»
+      add(this.add.text(bx - (roomy ? 92 : 272), y + h / 2, `${r.rating}`, font(this.fs(16), 800, UI.text)).setOrigin(1, 0.5));
       if (mine) {
         add(this.add.text(bx, y + h / 2, 'это ты', font(this.fs(13), 800, UI.accent)).setOrigin(0.5));
+      } else if (roomy) {
+        // В портрете — две кнопки столбиком: сейчас и по переписке
+        this._button(`duel-${r.id}`, bx, y + h / 2 - 21, 'Вызвать', '', () => this.challengeFriend(r),
+          { w: 148, h: 38, titleSize: 19, variant: 'primary' });
+        this._button(`mail-${r.id}`, bx, y + h / 2 + 21, 'По переписке', '', () => this.startDuel(r),
+          { w: 148, h: 38, titleSize: 16 });
       } else {
         this._button(`duel-${r.id}`, bx, y + h / 2, 'Вызвать', '', () => this.challengeFriend(r),
-          { w: 148, h: Math.min(56, h - 18), titleSize: roomy ? 22 : 19, variant: 'primary' });
+          { w: 148, h: Math.min(56, h - 18), titleSize: 19, variant: 'primary' });
+        this._button(`mail-${r.id}`, bx - 172, y + h / 2, 'По переписке', '', () => this.startDuel(r),
+          { w: 180, h: Math.min(56, h - 18), titleSize: 17 });
       }
     });
     // Под списком — позвать ещё кого-нибудь
@@ -2526,6 +2573,195 @@ export default class MenuScene extends Phaser.Scene {
   _setRoomNote(room, text) {
     this.roomNote = text ? { room, text } : null;
     if (this.roomNoteText?.active) this.roomNoteText.setText(text ?? '');
+  }
+
+  // ----------------------------------------------------- дуэли по переписке
+
+  /** Вход в Telegram идёт сам и не сразу: ждём его, прежде чем звать сервер. */
+  _whenLoggedIn(timeout = 10000) {
+    if (loggedIn()) return Promise.resolve(true);
+    return new Promise((resolve) => {
+      const off = onAccountChange(() => { if (loggedIn()) { off(); resolve(true); } });
+      this.time.delayedCall(timeout, () => { off(); resolve(loggedIn()); });
+    });
+  }
+
+  /** Сколько дуэлей ждут моего хода — для значка на главном. Не чаще раза в 15 секунд. */
+  _refreshDuelBadge() {
+    if (Date.now() - (this.duelsAt ?? 0) < 15_000) return;
+    this.duelsAt = Date.now();
+    fetchDuels().then((r) => {
+      if (!r || r.myTurn === (this.duelsTurn ?? 0)) return;
+      this.duelsTurn = r.myTurn;
+      if (this.section === this.showRoot) this.showRoot();
+    });
+  }
+
+  /**
+   * «Мои дуэли»: с кем, чей ход, сколько осталось, «Ходить» или «Смотреть».
+   * Внизу — новая дуэль: с другом (из топа друзей) или ссылкой в любой чат.
+   */
+  showDuels() {
+    this.section = this.showDuels;
+    this._clear();
+    this._title('Дуэли по переписке', 'ходи, когда удобно · на ход 24 часа · без рейтинга');
+    const cx = this.W / 2;
+    const note = this.add.text(cx, 150, 'загружаю…', font(this.fs(14), 700, UI.textDim)).setOrigin(0.5, 0);
+    this.items.push(note);
+    this._back();
+    if (!loggedIn()) {
+      note.setText('Дуэли по переписке живут на сервере — открой игру в Telegram.');
+      return;
+    }
+    const still = () => this.section === this.showDuels;
+    // Ход, который не дошёл до сервера, — сначала дослать: иначе список соврёт
+    flushPendingTurns().then(() => fetchDuels()).then((r) => {
+      if (!still()) return;
+      if (!r) { note.setText('сервер недоступен — попробуй позже'); return; }
+      this.duelsTurn = r.myTurn;
+      this.duelsAt = Date.now();
+      note.destroy();
+      this._renderDuels(r);
+    });
+  }
+
+  _renderDuels({ items, max }) {
+    const W = this.W, cx = W / 2;
+    const add = (o) => { this.items.push(o); return o; };
+    const short = (name, n) => (name.length > n ? `${name.slice(0, n - 1)}…` : name);
+    const roomy = this.portrait;
+    const listTop = 150;
+    const rowH = roomy ? 112 : 84;
+    const lw = Math.min(W - 48, 980);
+    const lx0 = cx - lw / 2, lx1 = cx + lw / 2;
+    const live = items.filter((d) => d.status === 'open' || d.status === 'active');
+    if (!items.length) {
+      add(this.add.text(cx, listTop + 10, ['Дуэлей пока нет.',
+        'Вызови друга по переписке: ты ходишь сейчас, он — когда удобно,',
+        'бот напишет ему «твой ход». На ход — сутки.'], font(this.fs(15), 700, UI.text))
+        .setOrigin(0.5, 0).setAlign('center').setLineSpacing(8).setWordWrapWidth(Math.min(W - 60, 680)));
+    }
+    const g = add(this.add.graphics());
+    items.forEach((d, i) => {
+      const y = listTop + i * rowH;
+      const h = rowH - 10;
+      const going = d.status === 'open' || d.status === 'active';
+      g.fillStyle(d.myTurn ? 0x1f2a1a : 0x161d2e, 1).fillRoundedRect(lx0, y, lw, h, 12);
+      g.lineStyle(d.myTurn ? 3 : 2, d.myTurn ? 0x8ef0a0 : 0xffffff, d.myTurn ? 0.9 : 0.08).strokeRoundedRect(lx0, y, lw, h, 12);
+      const sheet = this._skinSheet(d.opponent?.skin);
+      add(this.add.sprite(lx0 + 52, y + h - 2, sheet, 0).setOrigin(0.5, 0.92).setScale((h * 0.9) / 100).setFlipX(true))
+        .play(`${sheet}_idle`);
+      const nx = lx0 + 104;
+      add(this.add.text(nx, y + h / 2 - 2, d.opponent ? short(d.opponent.name, roomy ? 13 : 20) : 'по ссылке',
+        font(this.fs(15), 800, UI.text)).setOrigin(0, 1));
+      let line, color = UI.textDim;
+      if (d.status === 'open' && !d.myTurn) line = 'ждём, кто примет ссылку';
+      else if (d.myTurn) { line = `твой ход ${d.turn} · осталось ${leftText(d.deadline)}`; color = '#8ef0a0'; }
+      else if (d.status === 'active') line = `ход соперника · у него ${leftText(d.deadline)}`;
+      else if (d.status === 'cancelled') line = 'отменена';
+      else {
+        const won = d.winner === d.me;
+        line = d.winner === null ? 'ничья'
+          : won ? ({ resign: 'победа · соперник сдался', timeout: 'победа · соперник пропустил ходы' }[d.reason] ?? 'победа')
+            : ({ resign: 'поражение · ты сдался', timeout: 'поражение · пропущено 3 хода' }[d.reason] ?? 'поражение');
+        if (won) color = '#ffd166';
+      }
+      add(this.add.text(nx, y + h / 2 + 4, line, font(this.fs(12), 700, color)).setOrigin(0, 0));
+      const bx = lx1 - 90;
+      const label = d.myTurn ? 'Ходить' : going ? 'Ждём' : 'Итог';
+      const by = roomy && going ? y + h / 2 - 20 : y + h / 2;
+      this._button(`duel-open-${d.id}`, bx, by, label, '', () => this.openDuel(d.id),
+        { w: 156, h: roomy && going ? 44 : 52, titleSize: 21, variant: d.myTurn ? 'primary' : 'normal' });
+      if (going) {
+        // Сдаться — двумя нажатиями: первое спрашивает «точно?»
+        const rx = roomy ? bx : bx - 172, ry = roomy ? y + h / 2 + 26 : y + h / 2;
+        const key = `duel-resign-${d.id}`;
+        this._button(key, rx, ry, d.opponent ? 'сдаться' : 'отменить', '', () => {
+          const t = this.buttonTexts[key]?.title;
+          if (this.resignAsk !== d.id) { this.resignAsk = d.id; t?.setText('точно?'); return; }
+          this.resignAsk = null;
+          resignDuel(d.id).then(() => this.showDuels()).catch(() => this.showDuels());
+        }, { w: roomy ? 156 : 140, h: roomy ? 36 : 44, titleSize: 16 });
+      }
+    });
+    // Новая дуэль — если ещё можно
+    const endY = listTop + Math.max(items.length, items.length ? 0 : 1.4) * rowH + 54;
+    const can = live.length < (max ?? 5);
+    const bw = Math.min(300, (Math.min(lw, 640) - 16) / 2);
+    this._button('duel-new-friend', cx - bw / 2 - 8, endY, 'С другом', 'из списка друзей',
+      () => { this.topFrom = 'tab'; this.showTop('rating', 'friends'); }, { w: bw, h: 72, enabled: can, variant: 'primary' });
+    this._button('duel-new-link', cx + bw / 2 + 8, endY, 'По ссылке', 'в любой чат',
+      () => this.linkDuel(), { w: bw, h: 72, enabled: can });
+    if (!can) {
+      add(this.add.text(cx, endY + 46, `идёт ${live.length} из ${max} — доиграй одну, чтобы начать новую`,
+        font(this.fs(12), 700, UI.textDim)).setOrigin(0.5, 0));
+    }
+    this._scrollable(endY + 80);
+  }
+
+  /** Строка-подсказка под заголовком раздела (ошибка, «создаю…»). */
+  _duelNote(text) {
+    this.duelNoteText?.destroy();
+    this.duelNoteText = this.add.text(this.W / 2, this.topY(18), text, font(this.fs(14), 800, '#ffd166'))
+      .setOrigin(0.5, 0).setDepth(60).setPadding(10, 4, 10, 4).setBackgroundColor('#10131a');
+    this.items.push(this.duelNoteText);
+    this.time.delayedCall(3500, () => this.duelNoteText?.destroy());
+  }
+
+  /** Открыть дуэль: вся история с сервера, сцена соберёт партию сама. */
+  async openDuel(id) {
+    this._duelNote('открываю дуэль…');
+    if (!(await this._whenLoggedIn())) { this._duelNote('дуэли — после входа через Telegram'); return; }
+    await flushPendingTurns();
+    try {
+      const d = await fetchDuel(id);
+      this.registry.set('duel', d);
+      this.start(duelMatch(d));
+    } catch (e) {
+      this._duelNote(`не открылась: ${e.message}`);
+    }
+  }
+
+  /** «По переписке» у друга: новая дуэль, и сразу свой первый ход. */
+  async startDuel(friend) {
+    this._duelNote(`дуэль с ${friend.name}…`);
+    try {
+      const d = await createDuel({ opponent: friend.id });
+      trackStep('invite');
+      this.registry.set('duel', { ...d, turns: [] });
+      this.start(duelMatch(d));
+    } catch (e) {
+      this._duelNote(e.message);
+    }
+  }
+
+  /** Дуэль ссылкой: кто первым примет, тот и соперник. Свой ход — сразу. */
+  async linkDuel() {
+    try {
+      const d = await createDuel({ link: true });
+      const link = duelLink(d.code);
+      const text = 'Дуэль по переписке в Smiles ⚔️ Я уже хожу — принимай, ответишь, когда удобно';
+      if (!shareLink(link, text)) {
+        copyText(link);
+        this._duelNote('ссылка на дуэль скопирована');
+      }
+      this.registry.set('duel', { ...d, turns: [] });
+      this.time.delayedCall(400, () => this.start(duelMatch(d)));
+    } catch (e) {
+      this._duelNote(e.message);
+    }
+  }
+
+  /** Открыли игру по ссылке на дуэль: принять и сразу в неё. */
+  async joinDuelByCode(code) {
+    this._duelNote('принимаю дуэль…');
+    if (!(await this._whenLoggedIn())) { this._duelNote('дуэли — после входа через Telegram'); return; }
+    try {
+      const d = await joinDuel(code);
+      this.openDuel(d.id);
+    } catch (e) {
+      this._duelNote(e.message);
+    }
   }
 
   // ---------------------------------------------------------------- старт

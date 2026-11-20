@@ -132,6 +132,8 @@ export class TurnManager {
 
   /** Плашка хода с лицом бойца: «Твой ход!» против бота и по сети, иначе — команда. */
   _announce(worm, team) {
+    // Дуэль перематывает историю: табличка на каждый прошлый ход — шум
+    if (this.scene.fastForward) return;
     const solo = this.scene.bots?.some(Boolean) || this.scene.net?.connected;
     const mine = this.scene.isLocalTeam?.(team);
     const title = solo ? (mine ? 'Твой ход!' : 'Ход соперника') : TEAM_NAMES[team];

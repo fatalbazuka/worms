@@ -5,7 +5,9 @@
  * заголовке — без него запрос отклоняется. Бот отвечает на команды,
  * принимает оплату звёздами и пишет игрокам о турнирах, а о друзьях —
  * «обогнал» и вызов на бой (server/friends.mjs, с лимитами и /mute).
- * «Твой ход» не пишет — так решено.
+ * «Твой ход» пишет только в дуэлях по переписке (server/duels.mjs): там
+ * соперник не в сети, и без сообщения ход простоял бы сутки. В боях по
+ * сети — нет: оба и так в игре.
  *
  * Звёзды (валюта XTR). Счёт создаётся сервером (createInvoiceLink), мини-
  * приложение открывает его родным окном Telegram. Перед списанием Telegram
@@ -84,12 +86,13 @@ export function createBot({ db, api, players, tournaments, analytics = null, adm
   /**
    * Сообщение игроку по id. tour — кнопка сразу в экран турнира; button и
    * params — своя кнопка в игру (params — хвост адреса: «?top=friends»).
+   * silent — без звука (ночью).
    */
-  async function notify(playerId, text, { tour = null, button = null, params = '' } = {}) {
+  async function notify(playerId, text, { tour = null, button = null, params = '', silent = false } = {}) {
     const p = players.byId(playerId);
     if (!p?.tg_id) return null;
-    if (tour) return send(p.tg_id, text, playButton('🏆 Открыть турнир', `?tour=${tour}`));
-    return send(p.tg_id, text, playButton(button ?? '🎮 Играть', params));
+    if (tour) return send(p.tg_id, text, playButton('🏆 Открыть турнир', `?tour=${tour}`), { silent });
+    return send(p.tg_id, text, playButton(button ?? '🎮 Играть', params), { silent });
   }
 
   /**
@@ -326,9 +329,9 @@ export function createBot({ db, api, players, tournaments, analytics = null, adm
           : `Твой id: ${msg.from.id}. Его спросит админ, чтобы выдать вход на сайт.`);
       case '/help':
         return send(chat, (en
-          ? '/stats — your stats\n/top — top 10\n/tours — tournaments\n/promo CODE — activate a promo code\n/id — your id\n/mute — no reminders or friend messages\n/unmute — turn them back on'
+          ? '/stats — your stats\n/top — top 10\n/tours — tournaments\n/promo CODE — activate a promo code\n/id — your id\n/mute — no reminders, friend or duel messages\n/unmute — turn them back on'
           : '/stats — статистика\n/top — топ-10\n/tours — турниры\n/promo КОД — активировать промокод\n/id — твой id'
-          + '\n/mute — не писать о серии и друзьях\n/unmute — снова писать')
+          + '\n/mute — не писать о серии, друзьях и дуэлях\n/unmute — снова писать')
           + (admin ? `\n\n${ADMIN_HELP}` : ''), play(en));
       case '/promo': {
         if (!promos) break;
@@ -342,9 +345,10 @@ export function createBot({ db, api, players, tournaments, analytics = null, adm
       case '/mute':
         analytics?.setRemind(me.id, false);
         // Один выключатель на всё, что бот пишет сам: серия, «друг обогнал»,
-        // вызовы на бой от друзей (их игра пошлёт карточкой через выбор чата)
-        return send(chat, en ? "OK, no more streak reminders or friend messages. /unmute — turn them back on."
-          : 'Хорошо, больше не пишу сам: ни о серии, ни о друзьях. /unmute — вернуть.');
+        // вызовы на бой от друзей (их игра пошлёт карточкой через выбор чата),
+        // «твой ход» в дуэлях по переписке (их видно значком в игре)
+        return send(chat, en ? "OK, no more streak reminders, friend or duel messages. /unmute — turn them back on."
+          : 'Хорошо, больше не пишу сам: ни о серии, ни о друзьях, ни о дуэлях. /unmute — вернуть.');
       case '/unmute':
         analytics?.setRemind(me.id, true);
         return send(chat, en ? "I'll remind you in the evening if your daily streak is about to burn, and tell you when a friend overtakes you."
