@@ -829,5 +829,7 @@ export const EN = {
  "промокод закончился": "this promo code is used up",
  "ты уже активировал этот промокод": "you've already used this promo code",
  "промокоды работают после входа — открой игру через Telegram": "promo codes work after sign-in — open the game via Telegram",
- "🎟 Код": "🎟 Code"
+ "🎟 Код": "🎟 Code",
+ "🎵 Музыка: вкл": "🎵 Music: on",
+ "🎵 Музыка: выкл": "🎵 Music: off"
 };
