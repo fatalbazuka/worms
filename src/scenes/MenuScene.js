@@ -1176,7 +1176,9 @@ export default class MenuScene extends Phaser.Scene {
 
   /** Монеты на главном — кнопка магазина: плашка с монетами и «+». right — правый край. */
   _coinShopLink(right, y) {
-    const w = 300, h = 58, x = right - w / 2;
+    // Ширина — по числу монет: трёхзначная сумма наезжала значком на «Магазин»
+    const digits = String(dailyState().coins).length;
+    const w = 262 + digits * 17, h = 58, x = right - w / 2;
     const plate = this.add.graphics();
     plate.fillStyle(0x1c1440, 0.95).fillRoundedRect(x - w / 2, y - h / 2, w, h, h / 2);
     plate.lineStyle(3, 0xffc247, 0.9).strokeRoundedRect(x - w / 2, y - h / 2, w, h, h / 2);
