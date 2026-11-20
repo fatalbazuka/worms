@@ -39,11 +39,11 @@ import { canStory, snapshot as frameShot, fighterFrame, drawStory, shareStory } 
 import { ClipRecorder, canClip, saveClip, clipToStory } from '../platform/clip.js';
 import { HOTSEAT, towerMatch, rookieMatch, challengeMatch, ascentMatch } from '../core/match.js';
 import { ASCENT } from '../campaign/ascent.js';
-import { markAscentDone } from '../platform/ascent.js';
+import { markAscentDone, saveAscentStars, claimChapterBoxes } from '../platform/ascent.js';
 import { markWon, claimTutorialBox } from '../platform/onboard.js';
 import { Bot } from '../ai/Bot.js';
 import { markDone, MISSION_BY_ID, loadProgress } from '../campaign/missions.js';
-import { ASCENT_BY_ID } from '../campaign/ascent.js';
+import { ASCENT_BY_ID, ascentStarsFor, ascentStarTurns } from '../campaign/ascent.js';
 import { checkObjective, snapshot, objectiveText } from '../campaign/objectives.js';
 import { player, eloDelta, recordResult } from '../platform/player.js';
 import { reportResult, serverAvailable, track, trackStep, submitDailyTower, createDuel } from '../net/server.js';
@@ -2341,6 +2341,9 @@ export default class GameScene extends Phaser.Scene {
         firstClear = boss ? 2 : 1;
       }
       box = syncCampaignBoxes();
+      // Глава пройдена целиком — ещё коробка, один раз
+      const chapters = claimChapterBoxes();
+      if (chapters.length) { grantBoxes(chapters.length); box += chapters.length; }
     }
     grantCoins(firstCoins);
     // Партия доиграна: запись сессии больше не нужна
@@ -2433,7 +2436,8 @@ export default class GameScene extends Phaser.Scene {
     this._koResult(winner, CFG.VIEW_H / 2 + (ratingLine ? -70 : 6));
 
     // Испытание: звёзды и монеты за новые звёзды — строкой над заголовком
-    const newStars = this.match.mode === 'challenge' ? this._challengeResult(winner >= 0 && winner === mine) : 0;
+    const newStars = this.match.mode === 'challenge' ? this._challengeResult(winner >= 0 && winner === mine)
+      : this.match.mode === 'ascent' ? this._ascentResult(winner >= 0 && winner === mine) : 0;
     // Башня дня: итог — в таблицу дня, за первую победу дня монеты
     if (this.match.mode === 'daily') this._dailyResult(winner >= 0 && winner === mine);
 
@@ -2623,6 +2627,39 @@ export default class GameScene extends Phaser.Scene {
     if (!d?.won) return 'Попробуй «Башню дня» в Smiles — одна башня на всех, кто быстрее?';
     const place = d.place ? `, ${d.place}-е место из ${d.players}` : '';
     return `Башня дня: ${d.turns}${place} 💥 Побьёшь?`;
+  }
+
+  /**
+   * Звёзды боя «Подъёма» — как у испытаний, над заголовком: ★ победа,
+   * ★★ за N своих ходов, ★★★ — ещё и без потерь бойцов. Монеты — за новые.
+   * @returns {number} сколько звёзд добыто впервые
+   */
+  _ascentResult(won) {
+    const m = ASCENT_BY_ID[this.match.ascentId];
+    if (!m) return 0;
+    const lost = this.worms.some((w) => w.team === this.myTeamIndex && !w.alive);
+    const stars = ascentStarsFor(m, { won, myTurns: this.myTurns, lost });
+    const res = saveAscentStars(m.id, stars);
+    if (res.coins) grantCoins(res.coins);
+    const y = CFG.VIEW_H / 2 - 210;
+    for (let i = 0; i < 3; i++) {
+      const on = i < stars;
+      const t = this.rig.ui(this.add.text(CFG.VIEW_W / 2 + (i - 1) * 74, y, '★',
+        font(64, 800, on ? '#ffd23f' : '#3a4052')).setOrigin(0.5).setScrollFactor(0)
+        .setDepth(DEPTH.HUD + 11).setStroke('#10131a', 6).setScale(on ? 0.2 : 1));
+      if (on) this.tweens.add({ targets: t, scale: 1, duration: 320, delay: 300 + i * 260, ease: 'Back.easeOut' });
+      this.gameOverUi?.push(t);
+    }
+    const turns = ascentStarTurns(m);
+    const hint = !won ? 'попробуй ещё раз'
+      : stars === 1 ? `★★ — победи за ${turns} ${plural(turns, ['свой ход', 'своих хода', 'своих ходов'])}`
+        : stars === 2 ? '★★★ — ещё и не потеряв ни одного бойца' : 'идеально!';
+    const line = res.coins ? `${hint} · +${res.coins} монет за новые звёзды` : hint;
+    const t = this.rig.ui(this.add.text(CFG.VIEW_W / 2, y + 52, line, font(19, 800, '#ffe27a'))
+      .setOrigin(0.5).setScrollFactor(0).setDepth(DEPTH.HUD + 11).setStroke('#10131a', 5)
+      .setWordWrapWidth(CFG.VIEW_W - 40).setAlign('center'));
+    this.gameOverUi?.push(t);
+    return res.gained;
   }
 
   /** Звёзды испытания на экране итога. @returns {number} сколько звёзд добыто впервые */

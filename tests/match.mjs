@@ -453,6 +453,20 @@ check('один в лобби никого не находит', findMatch(p('a'
     D.mergeDT({ lastWin: '2026-11-20', streak: 3 }, { lastWin: '2026-11-19', streak: 9 }).streak === 3);
 }
 
+// --- «Подъём»: звёзды боя и глава целиком ---
+{
+  const { ASCENT, ascentStarsFor, ascentStarTurns, chapterCleared } = await import('../src/campaign/ascent.js');
+  const m = ASCENT[0], n = ascentStarTurns(m);
+  check('подъём: звёзды — победа, ходы, без потерь',
+    ascentStarsFor(m, { won: false, myTurns: 1, lost: false }) === 0
+      && ascentStarsFor(m, { won: true, myTurns: n + 1, lost: false }) === 1
+      && ascentStarsFor(m, { won: true, myTurns: n, lost: true }) === 2
+      && ascentStarsFor(m, { won: true, myTurns: n, lost: false }) === 3);
+  const foot = ASCENT.filter((x) => x.chapter === 'foot').map((x) => x.id);
+  check('подъём: глава пройдена только целиком',
+    chapterCleared('foot', new Set(foot)) && !chapterCleared('foot', new Set(foot.slice(1))));
+}
+
 console.log(failures.length
   ? `\nне прошло: ${failures.length}`
   : '\nпроверки подбора пройдены');

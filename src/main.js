@@ -9,7 +9,7 @@ import { loggedIn, telegramLogin, syncMe, track, fetchShop, passwordLogin } from
 import { prefetchServerSave } from './platform/cloud.js';
 import { syncSkinsCloud, applyServerOwned } from './platform/skins.js';
 import { syncDailyCloud } from './platform/daily.js';
-import { syncAscentCloud } from './platform/ascent.js';
+import { syncAscentCloud, syncAscentStarsCloud } from './platform/ascent.js';
 import { syncCosmeticsCloud } from './platform/cosmetics.js';
 import { syncLevelCloud } from './platform/levels.js';
 import { syncAchCloud, noteInvited } from './platform/achievements.js';
@@ -79,7 +79,7 @@ fitViewToScreen(window.innerWidth, window.innerHeight, screenInsets());
 // Копия прогресса с сервера — до сведения облаков: с сайта по логину она
 // единственная, в Telegram — вторая к облаку Telegram
 await prefetchServerSave();
-await Promise.all([loadUiFont(), loadCloudProfile(), syncSkinsCloud(), syncDailyCloud(), syncChallengesCloud(), syncAscentCloud(), syncCosmeticsCloud(), syncLevelCloud(), syncAchCloud(), syncDailyTowerCloud()]);
+await Promise.all([loadUiFont(), loadCloudProfile(), syncSkinsCloud(), syncDailyCloud(), syncChallengesCloud(), syncAscentCloud(), syncCosmeticsCloud(), syncLevelCloud(), syncAchCloud(), syncDailyTowerCloud(), syncAscentStarsCloud()]);
 
 // Аккаунт. Профиль помнит, что вход был, а токена уже нет (вышли в другой
 // вкладке, почистили хранилище) — значит, мы аноним. Иначе — освежаем

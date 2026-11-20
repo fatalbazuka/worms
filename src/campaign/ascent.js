@@ -174,3 +174,29 @@ export const chapterOf = (m) => CHAPTERS.find((c) => c.id === m.chapter);
 export function ascentOpen(index, done) {
   return index === 0 || done.has(ASCENT[index - 1].id);
 }
+
+// ------------------------------------------------------------- звёзды
+
+/**
+ * Звёзды боя, как у испытаний: ★ — победа, ★★ — победа не дольше
+ * stars.turns своих ходов, ★★★ — ещё и без потерь бойцов. Порог ходов —
+ * у каждого боя свой (stars.turns) — подобран по симуляции
+ * (docs/ascent-curve.md); без него — по умолчанию: 8, у босса 10.
+ * Переигрывать ради звёзд можно сколько угодно: «Подъём» больше не
+ * плоский список, а лестница, к которой возвращаются.
+ */
+export function ascentStarTurns(m) {
+  return m.stars?.turns ?? (m.boss ? 10 : 8);
+}
+
+/** @returns {number} 0…3 */
+export function ascentStarsFor(m, { won, myTurns, lost }) {
+  if (!won) return 0;
+  if (myTurns > ascentStarTurns(m)) return 1;
+  return lost ? 2 : 3;
+}
+
+/** Пройдена ли глава целиком. done — Set пройденных id. */
+export function chapterCleared(chapterId, done) {
+  return ASCENT.filter((m) => m.chapter === chapterId).every((m) => done.has(m.id));
+}

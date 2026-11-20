@@ -8,7 +8,7 @@ import {
 import { CHALLENGES, challengeOpen, totalStars, STAR_COINS } from '../campaign/challenges.js';
 import { ASCENT, CHAPTERS, ascentOpen, bossName, chapterOf } from '../campaign/ascent.js';
 import { AFFIXES, DEFAULT_AFFIXES } from '../entities/Affixes.js';
-import { ascentDone } from '../platform/ascent.js';
+import { ascentDone, ascentStars, claimChapterBoxes } from '../platform/ascent.js';
 import { challengeStars } from '../platform/challenges.js';
 import { onboardStage, isNewbie } from '../platform/onboard.js';
 import { currentGoal } from '../platform/nextgoal.js';
@@ -41,7 +41,7 @@ import { sfx } from '../audio/Sfx.js';
 import { music } from '../audio/Music.js';
 import { SKINS, SKIN_BY_ID, BOX_SKINS, RARITY, RARITY_ORDER, skinPrice, rewardMissions } from '../core/skins.js';
 import {
-  skinState, equippedSkin, equipSkin, openSkinBox, syncCampaignBoxes, buySkin, applyServerOwned,
+  skinState, equippedSkin, equipSkin, openSkinBox, syncCampaignBoxes, buySkin, applyServerOwned, grantBoxes,
 } from '../platform/skins.js';
 import {
   TASK_BY_ID, BOX_PRICE, STREAK_COINS, STREAK_BOX_DAY, streakReady, dayKey, claimStreak,
@@ -1847,54 +1847,146 @@ export default class MenuScene extends Phaser.Scene {
 
   // ------------------------------------------------------ кампания «Подъём»
 
-  /** Три главы: прогресс в каждой; закрытая — пока не пройдена предыдущая. */
+  /**
+   * Карта «Подъёма»: тропа снизу вверх — двадцать боёв узлами, четыре главы
+   * со своим видом (цвет и значок места), у босса узел крупнее и с его
+   * портретом. У узла — звёзды; текущий бой подсвечен, и карта открывается
+   * прокрученной к нему. Тап по узлу — описание боя.
+   * Плоский список не звал переигрывать; тропа со звёздами — зовёт.
+   */
   showAscent() {
+    const keep = this.section === this.showAscent ? this.scrollY : null;
     this.section = this.showAscent;
     this._clear();
     const done = ascentDone();
-    this._title('Подъём', `пройдено ${done.size} из ${ASCENT.length} · коробки со скинами по пути`);
-    const cx0 = this.W / 2;
-    // Четыре главы: в портрете столбиком, в ландшафте — два на два
-    const cols = this.portrait ? 1 : 2;
-    const w = this.portrait ? Math.min(this.W - 64, 620) : Math.min(420, (this.W - 96) / 2);
-    const h = this.portrait ? 120 : 96;
-    const step = h + 18;
-    CHAPTERS.forEach((ch, idx) => {
-      const i = Math.floor(idx / cols);
-      const cx = cols === 1 ? cx0 : cx0 + (idx % 2 ? 1 : -1) * (w / 2 + 12);
-      const list = ASCENT.filter((m) => m.chapter === ch.id);
-      const first = ASCENT.indexOf(list[0]);
-      const open = ascentOpen(first, done);
-      const n = list.filter((m) => done.has(m.id)).length;
-      this._button(`chapter-${ch.id}`, cx, 196 + h / 2 + i * step, `${idx + 1}. ${ch.title}`,
-        open ? `${n} из ${list.length}${n === list.length ? ' · пройдено' : ''}` : 'откроется после предыдущей главы',
-        () => this.showAscentChapter(ch), {
-          w, h, enabled: open, variant: open && n < list.length ? 'primary' : 'normal', titleSize: 30, hintSize: 20,
-        });
-    });
-    this._back(() => this.showModes());
-  }
+    const stars = ascentStars();
+    const total = ASCENT.reduce((a, m) => a + (stars[m.id] ?? 0), 0);
+    this._title('Подъём', `пройдено ${done.size} из ${ASCENT.length} · ★ ${total} из ${ASCENT.length * 3}`);
+    // Главы, пройденные раньше, чем за них стали давать коробку, — задним числом
+    const fresh = claimChapterBoxes();
+    if (fresh.length) {
+      grantBoxes(fresh.length);
+      haptic('win');
+      sfx.play('pickup');
+      // Плашка поверх карты — не крутится вместе с ней
+      const note = this.add.text(this.W / 2, 150 + this.oy, fresh.length > 1
+        ? `🎁 Главы пройдены — коробки со скином ×${fresh.length}` : '🎁 Глава пройдена — коробка со скином!',
+      font(22, 900, '#1a1408')).setOrigin(0.5).setPadding(16, 8, 16, 8).setBackgroundColor('#8ef0a0')
+        .setScrollFactor(0).setDepth(50);
+      this.items.push(note);
+      this.tweens.add({ targets: note, alpha: 0, delay: 3200, duration: 500 });
+    }
 
-  showAscentChapter(ch) {
-    this.section = () => this.showAscentChapter(ch);
-    this._clear();
-    const done = ascentDone();
-    const list = ASCENT.filter((m) => m.chapter === ch.id);
-    this._title(ch.title, `${list.filter((m) => done.has(m.id)).length} из ${list.length}`);
-    const cx = this.W / 2;
-    const w = Math.min(this.W - 64, 620), h = this.portrait ? 96 : 76, gap = 12;
-    list.forEach((m, k) => {
-      const i = ASCENT.indexOf(m);
-      const open = ascentOpen(i, done);
-      const won = done.has(m.id);
-      const tag = m.boss && m.title !== bossName(m) && !m.title.includes(bossName(m)) ? ` · ${bossName(m)}` : '';
-      this._button(`up-${m.id}`, cx, 186 + h / 2 + k * (h + gap), `${i + 1}. ${m.title}${tag}`,
-        won ? '✓ пройдено' : open ? 'открыто' : 'откроется после предыдущего боя',
-        () => this.showAscentBrief(m), {
-          w, h, enabled: open, variant: open && !won ? 'primary' : 'normal', titleSize: 26, hintSize: 17,
-        });
-    });
-    this._back(() => this.showAscent());
+    const W = this.W, cx = W / 2;
+    const step = this.portrait ? 132 : 112;
+    const head = this.portrait ? 120 : 100;
+    const amp = Math.min(W * 0.2, 190);
+    const look = {
+      foot: { color: 0x4f9a46, icon: 'mountain' }, glacier: { color: 0x6fc3e8, icon: 'snowflake' },
+      crater: { color: 0xe0642c, icon: 'volcano' }, space: { color: 0x8a6cf0, icon: 'planet' },
+    };
+    // Сверху вниз: последняя глава — наверху, первый бой — в самом низу
+    const rows = [];
+    let y = 190;
+    for (const ch of [...CHAPTERS].reverse()) {
+      rows.push({ kind: 'chapter', ch, y: y + head / 2 });
+      y += head;
+      const list = ASCENT.filter((m) => m.chapter === ch.id).reverse();
+      for (const m of list) {
+        const i = ASCENT.indexOf(m);
+        rows.push({ kind: 'node', m, i, y: y + step / 2, x: cx + Math.sin(i * 1.15) * amp });
+        y += step;
+      }
+    }
+    const bottom = y;
+    const nodes = rows.filter((r) => r.kind === 'node');
+    const current = nodes.find((r) => ascentOpen(r.i, done) && !done.has(r.m.id))
+      ?? nodes.find((r) => r.i === ASCENT.length - 1);
+
+    // Тропа: отрезки между соседними боями, пройденные — золотом
+    const path = this.add.graphics().setDepth(-1);
+    for (const r of nodes) {
+      const prev = nodes.find((o) => o.i === r.i - 1);
+      if (!prev) continue;
+      const gone = done.has(prev.m.id);
+      path.lineStyle(gone ? 10 : 8, gone ? 0xffc247 : 0x2a3350, 1).lineBetween(prev.x, prev.y, r.x, r.y);
+    }
+    this.items.push(path);
+
+    for (const r of rows) {
+      if (r.kind === 'chapter') {
+        const lk = look[r.ch.id];
+        const n = ASCENT.filter((m) => m.chapter === r.ch.id);
+        const got = n.filter((m) => done.has(m.id)).length;
+        const open = ascentOpen(ASCENT.indexOf(n[0]), done);
+        const bw = Math.min(W - 48, 620), bh = head - 28;
+        const g = this.add.graphics();
+        g.fillStyle(lk.color, open ? 0.28 : 0.12).fillRoundedRect(cx - bw / 2, r.y - bh / 2, bw, bh, 22);
+        g.lineStyle(3, lk.color, open ? 0.9 : 0.4).strokeRoundedRect(cx - bw / 2, r.y - bh / 2, bw, bh, 22);
+        this.items.push(g);
+        const ix = cx - bw / 2 + 44;
+        if (this.textures.exists(`emoji_${lk.icon}`)) {
+          this.items.push(this.add.image(ix, r.y, `emoji_${lk.icon}`).setScale(52 / 128).setAlpha(open ? 1 : 0.5));
+        }
+        const idx = CHAPTERS.indexOf(r.ch) + 1;
+        this.items.push(this.add.text(ix + 40, r.y - 12, `Глава ${idx} · ${r.ch.title}`, font(this.portrait ? 26 : 23, 800, open ? UI.text : UI.textDim))
+          .setOrigin(0, 0.5));
+        const sub = !open ? 'откроется после предыдущей главы'
+          : got === n.length ? '✓ пройдена · коробка со скином получена' : `${got} из ${n.length} · вся глава — коробка со скином`;
+        this.items.push(this.add.text(ix + 40, r.y + 18, sub, font(this.fs(14), 700, got === n.length ? '#8ef0a0' : UI.textDim))
+          .setOrigin(0, 0.5));
+        continue;
+      }
+      const { m, i } = r;
+      const open = ascentOpen(i, done), won = done.has(m.id), now = r === current;
+      const rad = m.boss ? 54 : 38;
+      if (now) {
+        const ring = this.add.circle(r.x, r.y, rad + 12).setStrokeStyle(5, 0x8fe3ff, 0.9);
+        this.tweens.add({ targets: ring, scale: 1.12, alpha: 0.4, duration: 800, yoyo: true, repeat: -1, ease: 'Sine.easeInOut' });
+        this.items.push(ring);
+      }
+      const fill = won ? 0xffc247 : open ? 0x8fe3ff : 0x22293a;
+      const node = this.add.circle(r.x, r.y, rad, fill).setStrokeStyle(5, now ? 0xffffff : 0x0b1018);
+      this.items.push(node);
+      const bossKey = m.boss ? { true: 'mon_boss', yeti: 'mon_yeti', golem: 'mon_golem', slimeking: 'mon_slime' }[m.boss] : null;
+      if (bossKey && this.textures.exists(bossKey)) {
+        const img = this.add.image(r.x, r.y + 4, bossKey);
+        img.setScale(Math.min((rad * 1.8) / img.width, (rad * 1.8) / img.height)).setAlpha(open ? 1 : 0.45);
+        if (!open) img.setTint(0x555a66);
+        this.items.push(img);
+      } else {
+        const num = this.add.text(r.x, r.y, `${i + 1}`, font(30, 900, open ? '#2a1c06' : UI.textDim)).setOrigin(0.5);
+        if (open) num.setStroke('#000000', 0);
+        this.items.push(num);
+      }
+      // Звёзды — под узлом
+      const st = stars[m.id] ?? 0;
+      for (let k = 0; k < 3; k++) {
+        this.items.push(this.add.text(r.x + (k - 1) * 26, r.y + rad + 16, '★',
+          font(24, 900, k < st ? '#ffd23f' : won ? '#5a5f70' : '#2c3242')).setOrigin(0.5));
+      }
+      // Название — сбоку, со стороны центра экрана
+      const right = r.x <= cx;
+      const tx = r.x + (right ? 1 : -1) * (rad + 18);
+      const title = this.add.text(tx, r.y - 10, m.title, font(this.portrait ? 22 : 20, 800, open ? UI.text : UI.textDim))
+        .setOrigin(right ? 0 : 1, 0.5);
+      this.items.push(title);
+      const hint = now ? (won ? 'ещё звёзды?' : 'ты здесь') : !open ? '' : st < 3 ? `★ ${st} из 3` : 'все звёзды';
+      if (hint) {
+        this.items.push(this.add.text(tx, r.y + 18, m.boss ? `босс · ${hint}` : hint,
+          font(this.fs(13), 700, now ? '#8fe3ff' : UI.textDim)).setOrigin(right ? 0 : 1, 0.5));
+      }
+      if (open) {
+        node.setInteractive({ useHandCursor: true });
+        node.on('pointerup', () => { if (!this._dragging) { haptic('tap'); this.showAscentBrief(m); } });
+      }
+      this.buttons[`up-${m.id}`] = { x: r.x, y: r.y + this.oy, w: rad * 2, h: rad * 2, enabled: open };
+    }
+    this._back(() => this.showModes());
+    this._scrollable(bottom + 40);
+    // Открыли — текущий бой на виду, посередине экрана
+    const mid = (this.bottomY(96) + 160) / 2;
+    this._setScroll(keep ?? (current ? current.y - mid : 0));
   }
 
   showAscentBrief(m) {
@@ -1919,7 +2011,7 @@ export default class MenuScene extends Phaser.Scene {
     this.items.push(t);
     this._button('start', cx, 176 + t.height + 90, 'В бой', '', () => this.start(ascentMatch(m.id)),
       this.portrait ? { variant: 'primary', w: 360, h: 88, titleSize: 30 } : { variant: 'primary', w: 300, h: 66 });
-    this._back(() => this.showAscentChapter(CHAPTERS.find((c) => c.id === m.chapter)));
+    this._back(() => this.showAscent());
   }
 
   // ----------------------------------------------------------- испытания
