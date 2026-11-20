@@ -177,7 +177,7 @@ export const SHAPES = [
       // либо оставляет просвет, в который пролезет боец (см. Pieces)
       const walls = Boolean(terrain.walls);
       const pieces = new Pieces();
-      const wallPieces = walls ? [0, 1].map((side) => pieces.add(wallOutline(W, H, side))) : [];
+      const wallPieces = walls ? [0, 1].map((side) => Object.assign(pieces.add(wallOutline(W, H, side)), { wall: true })) : [];
       const fill = (pts) => {
         ctx.beginPath();
         ctx.moveTo(pts[0][0], pts[0][1]);
@@ -208,11 +208,14 @@ export const SHAPES = [
       };
       // Сталактит, сосулька, столбик: если кончик оставляет щель с землёй
       // напротив (боец под ним не пролезет, а просвет видно) — короче; совсем
-      // не помещается — не растёт
+      // не помещается — не растёт. Дорастать до земли напротив тоже нельзя:
+      // сосулька, упёршаяся в глыбу, закрывала карман
       const spikeFit = (x, y0, y1, w) => {
         const s = Math.sign(y1 - y0);
+        const roots = pieces.touching(spikeOutline(x, y0, y0 + s * 8, w));
         for (let len = Math.abs(y1 - y0); len >= 20; len -= 5) {
-          if (pieces.fits(spikeOutline(x, y0, y0 + s * len, w))) { spike(x, y0, y0 + s * len, w); return; }
+          const pts = spikeOutline(x, y0, y0 + s * len, w);
+          if (pieces.fits(pts) && pieces.touching(pts).every((q) => roots.includes(q))) { spike(x, y0, y0 + s * len, w); return; }
         }
       };
       // Поставить кусок туда, где он не оставит щелей: из вариантов
@@ -406,8 +409,10 @@ function polyDist(a, b, cap = PASS) {
 /**
  * Нарисованные куски башни. Новый кусок с каждым соседом либо срастается,
  * либо оставляет просвет не уже PASS. Щель с соседом, к которому кусок
- * прирос через общий третий (сосулька и стена под одним карнизом), — тупик,
- * а не проход: её не считаем.
+ * прирос через общий третий (две сосульки под одним карнизом, два
+ * столбика на полу), — тупик, а не проход: её не считаем. Кроме стены:
+ * она волнистая, и за узким устьем у неё бывает ниша, куда видно, а не
+ * пролезть, — со стеной только стык или проход.
  */
 class Pieces {
   constructor() { this.list = []; }
@@ -421,6 +426,12 @@ class Pieces {
     return p;
   }
 
+  /** Куски, с которыми контур соприкасается. */
+  touching(pts) {
+    const p = { pts, box: bbox(pts) };
+    return this.list.filter((q) => polyDist(p, q, 1) === 0);
+  }
+
   /** apart — куски, к которым и прирастать нельзя (только проход). */
   fits(pts, apart = null) {
     const p = { pts, box: bbox(pts) };
@@ -431,7 +442,7 @@ class Pieces {
       if (d === 0) touch.push(q);
       else if (d < PASS) near.push(q);
     }
-    return near.every((q) => touch.some((c) => c.touch.has(q)));
+    return near.every((q) => !q.wall && touch.some((c) => !c.wall && c.touch.has(q)));
   }
 }
 
