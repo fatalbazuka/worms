@@ -381,21 +381,25 @@ export class AimController {
     let dx = foe.x - w.x, dy = foe.centerY - w.centerY - 90;
     const d = Math.hypot(dx, dy) || 1;
     dx /= d; dy /= d;
+    // Обучение после промаха: не жест вообще, а тот, что попадёт
+    const sol = scene.coach?.aimSolution;
+    const full = sol ? sol.frac : 0.72;
+    if (sol) { dx = sol.dx; dy = sol.dy; }
     const t = (scene.time.now % 2000) / 2000;
     const pull = t < 0.15 ? 0 : t < 0.7 ? (t - 0.15) / 0.55 : t < 0.85 ? 1 : 0;
     const k = pull * pull * (3 - 2 * pull);
-    const reach = (CFG.SLING_MAX * 0.72 * k) / scene.rig.zoom;
+    const reach = (CFG.SLING_MAX * full * k) / scene.rig.zoom;
     const o = this.origin();
     const fx = o.x - dx * reach, fy = o.y - dy * reach;
     // Рычаг на экране тянется так же — видно, за что браться
-    const padReach = CFG.SLING_PAD_MAX * 0.72 * k;
+    const padReach = CFG.SLING_PAD_MAX * full * k;
     this.padHint = { dx: -dx * padReach, dy: -dy * padReach };
     // Куда «палец» уезжает целиком — рычаг ловит касание и на этом пути
     this.padHintDir = { dx: -dx, dy: -dy };
     const g = this.gfx;
     if (k > 0.02) {
       g.lineStyle(3, 0xffffff, 0.35).lineBetween(o.x, o.y, fx, fy);
-      this._drawPower(o, { x: dx, y: dy }, k * 0.72);
+      this._drawPower(o, { x: dx, y: dy }, k * full);
     }
     // «Палец»: кружок с ободком; в момент отпускания вспыхивает
     const released = t >= 0.85;

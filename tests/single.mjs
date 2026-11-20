@@ -806,8 +806,8 @@ check('прицел «кнопки»: на башне ▲▼ и «Огонь», 
     seen.push(c.current?.id);
     return { coach: true, seen, weapon, lockedFirst, lockedWalk, lockedAfter: c.lockShot, time: s.turn.timeLeft };
   });
-  check('тренировка новичка: выстрел гранатой → ходьба → прыжок → трос → добей, рычаг заперт только на середине',
-    coach.coach && coach.seen.join() === 'shoot,walk,jump,hook,finish' && coach.weapon === 'grenade'
+  check('тренировка новичка: выстрел базукой → ходьба → прыжок → трос → добей, рычаг заперт только на середине',
+    coach.coach && coach.seen.join() === 'shoot,walk,jump,hook,finish' && coach.weapon === 'bazooka'
       && coach.lockedFirst === false && coach.lockedWalk === true && coach.lockedAfter === false && coach.time > 5,
     JSON.stringify(coach));
   await p2.evaluate(() => {

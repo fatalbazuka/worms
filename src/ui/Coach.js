@@ -2,16 +2,17 @@ import { CFG, DEPTH } from '../config.js';
 import { WEAPONS } from '../weapons/index.js';
 import { font } from './theme.js';
 import { haptic } from '../platform/telegram.js';
+import { solveShot, placeTarget } from './coachAim.js';
 
 /**
  * Пошаговая тренировка новичка — в испытании «Первый выстрел» (match.tutorial).
  * Сначала самое весёлое — взрыв, потом остальное, по одному приёму за раз:
  *
- *   1. shoot  — граната уже в руке: потянуть рычаг от мишени и отпустить;
+ *   1. shoot  — базука в руке (взрыв сразу, без запала): потянуть рычаг от мишени и отпустить;
  *   2. walk   — стиком дойти до флажка;
  *   3. jump   — прыжок (рывок стика вверх или круглая кнопка);
  *   4. hook   — коснуться светящейся точки: трос подтянет туда;
- *   5. finish — добить мишень.
+ *   5. finish — добить мишень; после промаха «палец» показывает точный жест.
  *
  * Мишень живучая (100 жизней, граната снимает 50), так что первый выстрел
  * её почти никогда не добивает, а если добьёт — тоже хорошо: урок короче,
@@ -86,6 +87,23 @@ export class Coach {
     this.bodyText.setText(st.text);
   }
 
+  /**
+   * Точный жест для «Добей» — после первого промаха. Считается раз на ход
+   * и место бойца: перебор баллистики каждый кадр был бы лишним.
+   */
+  get aimSolution() {
+    if (this.current?.id !== 'finish' || this.misses < 1) return null;
+    const s = this.scene, w = s.turn.activeWorm;
+    if (!w || !s.canPlayerAct()) return null;
+    const key = `${s.turn.turnNumber}:${Math.round(w.x / 8)}:${Math.round(w.y / 8)}:${s.turn.weaponIndex}`;
+    if (this._solKey !== key) {
+      this._solKey = key;
+      const foe = s.worms.find((f) => f.alive && f.team !== w.team);
+      this._sol = solveShot(s, w, foe, s.turn.weapon);
+    }
+    return this._sol;
+  }
+
   /** Игрок выстрелил (GameScene): шаг выстрела сделан. */
   onShot() {
     // Шаг «Добей» не закрывается выстрелом: он длится до конца боя, а после
@@ -104,6 +122,7 @@ export class Coach {
     this.step++;
     this.doneAt = s.time.now;
     this.shotTurn = undefined;   // промах считаем от хода, в который начался шаг
+    this.armed = false;          // к шагу выстрела — снова базука в руке
     if (this.finished) { this.destroy(); return; }
     this._show();
   }
@@ -135,6 +154,12 @@ export class Coach {
     // Пока учимся и целимся, ход не сгорает (отход после выстрела — по часам)
     if (mine && s.turn.state === 'aim' && !s.turn.retreating) s.turn.timeLeft = Math.max(s.turn.timeLeft, 25);
     this._drawPanel(mine);
+    // Мишень — на виду и в досягаемости: один раз, когда все приземлились
+    if (mine && !this.targetPlaced && !s.landing()) {
+      this.targetPlaced = true;
+      const foe = s.worms.find((f) => f.alive && f.team !== w.team);
+      placeTarget(s, w, foe, WEAPONS.find((x) => x.id === 'bazooka'));
+    }
     this.dimHook?.setVisible(this.current?.id !== 'hook');
     this.arrow.clear();
     this.flagGfx.clear();
@@ -170,9 +195,10 @@ export class Coach {
       }
       case 'shoot':
       case 'finish': {
-        // Граната — сразу в руке: выбирать оружие на первой минуте незачем
+        // Базука — сразу в руке: рвётся при ударе, взрыв виден сразу. Граната
+        // с запалом лежала три секунды, и новички решали, что выстрела не было
         if (!this.armed) {
-          const gi = WEAPONS.findIndex((x) => x.id === 'grenade');
+          const gi = WEAPONS.findIndex((x) => x.id === 'bazooka');
           if (gi >= 0 && s.turn.weaponIndex !== gi) s.turn.setWeaponIndex(gi);
           this.armed = true;
         }
@@ -181,7 +207,7 @@ export class Coach {
         // Промах на добивании: ход ушёл к мишени и вернулся — подбодрить и поправить
         if (this.current.id === 'finish' && s.turn.turnNumber > (this.shotTurn ?? s.turn.turnNumber)) {
           this.misses++;
-          this.bodyText.setText('Мимо — не беда! Тяни дальше, если недолёт, и выше, если упёрлось в пол');
+          this.bodyText.setText('Мимо — не беда! Повтори за пальцем: тяни рычаг так же далеко и отпусти');
         }
         this.shotTurn = s.turn.turnNumber;
         break;
