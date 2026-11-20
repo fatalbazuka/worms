@@ -34,23 +34,24 @@ export const CHAPTERS = [
 export const ASCENT = [
   // --- Подножие ---
   {
-    id: 'up-1', chapter: 'foot', title: 'Первые ступени', seed: 11001,
+    id: 'up-1', chapter: 'foot', title: 'Первые ступени', seed: 11001, stars: { turns: 7 },
     brief: 'По этажам ползут слизни: доползут — лопнут рядом. Бей их, пока далеко.',
-    teams: [human(2), bot(2, 'rookie')], monsters: { slime: 2 }, rules: { ...base },
+    // Слизней было два: первый бой брался в 5% симуляций (docs/ascent-curve.md)
+    teams: [human(2), bot(2, 'rookie')], monsters: { slime: 1 }, rules: { ...base },
   },
   {
-    id: 'up-2', chapter: 'foot', title: 'Колючки', seed: 11002,
+    id: 'up-2', chapter: 'foot', title: 'Колючки', seed: 11002, stars: { turns: 9 },
     brief: 'Кактусы колются, а подорванные — взрываются. Подорви кактус рядом с врагом.',
     teams: [human(2), bot(2, 'rookie')], monsters: { cactus: 3 }, rules: { ...base },
   },
   {
-    id: 'up-3', chapter: 'foot', title: 'Гиря сверху', seed: 11003,
+    id: 'up-3', chapter: 'foot', title: 'Гиря сверху', seed: 11003, stars: { turns: 10 },
     brief: 'Гиря пробивает этаж и падает на того, кто спрятался под ним.',
     teams: [human(2), bot(2, 'fighter')], monsters: { slime: 1 },
     rules: { ...base, ammo: { weight: 4 } },
   },
   {
-    id: 'up-4', chapter: 'foot', title: 'Слизни наступают', seed: 11004,
+    id: 'up-4', chapter: 'foot', title: 'Слизни наступают', seed: 11004, stars: { turns: 7 },
     brief: 'Их много и они не ждут. Держись выше и не подпускай.',
     teams: [human(2), bot(1, 'fighter')], monsters: { slime: 5 }, rules: { ...base },
   },
@@ -61,26 +62,28 @@ export const ASCENT = [
   },
   // --- Ледник ---
   {
-    id: 'up-6', chapter: 'glacier', title: 'Скользко', seed: 12001,
+    id: 'up-6', chapter: 'glacier', title: 'Скользко', seed: 12001, stars: { turns: 8 },
     brief: 'Лёд: от взрыва катятся далеко. Столкни их с этажа.',
-    teams: [human(2), bot(2, 'fighter')], monsters: { slime: 2 }, rules: { ...base },
+    // Бойцов было двое: на льду 0% побед против 100% у соседа (docs/ascent-curve.md)
+    teams: [human(2), bot(1, 'fighter')], monsters: { slime: 2 }, rules: { ...base },
   },
   {
-    id: 'up-7', chapter: 'glacier', title: 'Липкие дела', seed: 12002,
+    id: 'up-7', chapter: 'glacier', title: 'Липкие дела', seed: 12002, stars: { turns: 9 },
     brief: 'Липкая бомба прилипает к стене или потолку и рвётся через три секунды.',
     teams: [human(2), bot(2, 'fighter')], monsters: { cactus: 2 },
     rules: { ...base, ammo: { sticky: 4 } },
   },
   {
-    id: 'up-8', chapter: 'glacier', title: 'Пружина', seed: 12003,
+    id: 'up-8', chapter: 'glacier', title: 'Пружина', seed: 12003, stars: { turns: 7 },
     brief: 'Батут подбросит на этаж выше — или выкинет врага под удар.',
     teams: [human(2), bot(3, 'rookie')], monsters: { slime: 2 },
     rules: { ...base, ammo: { spring: 3 } },
   },
   {
-    id: 'up-9', chapter: 'glacier', title: 'Колючий каток', seed: 12004,
+    id: 'up-9', chapter: 'glacier', title: 'Колючий каток', seed: 12004, stars: { turns: 10 },
     brief: 'Кактусы на льду. Кто поскользнётся — наколется.',
-    teams: [human(2), bot(2, 'sniper')], monsters: { cactus: 4 }, rules: { ...base },
+    // Снайперов было двое: 5% побед против 90% у соседа (docs/ascent-curve.md)
+    teams: [human(2), bot(1, 'sniper')], monsters: { cactus: 4 }, rules: { ...base },
   },
   {
     id: 'up-10', chapter: 'glacier', title: 'Йети', seed: 12005, boss: 'yeti',
@@ -90,25 +93,25 @@ export const ASCENT = [
   },
   // --- Жерло ---
   {
-    id: 'up-11', chapter: 'crater', title: 'Горячо', seed: 13001,
+    id: 'up-11', chapter: 'crater', title: 'Горячо', seed: 13001, stars: { turns: 6 },
     brief: 'Лава поднимается с пятого хода. Бей быстро.',
     teams: [human(2), bot(2, 'fighter')], monsters: { slime: 2 },
     rules: { ...base, flood: { after: 5, step: 95 } },
   },
   {
-    id: 'up-12', chapter: 'crater', title: 'Нашествие', seed: 13002,
+    id: 'up-12', chapter: 'crater', title: 'Нашествие', seed: 13002, stars: { turns: 5 },
     brief: 'Слизней шестеро. Батут и гиря помогут.',
     teams: [human(2), bot(2, 'fighter')], monsters: { slime: 6 },
     rules: { ...base, ammo: { weight: 2, spring: 2 } },
   },
   {
-    id: 'up-13', chapter: 'crater', title: 'Снайперы на уступах', seed: 13003,
+    id: 'up-13', chapter: 'crater', title: 'Снайперы на уступах', seed: 13003, stars: { turns: 6 },
     brief: 'Снайперы почти не мажут. Прячься под этажами и бей гирей.',
     teams: [human(2), bot(2, 'sniper')], monsters: { cactus: 2 },
     rules: { ...base, ammo: { weight: 3 } },
   },
   {
-    id: 'up-14', chapter: 'crater', title: 'Всё сразу', seed: 13004,
+    id: 'up-14', chapter: 'crater', title: 'Всё сразу', seed: 13004, stars: { turns: 7 },
     brief: 'Трое на трое, слизни, кактусы и лава. Последняя проверка перед вершиной.',
     teams: [human(3), bot(3, 'fighter')], monsters: { slime: 2, cactus: 2 },
     rules: { ...base, flood: { after: 7, step: 85 }, ammo: { sticky: 2, weight: 2 } },
@@ -121,22 +124,22 @@ export const ASCENT = [
   },
   // --- Космос ---
   {
-    id: 'up-16', chapter: 'space', title: 'Невесомость', seed: 14001,
+    id: 'up-16', chapter: 'space', title: 'Невесомость', seed: 14001, stars: { turns: 11 },
     brief: 'Тяжести почти нет: снаряды летят дальше, прыжки выше. Целься ниже, чем привык.',
     teams: [human(2), bot(2, 'rookie')], monsters: { slime: 2 }, rules: { ...base },
   },
   {
-    id: 'up-17', chapter: 'space', title: 'Кристаллы', seed: 14002,
+    id: 'up-17', chapter: 'space', title: 'Кристаллы', seed: 14002, stars: { turns: 9 },
     brief: 'Прячься за кристаллами — они держат удар, пока их не разобьют.',
     teams: [human(2), bot(2, 'fighter')], monsters: { cactus: 2 }, rules: { ...base, ammo: { sticky: 3 } },
   },
   {
-    id: 'up-18', chapter: 'space', title: 'Батут до звёзд', seed: 14003,
+    id: 'up-18', chapter: 'space', title: 'Батут до звёзд', seed: 14003, stars: { turns: 12 },
     brief: 'В невесомости батут подбрасывает на несколько этажей. Не улети в пустоту!',
     teams: [human(2), bot(3, 'rookie')], monsters: { slime: 3 }, rules: { ...base, ammo: { spring: 3 } },
   },
   {
-    id: 'up-19', chapter: 'space', title: 'Орбитальная дуэль', seed: 14004,
+    id: 'up-19', chapter: 'space', title: 'Орбитальная дуэль', seed: 14004, stars: { turns: 5 },
     brief: 'Снайперы на орбите. Гиря падает медленно, но этаж всё равно пробьёт.',
     teams: [human(2), bot(2, 'sniper')], monsters: { slime: 2, cactus: 1 },
     rules: { ...base, ammo: { weight: 3 } },
@@ -156,7 +159,8 @@ export const ASCENT = [
  */
 const LEVEL_AFFIXES = {
   'up-2': ['storm'], 'up-4': ['storm'], 'up-5': ['storm'],
-  'up-17': ['gravity'], 'up-18': ['gravity'], 'up-19': ['meteors', 'gravity'], 'up-20': ['gravity', 'meteors'],
+  // up-17 без скачка гравитации: с ним 20% побед против 95% у соседей (docs/ascent-curve.md)
+  'up-17': [], 'up-18': ['gravity'], 'up-19': ['meteors', 'gravity'], 'up-20': ['gravity', 'meteors'],
   'up-6': ['gust'], 'up-7': ['icicles'], 'up-8': ['gust'], 'up-9': ['gust', 'icicles'], 'up-10': ['icicles'],
   'up-11': ['eruption'], 'up-12': ['vent'], 'up-13': ['vent'], 'up-14': ['eruption', 'vent'], 'up-15': ['vent'],
 };
