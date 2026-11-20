@@ -1,5 +1,5 @@
 import { CFG, DEPTH, TEAM_COLORS } from '../config.js';
-import { font } from './theme.js';
+import { font, setTextColor } from './theme.js';
 
 /**
  * Указатели на бойцов, оказавшихся за краем экрана.
@@ -114,7 +114,7 @@ export class OffscreenMarkers {
     const l = this.labels[i];
     l.setOrigin(originX, 0.5);
     l.setVisible(true).setPosition(x, y).setText(text);
-    l.setColor(`#${color.toString(16).padStart(6, '0')}`);
+    setTextColor(l, `#${color.toString(16).padStart(6, '0')}`);
   }
 
   destroy() {
