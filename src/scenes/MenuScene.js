@@ -45,9 +45,11 @@ import {
 import {
   dailyState, rewardWaiting, claimDailyTask, claimDailyStreak, buyBox, buyStreakFreeze,
 } from '../platform/daily.js';
-import { COSMETICS, KINDS, KIND_NAMES } from '../core/cosmetics.js';
+import { COSMETICS, KINDS, KIND_NAMES, item as cosItem } from '../core/cosmetics.js';
 import { cosState, buyCosmetic, equipCosmetic } from '../platform/cosmetics.js';
 import { fitScale } from '../core/assets.js';
+import { XP, TABLE_END, rewardFor, COS_LABEL } from '../core/levels.js';
+import { levelState } from '../platform/levels.js';
 import { LANG, setLang } from '../i18n/index.js';
 
 /**
@@ -549,6 +551,15 @@ export default class MenuScene extends Phaser.Scene {
       pill('ui-mode', desktop ? 'Управление: ПК' : 'Управление: сенсор', 260,
         () => { setUiMode(desktop ? 'touch' : 'desktop'); this.showRoot(); });
     }
+    // Уровень — вход в «Дорогу наград». До первого выстрела его нет: новичку
+    // нужна одна «Играть», а опыт он увидит на экране итога обучения.
+    // Встаёт в ряд плашек, если там есть место, иначе — строкой ниже, слева
+    // от магазина (на телефоне)
+    if (onboardStage() !== 'tutorial') {
+      const lw = 270;
+      const inRow = pillX + lw <= W - pad - 316;
+      this._levelBadge(inRow ? pillX : pad, inRow ? top + 156 : top + 222, lw);
+    }
 
     // --- «Играть» ---
     const playH = portrait ? 128 : 104;
@@ -624,6 +635,203 @@ export default class MenuScene extends Phaser.Scene {
         this.buttons.box = { x: bx, y: by - 20 * k + this.oy, w: 50 * k, h: 46 * k, enabled: true };
       }
     }
+  }
+
+  // ------------------------------------------------------------- уровень
+
+  /**
+   * Плашка уровня на главном: «Ур. 5», тонкая полоса опыта и значок
+   * следующего подарка. Тап — «Дорога наград». x — левый край.
+   */
+  _levelBadge(x, y, w) {
+    const lv = levelState();
+    const h = 58, cx = x + w / 2;
+    const plate = this.add.graphics();
+    plate.fillStyle(0x1c1440, 0.95).fillRoundedRect(x, y - h / 2, w, h, h / 2);
+    plate.lineStyle(3, 0x8fe3ff, 0.75).strokeRoundedRect(x, y - h / 2, w, h, h / 2);
+    this.items.push(plate);
+    const label = this.add.text(x + 22, y, `Ур. ${lv.level}`, font(24, 900, '#ffe27a')).setOrigin(0, 0.5);
+    this.items.push(label);
+    // Полоса — между надписью и значком подарка
+    const bx = x + 34 + label.width, bw = Math.max(40, x + w - 62 - bx);
+    this.items.push(this.add.rectangle(bx, y - 5, bw, 10, 0x0b1220, 0.9).setOrigin(0, 0.5));
+    this.items.push(this.add.rectangle(bx, y - 5, Math.max(4, bw * lv.progress), 10, 0x8fe3ff).setOrigin(0, 0.5));
+    this.items.push(this.add.text(bx, y + 13, `${lv.into}/${lv.need}`, font(15, 700, UI.textDim)).setOrigin(0, 0.5));
+    // Что дадут на следующем — маленьким значком в конце
+    const icon = this._rewardIcon(x + w - 32, y, rewardFor(lv.level + 1), 34);
+    if (icon) this.tweens.add({ targets: icon, scale: icon.scale * 1.15, duration: 700, yoyo: true, repeat: -1, ease: 'Sine.easeInOut' });
+    const zone = this.add.zone(cx, y, w, h).setInteractive({ useHandCursor: true });
+    zone.on('pointerdown', () => { haptic('tap'); label.setScale(0.92); });
+    zone.on('pointerout', () => label.setScale(1));
+    zone.on('pointerup', () => { label.setScale(1); if (!this._dragging) this.showRoad(); });
+    this.items.push(zone);
+    this.buttons.level = { x: cx, y: y + this.oy, w, h, enabled: true };
+  }
+
+  /**
+   * Значок подарка: монета (горка из трёх — если куча), коробка, образец
+   * украшения. @returns {object|null} главный объект значка
+   */
+  _rewardIcon(x, y, r, size, alpha = 1) {
+    if (!r) return null;
+    const push = (o) => { this.items.push(o.setAlpha(alpha)); return o; };
+    if (r.boxes && this.textures.exists('shot_crate_weapon')) {
+      const img = push(this.add.image(x, y, 'shot_crate_weapon').setScale(fitScale(this, 'shot_crate_weapon', size)));
+      if (r.boxes > 1) {
+        push(this.add.text(x + size * 0.45, y - size * 0.4, `×${r.boxes}`, font(Math.round(size * 0.42), 900, '#1a1408'))
+          .setOrigin(0.5).setPadding(4, 0, 4, 0).setBackgroundColor('#ffe27a'));
+      }
+      return img;
+    }
+    if (r.cos) {
+      const it = cosItem(r.cos.kind, r.cos.id);
+      if (it?.emoji && this.textures.exists(`emoji_${it.emoji}`)) {
+        return push(this.add.image(x, y, `emoji_${it.emoji}`).setScale(size / 128));
+      }
+      // Трос и след — образцом цвета: полоска или три точки, радуга — всеми
+      const colors = it?.rainbow ? [0xff5a5a, 0xffd45a, 0x6ee36e, 0x5aa9ff, 0xc58bff] : [it?.color ?? 0xffffff];
+      const g = push(this.add.graphics({ x, y }));
+      if (r.cos.kind === 'trail') {
+        for (let i = 0; i < 3; i++) {
+          g.fillStyle(colors[(i * 2) % colors.length], 1)
+            .fillCircle((i - 1) * size * 0.34, (1 - i) * size * 0.18, size * (0.1 + i * 0.04));
+        }
+      } else {
+        const n = colors.length, seg = size / n;
+        for (let i = 0; i < n; i++) {
+          g.lineStyle(Math.max(4, size * 0.16), colors[i], 1);
+          g.lineBetween(-size / 2 + i * seg, size * 0.3 - i * seg * 0.6, -size / 2 + (i + 1) * seg, size * 0.3 - (i + 1) * seg * 0.6);
+        }
+      }
+      return g;
+    }
+    const key = this._coinTexture();
+    if (r.big) {
+      push(this.add.image(x - size * 0.22, y + size * 0.12, key).setScale(size / 60));
+      push(this.add.image(x + size * 0.22, y + size * 0.12, key).setScale(size / 60));
+      return push(this.add.image(x, y - size * 0.16, key).setScale(size / 56));
+    }
+    return push(this.add.image(x, y, key).setScale(size / 48));
+  }
+
+  /** Подпись подарка: «+100 монет», «Коробка со скином», «Трос «Неоновый»». */
+  _rewardLabel(r) {
+    if (!r) return { title: 'Начало пути', hint: 'опыт — за каждый бой' };
+    if (r.boxes) {
+      return { title: r.boxes > 1 ? `Коробки со скином ×${r.boxes}` : 'Коробка со скином', hint: 'случайный скин' };
+    }
+    if (r.cos) {
+      const name = cosItem(r.cos.kind, r.cos.id)?.name ?? '';
+      const kind = COS_LABEL[r.cos.kind];
+      return { title: `${kind[0].toUpperCase()}${kind.slice(1)} «${name}»`, hint: 'украшение · если уже есть — монетами' };
+    }
+    return { title: `+${r.coins} монет`, hint: r.big ? 'куча монет' : '' };
+  }
+
+  /**
+   * «Дорога наград»: уровни столбиком, на каждом — подарок. Взятые
+   * отмечены галочкой, текущий подсвечен, следующий — с полосой «сколько
+   * ещё». Подарки выдаются сами, как только уровень взят (на экране итога
+   * боя), — здесь их не забирают, а смотрят, что впереди. В горизонтальном
+   * экране слева стоит карточка уровня, справа крутится дорога.
+   */
+  showRoad() {
+    const keep = this.section === this.showRoad ? this.scrollY : null;
+    this.section = this.showRoad;
+    this._clear();
+    const W = this.W;
+    const wide = !this.portrait;
+    const lv = levelState();
+
+    // --- шапка и карточка уровня; в ландшафте — прибиты слева ---
+    const pinFrom = this.items.length;
+    const hx = wide ? Math.round(Math.min(W * 0.27, 380)) : W / 2;
+    this._title('Дорога наград', 'подарок на каждом уровне · опыт — за любой бой');
+    if (wide) for (const o of this.items.slice(pinFrom)) o.setX(hx);
+    const hw = wide ? Math.min(W * 0.42, 560) : Math.min(W - 48, 640);
+    const hTop = wide ? 150 : 146, hh = wide ? 246 : 236;
+    const card = this.add.graphics();
+    card.fillStyle(0x1c1440, 0.92).fillRoundedRect(hx - hw / 2, hTop, hw, hh, 26);
+    card.lineStyle(4, 0xffc247, 0.85).strokeRoundedRect(hx - hw / 2, hTop, hw, hh, 26);
+    this.items.push(card);
+    this.items.push(this.add.text(hx, hTop + 50, `Уровень ${lv.level}`, font(46, 900, '#ffe27a'))
+      .setOrigin(0.5).setStroke('#5a2a08', 7));
+    const bw = hw - 64, bl = hx - bw / 2, by = hTop + 112;
+    this.items.push(this.add.rectangle(bl, by, bw, 20, 0x0b1220, 0.9).setOrigin(0, 0.5));
+    this.items.push(this.add.rectangle(bl, by, Math.max(6, bw * lv.progress), 20, 0x8fe3ff).setOrigin(0, 0.5));
+    this.items.push(this.add.text(bl, by + 20, `${lv.into} из ${lv.need} опыта`, font(19, 800, UI.text)).setOrigin(0, 0));
+    this.items.push(this.add.text(bl + bw, by + 20, `до ур. ${lv.level + 1} ещё ${lv.need - lv.into}`,
+      font(19, 700, UI.textDim)).setOrigin(1, 0));
+    // Откуда берётся опыт — чтобы было понятно, что делать
+    this.items.push(this.add.text(hx, by + 62,
+      `опыт: бой +${XP.battle} · победа +${XP.win} · урон до +${XP.damageMax} · с человеком +${XP.online}`
+        + ` · новые звёзды и миссии — ещё больше`,
+      font(this.fs(14), 700, UI.textDim)).setOrigin(0.5, 0).setAlign('center').setWordWrapWidth(hw - 48));
+    if (wide) {
+      // Дорога крутится справа, а шапка и карточка стоят на месте
+      for (const o of this.items.slice(pinFrom)) o.setScrollFactor(0).setY(o.y + this.oy).setDepth(40);
+    }
+
+    // --- дорога ---
+    const last = Math.max(TABLE_END, lv.level + 10);
+    const rw = wide ? Math.min(W - hx - hw / 2 - 80, 660) : Math.min(W - 48, 640);
+    const lx = wide ? Math.round(hx + hw / 2 + 40 + rw / 2) : W / 2;
+    const rh = this.portrait ? 100 : 86, gap = 14;
+    const y0 = wide ? 40 : hTop + hh + 34;
+    const rowY = (level) => y0 + (level - 1) * (rh + gap) + rh / 2;
+    const x0 = lx - rw / 2;
+    const nodeX = x0 + 46;
+    // Сама дорога: линия через кружки уровней, пройденная часть — золотом
+    this.items.push(this.add.rectangle(nodeX, rowY(1), 8, rowY(last) - rowY(1), 0x2a3350).setOrigin(0.5, 0).setDepth(-1));
+    this.items.push(this.add.rectangle(nodeX, rowY(1), 8, rowY(lv.level) - rowY(1) + rh / 2, 0xffc247)
+      .setOrigin(0.5, 0).setDepth(-1));
+    for (let level = 1; level <= last; level++) {
+      const y = rowY(level);
+      const got = level <= lv.level, now = level === lv.level, next = level === lv.level + 1;
+      const variant = now ? 'active' : 'normal';
+      const key = `menu-road-${rw}x${rh}-${variant}`;
+      ensureButton(this, key, rw, rh, variant);
+      this.items.push(this.add.image(lx, y, key).setAlpha(got && !now ? 0.55 : got || next ? 1 : 0.8));
+      const ink = now ? '#2a1c06' : UI.text;
+      // Кружок с номером уровня
+      this.items.push(this.add.circle(nodeX, y, 28, got ? 0xffc247 : next ? 0x8fe3ff : 0x22293a)
+        .setStrokeStyle(4, now ? 0xffffff : 0x0b1018));
+      // Тёмные буквы на светлом — без тёмной обводки, иначе они мажутся
+      const dark = (t) => t.setStroke('#000000', 0);
+      const num = this.add.text(nodeX, y, `${level}`, font(24, 900, got || next ? '#2a1c06' : UI.textDim)).setOrigin(0.5);
+      if (got || next) dark(num);
+      this.items.push(num);
+      // Подарок: значок и подпись
+      const r = rewardFor(level);
+      const label = this._rewardLabel(r);
+      this._rewardIcon(x0 + 122, y, r, 50, got && !now ? 0.6 : 1);
+      const tx = x0 + (r ? 164 : 100);
+      const hint = now ? 'ты здесь' : next ? `ещё ${lv.need - lv.into} опыта` : label.hint;
+      const head = this.add.text(tx, hint ? y - 13 : y, label.title, font(this.portrait ? 25 : 23, 800, ink)).setOrigin(0, 0.5);
+      this.items.push(now ? dark(head) : head);
+      if (hint) {
+        const sub = this.add.text(tx, y + 17, hint,
+          font(this.fs(14), 700, now ? '#5a3a08' : next ? '#8fe3ff' : UI.textDim)).setOrigin(0, 0.5);
+        this.items.push(now ? dark(sub) : sub);
+      }
+      // Справа: галочка за взятый, полоса — у следующего
+      const rx = x0 + rw - 30;
+      if (got && r) {
+        const tick = this.add.text(rx, y, '✓', font(34, 900, now ? '#2a1c06' : '#8ef0a0')).setOrigin(1, 0.5);
+        this.items.push(now ? dark(tick) : tick);
+      } else if (next) {
+        const pw = Math.min(120, rw * 0.2);
+        this.items.push(this.add.rectangle(rx - pw, y, pw, 12, 0x0b1220, 0.9).setOrigin(0, 0.5));
+        this.items.push(this.add.rectangle(rx - pw, y, Math.max(4, pw * lv.progress), 12, 0x8fe3ff).setOrigin(0, 0.5));
+      }
+    }
+    this.items.push(this.add.text(lx, rowY(last) + rh / 2 + 24, 'дальше — тоже подарки: монеты, а каждый пятый уровень — коробка',
+      font(this.fs(14), 700, UI.textDim)).setOrigin(0.5, 0).setAlign('center').setWordWrapWidth(rw));
+    this._back();
+    this._scrollable(rowY(last) + rh / 2 + 90);
+    // Открыли — свой уровень и следующий на виду: если они ниже экрана,
+    // дорога сама прокручена к ним, а не стоит на втором уровне
+    this._setScroll(keep ?? Math.max(0, rowY(lv.level + 1) + rh - this.bottomY(110)));
   }
 
   // ------------------------------------------------------------- монеты

@@ -11,6 +11,7 @@ import { syncSkinsCloud, applyServerOwned } from './platform/skins.js';
 import { syncDailyCloud } from './platform/daily.js';
 import { syncAscentCloud } from './platform/ascent.js';
 import { syncCosmeticsCloud } from './platform/cosmetics.js';
+import { syncLevelCloud } from './platform/levels.js';
 import { syncChallengesCloud } from './platform/challenges.js';
 import { dailyState } from './platform/daily.js';
 import { dayKey, prevDay } from './core/daily.js';
@@ -76,7 +77,7 @@ fitViewToScreen(window.innerWidth, window.innerHeight, screenInsets());
 // Копия прогресса с сервера — до сведения облаков: с сайта по логину она
 // единственная, в Telegram — вторая к облаку Telegram
 await prefetchServerSave();
-await Promise.all([loadUiFont(), loadCloudProfile(), syncSkinsCloud(), syncDailyCloud(), syncChallengesCloud(), syncAscentCloud(), syncCosmeticsCloud()]);
+await Promise.all([loadUiFont(), loadCloudProfile(), syncSkinsCloud(), syncDailyCloud(), syncChallengesCloud(), syncAscentCloud(), syncCosmeticsCloud(), syncLevelCloud()]);
 
 // Аккаунт. Профиль помнит, что вход был, а токена уже нет (вышли в другой
 // вкладке, почистили хранилище) — значит, мы аноним. Иначе — освежаем

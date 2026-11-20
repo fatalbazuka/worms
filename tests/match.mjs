@@ -318,6 +318,44 @@ check('один в лобби никого не находит', findMatch(p('a'
   check('у каждого скина есть редкость', K.SKINS.every((s) => K.RARITY[s.rarity]));
 }
 
+// --- уровень игрока: опыт, кривая, подарки, облачная копия ---
+{
+  const L = await import('../src/core/levels.js');
+  // Обучение — победа с тремя новыми звёздами — сразу даёт второй уровень,
+  // а проигрыш без урона — хотя бы что-то
+  const tutorial = L.battleXp({ won: true, damage: 100, stars: 3 }).total;
+  check('обучение сразу даёт второй уровень', L.levelOf(tutorial).level === 2, String(tutorial));
+  check('проигрыш тоже приносит опыт', L.battleXp({ won: false }).total > 0);
+  // Вдвоём на телефоне победа и урон «свои» с обеих сторон — только за бой
+  check('вдвоём на телефоне — только опыт за бой',
+    L.battleXp({ hotseat: true, won: true, damage: 500 }).total === L.XP.battle);
+  check('урон даёт опыт, но не больше потолка',
+    L.battleXp({ damage: 10000 }).total === L.XP.battle + L.XP.damageMax);
+  // Кривая: каждый уровень не дешевле прошлого, дальше потолка не дорожает
+  let mono = true;
+  for (let l = 1; l < 80; l++) mono &&= L.levelCost(l + 1) >= L.levelCost(l) && L.levelCost(l) <= L.LEVEL_CAP;
+  check('кривая уровней растёт и упирается в потолок', mono && L.levelCost(60) === L.LEVEL_CAP);
+  // levelOf и xpForLevel согласны на границах
+  let edges = true;
+  for (let l = 1; l < 60; l++) {
+    const at = L.levelOf(L.xpForLevel(l)), before = L.levelOf(L.xpForLevel(l) - 1);
+    edges &&= at.level === l && at.into === 0 && (l === 1 || before.level === l - 1);
+  }
+  check('опыт → уровень: ровно на границе — новый уровень', edges);
+  check('подарок есть на каждом уровне, кроме первого',
+    L.rewardFor(1) === null && Array.from({ length: 98 }, (_, i) => L.rewardFor(i + 2))
+      .every((r) => r && (r.coins > 0 || r.boxes > 0 || r.cos)));
+  // Прыжок через несколько уровней — подарки за каждый, по разу
+  const a = L.addXp(L.emptyLevel(), L.xpForLevel(4) + 5);
+  check('за пропущенные уровни подарки тоже, по порядку',
+    a.levels.join() === '2,3,4' && a.state.rewarded === 4, JSON.stringify(a));
+  check('повтор не выдаёт подарок второй раз', L.addXp(a.state, 1).levels.length === 0);
+  // Облако: опыт — больший, выданное — по большей копии, мусор не ломает
+  const m = L.mergeLevel({ xp: 900, rewarded: 5 }, { xp: 300, rewarded: 7 });
+  check('облачная копия: опыт и выданные подарки — по максимуму',
+    m.xp === 900 && m.rewarded === 7 && L.normalizeLevel('мусор').xp === 0, JSON.stringify(m));
+}
+
 console.log(failures.length
   ? `\nне прошло: ${failures.length}`
   : '\nпроверки подбора пройдены');
