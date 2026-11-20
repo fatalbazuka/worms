@@ -31,8 +31,10 @@ import { simulateFlight, muzzle } from './ballistics.js';
  * кассета — за бугор и в яму, дробовик и бита — вплотную, самонаводка и
  * бумеранг — за угол, авиаудар — по открытому сверху, мина и динамит — к
  * кучке врагов. Каждый ствол просчитывается своей физикой (simulateFlight).
- * Слабые уровни видят не все стволы и выбирают с шумом: новичок чаще всего
- * так и стреляет базукой, а гранату вспоминает от случая к случаю.
+ * Слабые уровни видят не все стволы и выбирают с шумом: новичок знает
+ * только базуку и гранату и о гранате вспоминает от случая к случаю —
+ * дробовик бьёт лучом без всякой баллистики, и с ним «Пристрелка» стала бы
+ * заметно злее.
  *
  * Позиция. Если с места хорошего выстрела нет (цель за холмом, ствол
  * упирается в склон), боец и снайпер прикидывают пару точек в шаге-двух
@@ -59,7 +61,7 @@ export const BOT_LEVELS = {
   rookie: {
     id: 'rookie', name: 'Новичок',
     angleErr: 0.10, powerErr: 0.13, coarse: 7, refine: 0,
-    weapons: ['bazooka', 'grenade', 'shotgun'], selfRisk: 90, moves: false,
+    weapons: ['bazooka', 'grenade'], selfRisk: 90, moves: false,
     sense: 0.3, pickNoise: 24,
   },
   fighter: {
@@ -235,7 +237,9 @@ export class Bot {
 
   _toAim(worm) {
     worm.facing = this.plan.facing;
-    this.scene.turn.setWeaponIndex(this.plan.weapon);
+    // Ствол уже в руках — не перевыбираем: выбор заново взводит выстрелы
+    // хода, и второй выстрел дробовика превращался бы в третий
+    if (this.scene.turn.weaponIndex !== this.plan.weapon) this.scene.turn.setWeaponIndex(this.plan.weapon);
     this.phase = 'aim';
     this.timer = 0;
   }
@@ -888,14 +892,21 @@ export class Bot {
     return score;
   }
 
-  /** Бумеранг: урон каждому, кого задел на пути туда и обратно. */
+  /**
+   * Бумеранг: урон каждому, кого задел на пути туда и обратно. Обратный
+   * удар — в треть цены: первый удар отбрасывает цель, и на обратном пути
+   * бумеранг чаще всего проходит мимо.
+   */
   scoreBoomerang(res, target, self, weapon) {
     const dmg = weapon.projectile.hitDamage || 25;
     const got = new Map();
+    const struck = new Set();
     let selfPen = 0;
     for (const h of res.hits) {
-      if (h.worm.team === self.team) selfPen += this.level.selfRisk * 4;
-      else got.set(h.worm, (got.get(h.worm) ?? 0) + dmg);
+      if (h.worm.team === self.team) { selfPen += this.level.selfRisk * 4; continue; }
+      const d = struck.has(h.worm) ? dmg / 3 : dmg;
+      struck.add(h.worm);
+      got.set(h.worm, (got.get(h.worm) ?? 0) + d);
     }
     let gain = 0;
     for (const [w, d] of got) gain += Math.min(d, w.health) + (d >= w.health ? 20 : 0);
