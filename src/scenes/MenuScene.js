@@ -10,7 +10,7 @@ import { ASCENT, CHAPTERS, ascentOpen, bossName, chapterOf } from '../campaign/a
 import { AFFIXES, DEFAULT_AFFIXES } from '../entities/Affixes.js';
 import { ascentDone } from '../platform/ascent.js';
 import { challengeStars } from '../platform/challenges.js';
-import { onboardStage } from '../platform/onboard.js';
+import { onboardStage, isNewbie } from '../platform/onboard.js';
 import { SHAPES } from '../core/shapes.js';
 import { randomRoom, copyText } from '../net/transport.js';
 import { isCasualRoom, isTowerRoom } from '../net/rooms.js';
@@ -435,7 +435,8 @@ export default class MenuScene extends Phaser.Scene {
       const text = this.add.text(x, y0 + h * 0.76, label,
         font(this.portrait && W < 640 ? 16 : 18, 800, on ? UI.accent : UI.textDim)).setOrigin(0.5);
       // Есть что забрать — красная точка на «Заданиях»
-      if (!on && ((key === 'tasks' && rewardWaiting()) || (key === 'shop' && skinState().boxes > 0))) {
+      // Красные точки — после первой победы: до неё новичку нужна одна «Играть»
+      if (!on && !isNewbie() && ((key === 'tasks' && rewardWaiting()) || (key === 'shop' && skinState().boxes > 0))) {
         this.items.push(this.add.circle(x + size * 0.55, y0 + h * 0.36 - size * 0.45, 9, 0xff4d4d)
           .setStrokeStyle(3, 0x0b1018));
       }
@@ -561,7 +562,8 @@ export default class MenuScene extends Phaser.Scene {
     const areaTop = coinY + 40;
     const areaH = areaBottom - areaTop;
     // Первый вход за день — бонус серии, одним окном поверх экрана
-    if (streakReady(dailyState(), dayKey()) && !this.streakShown) {
+    // Новичку — никаких окон до первого боя: сначала «Играть», бонус подождёт
+    if (onboardStage() !== 'tutorial' && streakReady(dailyState(), dayKey()) && !this.streakShown) {
       this.streakShown = true;
       this.time.delayedCall(350, () => { if (this.section === this.showRoot) this._streakPopup(); });
     }

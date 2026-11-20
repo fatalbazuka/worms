@@ -5,27 +5,32 @@ import { haptic } from '../platform/telegram.js';
 
 /**
  * Пошаговая тренировка новичка — в испытании «Первый выстрел» (match.tutorial).
- * Учит тому, чем в бою пользуются каждый ход, по одному приёму за раз:
+ * Сначала самое весёлое — взрыв, потом остальное, по одному приёму за раз:
  *
- *   1. walk   — стиком дойти до флажка;
- *   2. jump   — прыжок (рывок стика вверх или круглая кнопка);
- *   3. hook   — коснуться светящейся точки: трос подтянет туда;
- *   4. weapon — выбрать гранату на ленте сверху;
- *   5. shoot  — потянуть рычаг от мишени и отпустить.
+ *   1. shoot  — граната уже в руке: потянуть рычаг от мишени и отпустить;
+ *   2. walk   — стиком дойти до флажка;
+ *   3. jump   — прыжок (рывок стика вверх или круглая кнопка);
+ *   4. hook   — коснуться светящейся точки: трос подтянет туда;
+ *   5. finish — добить мишень.
+ *
+ * Мишень живучая (100 жизней, граната снимает 50), так что первый выстрел
+ * её почти никогда не добивает, а если добьёт — тоже хорошо: урок короче,
+ * ходьбе и тросу научат подсказки в следующих боях.
  *
  * Шаг засчитывается сам, как только игрок это сделал. Над шагом — панель с
- * номером и одной строкой, к нужному месту прыгает стрелка. Пока не дошли до
- * выстрела, ход не сгорает и рычаг заперт: случайно выстрелить на первом же
- * шаге — значит пропустить половину урока. Звезда за испытание и всё, что
- * дальше, — как у обычного «Первого выстрела».
+ * номером и одной строкой, к нужному месту прыгает стрелка. Пока целишься,
+ * ход не сгорает; на шагах ходьбы, прыжка и троса рычаг заперт — случайно
+ * выстрелить посреди урока значит пропустить его. Звезда за испытание и
+ * всё, что дальше, — как у обычного «Первого выстрела».
  */
 const STEPS = [
+  { id: 'shoot', title: 'Выстрел', text: 'Тяни жёлтый рычаг ОТ мишени и отпусти' },
   { id: 'walk', title: 'Ходьба', text: 'Веди стик внизу слева в сторону — дойди до флажка' },
   { id: 'jump', title: 'Прыжок', text: 'Рывок стика вверх или круглая кнопка справа — прыжок' },
   { id: 'hook', title: 'Трос', text: 'Коснись светящейся точки — трос подтянет туда' },
-  { id: 'weapon', title: 'Оружие', text: 'Выбери гранату на ленте сверху' },
-  { id: 'shoot', title: 'Выстрел', text: 'Тяни жёлтый рычаг ОТ мишени и отпусти' },
+  { id: 'finish', title: 'Добей', text: 'Мишень ещё стоит — тяни рычаг и добей её!' },
 ];
+const SHOOTS = new Set(['shoot', 'finish']);
 
 export class Coach {
   constructor(scene) {
@@ -41,10 +46,10 @@ export class Coach {
   get current() { return STEPS[this.step] ?? null; }
   get finished() { return this.step >= STEPS.length; }
 
-  /** Рычаг и натяжка с бойца — только на последнем шаге. */
-  get lockShot() { return !this.finished && this.current?.id !== 'shoot'; }
+  /** Рычаг и натяжка с бойца — только на шагах выстрела. */
+  get lockShot() { return !this.finished && !SHOOTS.has(this.current?.id); }
   /** Подсказки игры — только к своему шагу, иначе две вещи сразу. */
-  get wantsSlingHint() { return this.current?.id === 'shoot'; }
+  get wantsSlingHint() { return SHOOTS.has(this.current?.id); }
   get wantsHookHint() { return this.current?.id === 'hook'; }
 
   _build() {
@@ -58,6 +63,16 @@ export class Coach {
       .setOrigin(0.5, 0).setAlign('center').setWordWrapWidth(W - 90), DEPTH.HUD + 7);
     this.arrow = fix(s.add.graphics(), DEPTH.HUD + 8);
     this.cheer = fix(s.add.text(W / 2, y + 190, '', font(40, 800, '#8ef0a0')).setOrigin(0.5).setStroke('#10131a', 6).setAlpha(0), DEPTH.HUD + 8);
+    // Лишнее на первой минуте — приглушить: верхняя полоса (ветер, команды,
+    // лента оружия) и плашка троса, пока до неё не дошли. Касания проходят
+    // насквозь: это только тень
+    const hud = s.hud;
+    const topH = (hud.strip ? hud.strip.y + hud.strip.r + 10 : 110);
+    this.dimTop = fix(s.add.rectangle(0, -400, W, topH + 400, 0x0b1021, 0.6).setOrigin(0, 0), DEPTH.HUD + 5);
+    const hp = hud.hookPlate;
+    this.dimHook = hp
+      ? fix(s.add.rectangle(hp.x, hp.y, hp.displayWidth + 8, hp.displayHeight + 8, 0x0b1021, 0.6), DEPTH.HUD + 5)
+      : null;
     this.flagGfx = s.rig.world(s.add.graphics().setDepth(DEPTH.WORM - 2));
     this.items.push(this.flagGfx);
     this.panelY = y;
@@ -71,12 +86,17 @@ export class Coach {
     this.bodyText.setText(st.text);
   }
 
+  /** Игрок выстрелил (GameScene): шаг выстрела сделан. */
+  onShot() {
+    if (SHOOTS.has(this.current?.id)) this._next(this.current.id === 'shoot' ? 'Бабах!' : null);
+  }
+
   /** Шаг сделан: «Отлично!», звук, вибрация — и к следующему. */
-  _next() {
+  _next(cheer = null) {
     const s = this.scene;
     s.fx?.sound('pickup');
     haptic('win');
-    this.cheer.setText(['Отлично!', 'Есть!', 'Так держать!', 'Супер!'][this.step % 4]).setAlpha(1).setScale(0.6);
+    this.cheer.setText(cheer ?? ['Отлично!', 'Есть!', 'Так держать!', 'Супер!'][this.step % 4]).setAlpha(1).setScale(0.6);
     s.tweens.add({ targets: this.cheer, scale: 1, duration: 260, ease: 'Back.easeOut' });
     s.tweens.add({ targets: this.cheer, alpha: 0, delay: 800, duration: 300 });
     this.step++;
@@ -109,9 +129,10 @@ export class Coach {
     if (this.finished || !this.items.length) return;
     const w = s.turn.activeWorm;
     const mine = w && w.team === 0 && s.canPlayerAct();
-    // Пока учимся, ход не сгорает
-    if (mine && this.lockShot) s.turn.timeLeft = Math.max(s.turn.timeLeft, 25);
+    // Пока учимся и целимся, ход не сгорает (отход после выстрела — по часам)
+    if (mine && s.turn.state === 'aim' && !s.turn.retreating) s.turn.timeLeft = Math.max(s.turn.timeLeft, 25);
     this._drawPanel(mine);
+    this.dimHook?.setVisible(this.current?.id !== 'hook');
     this.arrow.clear();
     this.flagGfx.clear();
     if (!mine) return;
@@ -144,18 +165,18 @@ export class Coach {
         if (w.zip) this._next();
         break;
       }
-      case 'weapon': {
-        const gi = WEAPONS.findIndex((x) => x.id === 'grenade');
-        const chip = hud.strip?.chips.find((c) => c.index === gi);
-        if (chip) this._drawArrow(chip.cx, hud.strip.y + hud.strip.r + 6, 'up');
-        if (s.turn.weaponIndex === gi) this._next();
-        break;
-      }
-      case 'shoot': {
+      case 'shoot':
+      case 'finish': {
+        // Граната — сразу в руке: выбирать оружие на первой минуте незачем
+        if (!this.armed) {
+          const gi = WEAPONS.findIndex((x) => x.id === 'grenade');
+          if (gi >= 0 && s.turn.weaponIndex !== gi) s.turn.setWeaponIndex(gi);
+          this.armed = true;
+        }
         const p = hud.slingPad;
         if (p) this._drawArrow(p.x, p.y - p.r - 26, 'down');
-        // Промах: ход ушёл к мишени и вернулся — подбодрить и поправить
-        if (s.turn.turnNumber > (this.shotTurn ?? s.turn.turnNumber)) {
+        // Промах на добивании: ход ушёл к мишени и вернулся — подбодрить и поправить
+        if (this.current.id === 'finish' && s.turn.turnNumber > (this.shotTurn ?? s.turn.turnNumber)) {
           this.misses++;
           this.bodyText.setText('Мимо — не беда! Тяни дальше, если недолёт, и выше, если упёрлось в пол');
         }

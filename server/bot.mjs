@@ -266,20 +266,15 @@ export function createBot({ db, api, players, tournaments, analytics = null, adm
   ].join('\n');
 
   /**
-   * /start: ролик с боем, пара строк и кнопка «Играть». Ролик лежит у игры
-   * (assets/promo/welcome.mp4); не отправился — просто текст.
+   * /start: ролик с боем, одна строка и кнопка «Играть». Всё остальное
+   * игрок узнает в игре: длинный текст перед кнопкой никто не читает.
+   * Ролик лежит у игры (assets/promo/welcome.mp4); не отправился — просто текст.
    * Англоязычным — кнопка меню «Play» в их чате (у всех остальных «Играть»).
    */
   async function welcome(chat, me, en, from) {
     const text = en
-      ? `Hi, ${me.name}! This is Smiles — turn-based smiley artillery right in Telegram.\n\n`
-        + 'Tower battles with a grappling rope and a slingshot, 18 weapons, daily tasks, skins, '
-        + 'online duels and tournaments.\n\n'
-        + 'Challenge a friend from any chat: type @' + (username || 'bot') + ' and pick «Challenge to a duel».'
-      : `Привет, ${me.name}! Это Smiles — пошаговая артиллерия со смайликами прямо в Telegram.\n\n`
-        + 'Бои на башне с тросом и рогаткой, 18 видов оружия, задания каждый день, скины, '
-        + 'онлайн-дуэли и турниры.\n\n'
-        + 'Вызвать друга можно из любого чата: напиши @' + (username || 'бот') + ' и выбери «Вызвать на дуэль».';
+      ? `Hi, ${me.name}! Smiles — smiley artillery right in Telegram. Tap «Play» 👇`
+      : `Привет, ${me.name}! Smiles — артиллерия смайликов прямо в Telegram. Жми «Играть» 👇`;
     if (en && publicUrl) {
       await api.call('setChatMenuButton', { chat_id: chat, menu_button: { type: 'web_app', text: 'Play', web_app: { url: appUrl() } } });
     }

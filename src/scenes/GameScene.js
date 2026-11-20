@@ -33,7 +33,7 @@ import { ClipRecorder, canClip, saveClip, clipToStory } from '../platform/clip.j
 import { HOTSEAT, towerMatch, challengeMatch, ascentMatch } from '../core/match.js';
 import { ASCENT } from '../campaign/ascent.js';
 import { markAscentDone } from '../platform/ascent.js';
-import { markWon } from '../platform/onboard.js';
+import { markWon, claimTutorialBox } from '../platform/onboard.js';
 import { Bot } from '../ai/Bot.js';
 import { markDone, MISSION_BY_ID, loadProgress } from '../campaign/missions.js';
 import { ASCENT_BY_ID } from '../campaign/ascent.js';
@@ -43,7 +43,7 @@ import { reportResult, serverAvailable, track, trackStep, submitDailyTower } fro
 import { leagueOf, nextLeague, toNextLeague } from '../platform/league.js';
 import { OffscreenMarkers } from '../ui/OffscreenMarkers.js';
 import { SKIN_BY_ID, rivalSkin } from '../core/skins.js';
-import { equippedSkin, syncCampaignBoxes } from '../platform/skins.js';
+import { equippedSkin, syncCampaignBoxes, grantBoxes } from '../platform/skins.js';
 import { myCosmetics } from '../platform/cosmetics.js';
 import { DEFAULTS as DEFAULT_COS } from '../core/cosmetics.js';
 import { recordBattle } from '../platform/daily.js';
@@ -1486,6 +1486,7 @@ export default class GameScene extends Phaser.Scene {
     const shots = this.turn.weapon.fire(this, sx, sy, vx, vy, w);
     this.projectiles.push(...shots);
     this.turn.onFired();
+    if (!this.replaying && !this.isBotTurn()) this.coach?.onShot();
     this.setCameraManual(false);
     this.followTarget = shots[0] ?? w;
   }
@@ -2171,6 +2172,15 @@ export default class GameScene extends Phaser.Scene {
       .setOrigin(0.5).setScrollFactor(0).setDepth(DEPTH.HUD + 11).setStroke('#10131a', 5)
       .setWordWrapWidth(CFG.VIEW_W - 40).setAlign('center'));
     this.gameOverUi?.push(t);
+    // Обучение пройдено — подарок: коробка со скином, её ждут в меню
+    if (won && this.match.tutorial && claimTutorialBox()) {
+      grantBoxes(1);
+      const gift = this.rig.ui(this.add.text(CFG.VIEW_W / 2, y + 96, '🎁 Подарок за обучение: коробка со скином',
+        font(22, 900, '#8ef0a0')).setOrigin(0.5).setScrollFactor(0).setDepth(DEPTH.HUD + 11).setStroke('#10131a', 5)
+        .setScale(0.3));
+      this.tweens.add({ targets: gift, scale: 1, duration: 380, delay: 1100, ease: 'Back.easeOut' });
+      this.gameOverUi?.push(gift);
+    }
   }
 
   /** Кнопка на затемнении итога. */
