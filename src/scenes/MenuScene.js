@@ -1423,8 +1423,12 @@ export default class MenuScene extends Phaser.Scene {
     // Нарастание: тряска сильнее, коробка разбухает, цвет ступенькой вверх
     const steps = 3 + rank * 2;
     const stepMs = 260;
+    // Тап по экрану — сразу к раскрытию: на медленном телефоне нарастание
+    // тянется дольше, а ждать его никто не обязан
+    const timers = [];
+    shade.on('pointerup', () => { if (box.active) reveal(); });
     for (let k = 0; k < steps; k++) {
-      this.time.delayedCall(k * stepMs, () => {
+      timers.push(this.time.delayedCall(k * stepMs, () => {
         if (!box.active) return;
         const lvl = Math.min(rank, Math.floor((k / (steps - 1)) * (rank + 0.999)));
         const c = hex(RARITY[RARITY_ORDER[lvl]].color);
@@ -1435,11 +1439,12 @@ export default class MenuScene extends Phaser.Scene {
         box.setScale(base * (1 + k * 0.035));
         haptic('select');
         if (k === steps - 1) sfx.play('tick');
-      });
+      }));
     }
 
-    this.time.delayedCall(steps * stepMs + 120, () => {
+    const reveal = () => {
       if (!box.active) return;
+      for (const t of timers) t.remove(false);
       box.destroy();
       haptic('win');
       sfx.play('pickup');
@@ -1514,7 +1519,7 @@ export default class MenuScene extends Phaser.Scene {
         this._button(key, cx + dx, cy + 260 * k, label, '', onTap, { w: 250, h: 78, variant, titleSize: 26 });
         for (const o of this.items.slice(before)) o.setDepth(56);
       };
-      this.time.delayedCall(700, () => {
+      this.time.delayedCall(450, () => {
         if (!shade.active) return;
         if (res.dup) btn('skin-later', 0, 'Дальше', 'primary', back);
         else {
@@ -1522,7 +1527,8 @@ export default class MenuScene extends Phaser.Scene {
           btn('skin-later', 140, 'Потом', 'normal', back);
         }
       });
-    });
+    };
+    timers.push(this.time.delayedCall(steps * stepMs + 120, reveal));
   }
 
   /** Текстуры эффектов меню: точка конфетти, звёздочка, лучи. */

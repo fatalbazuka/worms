@@ -101,6 +101,7 @@ export class Coach {
     s.tweens.add({ targets: this.cheer, alpha: 0, delay: 800, duration: 300 });
     this.step++;
     this.doneAt = s.time.now;
+    this.shotTurn = undefined;   // промах считаем от хода, в который начался шаг
     if (this.finished) { this.destroy(); return; }
     this._show();
   }
