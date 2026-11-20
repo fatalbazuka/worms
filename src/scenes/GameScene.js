@@ -1242,17 +1242,19 @@ export default class GameScene extends Phaser.Scene {
     // Физика идёт по dt самого Phaser, зажатому сверху: редкий тяжёлый кадр
     // не должен телепортировать тела сквозь землю, а замедление под нагрузкой
     // для физики безопаснее пропущенных столкновений.
-    let dt = Math.min(delta / 1000, CFG.MAX_DT);
+    const physDt = Math.min(delta / 1000, CFG.MAX_DT);
+    let dt = physDt;
     // Замедление на добивании: мир на полсекунды вязнет, интерфейс и часы
     // хода идут как шли
     // Стоп-кадр попадания — короче и сильнее замедления
     if (this._stop && performance.now() < this._stop) dt *= 0.04;
     else if (this._slow && performance.now() < this._slow.until) dt *= this._slow.k;
 
-    // Таймер хода, набор силы и поворот прицела считаются по системным часам.
-    // Дельта Phaser для этого не годится: он её сглаживает и под нагрузкой
-    // отдаёт ровные 16.7 мс на кадр независимо от того, сколько времени
-    // реально прошло, — тридцатисекундный ход растянулся бы на минуты.
+    // Набор силы и поворот прицела считаются по системным часам: дельта
+    // Phaser для этого не годится, он её сглаживает и под нагрузкой отдаёт
+    // ровные 16.7 мс на кадр независимо от того, сколько времени реально
+    // прошло. Часы хода — по игровому времени, но с пределом (_turnClock),
+    // страховки полёта и разбора хода — по игровому (TurnManager.update).
     const now = performance.now();
     const realDt = this._lastNow ? Math.min((now - this._lastNow) / 1000, 0.25) : 0;
     this._lastNow = now;
@@ -1260,7 +1262,7 @@ export default class GameScene extends Phaser.Scene {
     this._handleMovement(dt, realDt);
     // Бот решает и «держит кнопку» до набора силы — оба шага на системных
     // часах, иначе доворот ствола шёл бы в разы медленнее задуманного.
-    if (this.isBotTurn()) this.botFor(this.turn.currentTeam).update(realDt);
+    if (this.isBotTurn()) this.botFor(this.turn.currentTeam).update(realDt, dt);
     this._tickCharge(realDt);
     this._streamMove(realDt);
 
@@ -1302,10 +1304,28 @@ export default class GameScene extends Phaser.Scene {
     this._updateCamera(dt, realDt);
     this.fx.updateWind(realDt);
     this.aim.update();
-    this.turn.update(realDt);
+    this.turn.update(realDt, dt, this._turnClock(realDt, physDt));
     this.hud.update();
     this.offscreen.update();
     this._updateNetStatus();
+  }
+
+  /**
+   * Сколько часов хода прошло за кадр.
+   *
+   * По сети и в дуэли — системные часы, как и были: ход кончает тот, кто
+   * ходит, и растянуть его на своём медленном телефоне значило бы держать
+   * соперника лишние минуты и получать фору в рейтинговой партии.
+   *
+   * Вне сети — игровое время без замедления на добивании (оно для красоты,
+   * часы хода идут как шли): на слабом телефоне за ход можно пройти и
+   * подтянуться столько же, сколько на быстром. Но не медленнее чем в
+   * TURN_CLOCK_STRETCH раз против системных часов — иначе на совсем
+   * задыхающемся устройстве ход тянулся бы минутами.
+   */
+  _turnClock(realDt, physDt) {
+    if (this.net || this.room) return realDt;
+    return Math.min(realDt, Math.max(physDt, realDt / CFG.TURN_CLOCK_STRETCH));
   }
 
   /** Строка «чей ход» в сетевой партии. Переписывается только при смене. */

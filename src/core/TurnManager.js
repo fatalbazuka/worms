@@ -261,14 +261,24 @@ export class TurnManager {
     this.scene.onGameOver(winner);
   }
 
-  update(dt) {
+  /**
+   * Три часа, и у каждого своё дело:
+   *   dt      — системные: ожидание соперника по сети;
+   *   clockDt — часы хода (таймер, отход от заряда), их выбирает сцена;
+   *   gameDt  — игровое время, по которому летят снаряды, горят фитили и
+   *             падают бойцы. На нём же страховки полёта и разбора хода:
+   *             на слабом телефоне игровое время идёт медленнее системного,
+   *             и по системным часам ход обрывался раньше, чем граната
+   *             успевала догореть.
+   */
+  update(dt, gameDt = dt, clockDt = dt) {
     const scene = this.scene;
 
     switch (this.state) {
       case STATE.AIM: {
         if (scene.landing?.()) break;   // десант ещё спускается
         const was = Math.ceil(this.timeLeft);
-        this.timeLeft = Math.max(0, this.timeLeft - dt);
+        this.timeLeft = Math.max(0, this.timeLeft - clockDt);
         // Последние пять секунд тикаем — по разу на секунду
         const now = Math.ceil(this.timeLeft);
         if (now !== was && now <= 5 && now > 0) scene.fx?.sound('tick');
@@ -284,7 +294,7 @@ export class TurnManager {
       }
 
       case STATE.FLYING: {
-        this.flyTimer += dt;
+        this.flyTimer += gameDt;
         // Снаряды сами себя ограничивают по времени жизни, но если что-то
         // всё же застряло — ход всё равно должен сдвинуться.
         if (this.flyTimer >= CFG.FLY_TIMEOUT) {
@@ -299,7 +309,7 @@ export class TurnManager {
       }
 
       case STATE.RESOLVE: {
-        this.resolveTimer += dt;
+        this.resolveTimer += gameDt;
         // Затишье: снаряды долетели, бойцы встали, бочки отгремели, монстры
         // доделали свой ход
         const quiet = scene.projectiles.length === 0 && scene.worms.every((w) => w.settled)
