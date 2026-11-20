@@ -20,6 +20,7 @@ import { font, UI, ensureButton } from '../ui/theme.js';
 import { WEAPONS, WEAPON_RARITY } from '../weapons/index.js';
 import { captureCommand, captureMove } from '../net/protocol.js';
 import { NetSession } from '../net/session.js';
+import { DuelSession } from '../net/duel.js';
 import { knock } from '../net/lobby.js';
 import { randomRoom, copyText } from '../net/transport.js';
 import { isCasualRoom, isTournamentRoom } from '../net/rooms.js';
@@ -39,7 +40,7 @@ import { markDone, MISSION_BY_ID, loadProgress } from '../campaign/missions.js';
 import { ASCENT_BY_ID } from '../campaign/ascent.js';
 import { checkObjective, snapshot, objectiveText } from '../campaign/objectives.js';
 import { player, eloDelta, recordResult } from '../platform/player.js';
-import { reportResult, serverAvailable, track, trackStep, submitDailyTower } from '../net/server.js';
+import { reportResult, serverAvailable, track, trackStep, submitDailyTower, createDuel } from '../net/server.js';
 import { leagueOf, nextLeague, toNextLeague } from '../platform/league.js';
 import { OffscreenMarkers } from '../ui/OffscreenMarkers.js';
 import { SKIN_BY_ID, rivalSkin } from '../core/skins.js';
@@ -184,6 +185,9 @@ export default class GameScene extends Phaser.Scene {
     this._applyAmmoRules();
 
     this.rig.bgCam.setBackgroundColor(biome.fallback.sky[1]);
+    // Дуэль по переписке начнёт с перемотки истории: табличка первого хода
+    // была бы о чужом, давно сыгранном ходе
+    this.fastForward = this.match.mode === 'duel';
     // Первым ходит человек: отдавать первый ход боту в миссии — почти то же,
     // что начать её с потери бойца.
     this.turn.begin(this._firstTeam());
@@ -254,25 +258,37 @@ export default class GameScene extends Phaser.Scene {
    */
   skinFor(team) {
     const mine = equippedSkin();
-    // myTeam переживает перезапуск сцены, поэтому верим ему только в сети
-    const net = this.registry.get('net');
-    const myTeam = (net && this.myTeam != null)
-      ? this.myTeam
-      : Math.max(0, this.match.teams.findIndex((t) => t.control !== 'bot'));
-    if (team === myTeam) return mine.sheet;
-    const theirs = this.registry.get('net')?.opponent?.skin;
+    if (team === this._myTeamHint()) return mine.sheet;
+    const theirs = this._peerHint()?.skin;
     const id = SKIN_BY_ID[theirs] ? theirs : rivalSkin(this.seed, team, mine.id);
     return SKIN_BY_ID[id].sheet;
   }
 
   /** Украшения команды: свои — надетые, соперник по сети — присланные, остальные — обычные. */
   cosmeticsFor(team) {
+    if (team === this._myTeamHint() && this.match.teams[team]?.control !== 'bot') return myCosmetics();
+    return this._peerHint()?.cos ?? DEFAULT_COS;
+  }
+
+  /**
+   * Своя команда, пока сессии ещё нет (бойцы одеваются раньше неё). В сети
+   * myTeam переживает перезапуск сцены, поэтому верим ему только там; в
+   * дуэли по переписке команда известна из самой дуэли.
+   */
+  _myTeamHint() {
+    const duel = this.match.mode === 'duel' ? this.registry.get('duel') : null;
+    if (duel) return duel.me;
     const net = this.registry.get('net');
-    const myTeam = (net && this.myTeam != null)
+    return (net && this.myTeam != null)
       ? this.myTeam
       : Math.max(0, this.match.teams.findIndex((t) => t.control !== 'bot'));
-    if (team === myTeam && this.match.teams[team]?.control !== 'bot') return myCosmetics();
-    return net?.opponent?.cos ?? DEFAULT_COS;
+  }
+
+  /** Соперник-человек: по сети или по переписке (скин, украшения). */
+  _peerHint() {
+    const duel = this.match.mode === 'duel' ? this.registry.get('duel') : null;
+    if (duel) return duel.opponent;
+    return this.registry.get('net')?.opponent ?? null;
   }
 
   // ------------------------------------------------------------ эмоции
@@ -523,6 +539,8 @@ export default class GameScene extends Phaser.Scene {
    * локальный хотсит, никакой сети и никаких подключений.
    */
   _setupNet() {
+    const duel = this.match.mode === 'duel' ? this.registry.get('duel') : null;
+    if (duel) { this._setupDuel(duel); return; }
     const room = startRoom();
     if (!room) return;
     this.room = room;
@@ -562,6 +580,68 @@ export default class GameScene extends Phaser.Scene {
       this.net = null;
       this.registry.set('net', null);
     });
+  }
+
+  // ------------------------------------------------- дуэль по переписке
+
+  /**
+   * Дуэль по переписке (net/duel.js): сессия притворяется сетевой, и сцена
+   * ведёт себя как в онлайне — только соперник не в сети, а в истории.
+   */
+  _setupDuel(duel) {
+    this.net = new DuelSession(duel);
+    this.myTeam = this.net.myTeam;
+    this.net.attach(this);
+    this._netStatus(`дуэль с ${this.net.opponent.name} · восстанавливаю ходы…`);
+  }
+
+  /** Свой ход ушёл на сервер (ok) или нет — показать, что дальше. */
+  onDuelSent(ok, error = '') {
+    if (this.gameOverUi) {
+      if (!ok) this.fx.banner(error || 'ход не отправлен', '#ff9a9a', 2600);
+      return;
+    }
+    this._duelPanel(ok ? 'Ход отправлен' : 'Ход не отправлен',
+      ok ? `${this.net.opponent.name} получит сообщение в Telegram · на ход у него 24 часа`
+        : (error || 'попробуй позже'), ok ? '#8ef0a0' : '#ff9a9a');
+  }
+
+  /** Соперник сходил, пока мы смотрели дуэль: собираем партию заново и показываем его ход. */
+  onDuelUpdate(duel) {
+    this.registry.set('duel', duel);
+    this.scene.restart();
+  }
+
+  onDuelDiverge() {
+    this.fx.banner('ход восстановлен не точно · играем по истории сервера', '#ffd166', 1800);
+  }
+
+  /** Плашка посреди экрана с выходом: в список дуэлей или в меню. */
+  _duelPanel(title, sub, color = '#ffd166') {
+    for (const o of this.duelUi ?? []) o.destroy();
+    const ui = [];
+    ui.push(this.rig.ui(this.add.rectangle(0, 0, CFG.VIEW_W, CFG.VIEW_H, 0x070b14, 0.5)
+      .setOrigin(0, 0).setScrollFactor(0).setDepth(DEPTH.HUD + 10)));
+    ui.push(this.rig.ui(this.add.text(CFG.VIEW_W / 2, CFG.VIEW_H / 2 - 28, title, font(42, 800, color))
+      .setOrigin(0.5).setScrollFactor(0).setDepth(DEPTH.HUD + 11)));
+    ui.push(this.rig.ui(this.add.text(CFG.VIEW_W / 2, CFG.VIEW_H / 2 + 22, sub, font(18, 700, UI.textDim))
+      .setOrigin(0.5).setScrollFactor(0).setDepth(DEPTH.HUD + 11).setAlign('center')
+      .setWordWrapWidth(Math.min(CFG.VIEW_W - 60, 640))));
+    ui.push(this._overButton(-140, 'Мои дуэли', () => this.toMenu('duels'), 'duels'));
+    ui.push(this._overButton(140, 'В меню', () => this.toMenu('root'), 'menu'));
+    this.duelUi = ui;
+  }
+
+  /** Строка над полем в дуэли: с кем, чей ход и сколько у него времени. */
+  _duelStatus() {
+    const n = this.net;
+    const who = `дуэль с ${n.opponent.name}`;
+    if (n.phase === 'replay') return [`${who} · повтор хода соперника`, '#ffd166'];
+    if (n.phase === 'play') return [`${who} · твой ход`, '#8ef0a0'];
+    if (n.phase === 'over') return [`${who} · окончена`, '#ffd166'];
+    const left = n.duel.deadline ? Math.max(0, n.duel.deadline - Date.now()) : null;
+    const h = left === null ? null : Math.floor(left / 3600_000);
+    return [`${who} · ход соперника${h === null ? '' : ` · у него ${h > 0 ? `${h} ч` : 'меньше часа'}`}`, '#ffd166'];
   }
 
   _netStatus(text, color) {
@@ -811,7 +891,7 @@ export default class GameScene extends Phaser.Scene {
     const turn = this.turn?.turnNumber ?? 0;
     const level = Math.max(0, turn - f.after) * f.step;
     const lava = this.rules.liquid === 'lava';
-    if (turn === f.after) {
+    if (turn === f.after && !this.fastForward) {
       this.fx.banner(lava ? 'Со следующего хода лава пойдёт вверх' : 'Со следующего хода вода пойдёт вверх',
         lava ? '#ffb37a' : '#9fd8ff', 1800);
     }
@@ -819,6 +899,12 @@ export default class GameScene extends Phaser.Scene {
     this.floodLevel = level;
     CFG.WATER_Y = this.waterBase - level;
     CFG.DROWN_Y = CFG.WATER_Y + 15;
+    // Дуэль перематывает историю: вода сразу на месте, без шума на каждый ход
+    if (this.fastForward) {
+      this.waterBody.y = CFG.WATER_Y;
+      this.waterLine.y = CFG.WATER_Y;
+      return;
+    }
     this.tweens.add({ targets: [this.waterBody, this.waterLine], y: CFG.WATER_Y, duration: 900, ease: 'Sine.easeInOut' });
     this.fx.banner(lava ? 'Лава поднимается!' : 'Вода поднимается!', lava ? '#ffb37a' : '#9fd8ff', 1300, 'splash');
     this.rig.shake(260, 0.004);
@@ -1071,6 +1157,11 @@ export default class GameScene extends Phaser.Scene {
   /** Строка «чей ход» в сетевой партии. Переписывается только при смене. */
   _updateNetStatus() {
     if (!this.net?.connected || this.turn.state === STATE.OVER) return;
+    if (this.net.isDuel) {
+      const [text, color] = this._duelStatus();
+      if (text !== this.netStatusText) this._netStatus(text, color);
+      return;
+    }
     const mine = this.turn.currentTeam === this.net.myTeam;
     let text = mine ? 'ваш ход' : 'ход соперника';
     let color = mine ? '#8ef0a0' : '#ffd166';
@@ -1400,6 +1491,7 @@ export default class GameScene extends Phaser.Scene {
   canAct() {
     if (this.turn.state !== STATE.AIM) return false;
     if (this.replaying) return false;         // идёт показ чужого хода
+    if (this.net?.isDuel && !this.net.ready) return false;   // дуэль: история ещё восстанавливается
     if (this.landing()) return false;          // десант ещё в воздухе
     if (this.turn.activeWorm?.skipping) return false;  // замёрз — ход пропускает
     // В сетевой партии ходит только тот, чья команда сейчас на очереди
@@ -1966,7 +2058,13 @@ export default class GameScene extends Phaser.Scene {
     // Бой без рейтинга: рейтинг не трогаем ни здесь, ни на сервере
     const casual = isCasualRoom(this.room);
     const tourney = isTournamentRoom(this.room);
-    if (this.net?.connected && winner >= 0 && casual) {
+    // Дуэль по переписке — без рейтинга, но монеты, опыт и задания как за бой
+    // с человеком. Открыть доигранную дуэль можно не раз — награда одна
+    const duel = Boolean(this.net?.isDuel);
+    const reward = !duel || this.net.claimReward();
+    if (duel) {
+      ratingLine = 'дуэль по переписке · без рейтинга';
+    } else if (this.net?.connected && winner >= 0 && casual) {
       ratingLine = 'бой без рейтинга';
     } else if (this.net?.connected && winner >= 0 && tourney) {
       ratingLine = 'турнирный матч';
@@ -2008,7 +2106,7 @@ export default class GameScene extends Phaser.Scene {
       const leagueText = this.rig.ui(this.add.text(CFG.VIEW_W / 2, CFG.VIEW_H / 2 + 38, leagueLine,
         font(14, 800, leagueOf(player().rating).text)).setOrigin(0.5).setScrollFactor(0)
         .setDepth(DEPTH.HUD + 11));
-      if (!casual) this._reportToServer(winner === mine, ratingText, leagueText, tourney);
+      if (!casual && !duel) this._reportToServer(winner === mine, ratingText, leagueText, tourney);
     }
     const sub = this.add.text(CFG.VIEW_W / 2, CFG.VIEW_H / 2 + (ratingLine ? 68 : 32),
       // На ПК — «клик»: «тап» там читается как опечатка
@@ -2025,14 +2123,14 @@ export default class GameScene extends Phaser.Scene {
     if (this.match.mode === 'daily') this._dailyResult(winner >= 0 && winner === mine);
 
     // Бой — в статистику: режим, итог, сколько ходов
-    track('battle', {
-      mode: this.match.fallback ? 'fallback' : this.net?.connected ? 'online'
+    if (reward) track('battle', {
+      mode: this.match.fallback ? 'fallback' : duel ? 'duel' : this.net?.connected ? 'online'
         : ['campaign', 'challenge'].includes(this.match.mode) ? this.match.mode : solo ? 'quick' : 'hotseat',
       won: winner >= 0 && winner === mine, turns: this.turn.turnNumber,
     });
 
     // Монеты за бой и выполненные этим боем задания — над заголовком
-    const daily = this._recordDaily(winner >= 0 && winner === mine);
+    const daily = reward ? this._recordDaily(winner >= 0 && winner === mine) : null;
     const earned = (daily?.coins ?? 0) + firstCoins;
     if (earned || daily?.done.length) {
       const parts = [];
@@ -2051,11 +2149,29 @@ export default class GameScene extends Phaser.Scene {
 
     // Опыт — за любой доигранный бой, и за проигрыш тоже: полоса уровня
     // внизу экрана итога, подарок за новый уровень — сразу
-    this.xpGain = gainXp(battleXp({
+    this.xpGain = reward ? gainXp(battleXp({
       won: winner >= 0 && winner === mine, hotseat: !solo, online: Boolean(this.net?.connected),
       damage: this.battleStats.damage, firstClear, stars: newStars,
-    }).total);
+    }).total) : null;
     this._xpResult(this.xpGain);
+
+    // Дуэль: реванш — новая дуэль с тем же соперником, или к списку дуэлей
+    if (duel) {
+      for (const o of this.duelUi ?? []) o.destroy();
+      this.duelUi = null;
+      sub.setText('дуэль окончена');
+      const foe = this.net.opponent;
+      this.gameOverUi.push(this._overButton(-140, 'Реванш', () => {
+        sub.setText('создаю дуэль…');
+        createDuel({ opponent: foe.id }).then((d) => {
+          this.registry.set('duel', { ...d, turns: [] });
+          this.registry.set('seed', d.seed);
+          this.scene.restart();
+        }).catch((e) => sub.setText(e.message));
+      }, 'rematch'));
+      this.gameOverUi.push(this._overButton(140, 'Мои дуэли', () => this.toMenu('duels'), 'duels'));
+      return;
+    }
 
     // В сетевом бою тапом никуда не уходим: там есть выбор — реванш или
     // меню, — и случайное касание не должно решать за игрока.
@@ -2340,6 +2456,8 @@ export default class GameScene extends Phaser.Scene {
     const text = this.rig.ui(this.add.text(x, y, label, font(26, 800))
       .setOrigin(0.5).setScrollFactor(0).setDepth(DEPTH.HUD + 13));
     this.gameOverUi?.push(text);
+    // Кнопку убрали — и надпись с ней (плашка дуэли живёт без gameOverUi)
+    img.once('destroy', () => text.destroy());
     return img;
   }
 
@@ -2349,12 +2467,17 @@ export default class GameScene extends Phaser.Scene {
   }
 
   /** Выход в меню: сетевую сессию рвём, иначе она переживёт партию. */
-  toMenu() {
+  toMenu(returnTo = null) {
     // Вышли сами — возвращаться в эту партию не предложим
     this.net?.forget();
     this.net?.destroy();
     this.registry.set('net', null);
     this.registry.set('seed', null);
+    // Из дуэли по переписке — к списку дуэлей (или куда попросили)
+    if (this.match.mode === 'duel') {
+      this.registry.set('duel', null);
+      this.registry.set('returnTo', returnTo ?? 'duels');
+    }
     forgetStartRoom();
     // Из испытания — обратно к списку испытаний
     if (this.match.mode === 'challenge' && !this.match.tutorial) this.registry.set('returnTo', 'challenges');
@@ -2369,6 +2492,9 @@ export default class GameScene extends Phaser.Scene {
   }
 
   _shutdown() {
+    // Сессия дуэли живёт одну сцену: перезапуск собирает её заново
+    if (this.net?.isDuel) { this.net.destroy(); this.net = null; }
+    this.duelUi = null;
     this.clip?.destroy();
     this.clip = null;
     this.game.events.off('worms-resize', this.relayout, this);

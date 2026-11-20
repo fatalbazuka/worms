@@ -12,8 +12,9 @@
  *
  * С каждым ходом приходит свёртка итога (hash) у ходившего, а со
  * следующим ходом — что вышло у того, кто этот итог восстановил
- * (prevHash). Не совпало — пишем в журнал и в seen_hash, партия идёт
- * дальше по истории сервера: её снимки и есть то, что видят оба.
+ * (prevHash; prevTurn — какой это был ход: за пропуском свёртки нет).
+ * Не совпало — пишем в журнал и в seen_hash, партия идёт дальше по
+ * истории сервера: её снимки и есть то, что видят оба.
  *
  * Очередь. Ход n делает p1 при нечётном n и p2 при чётном: команды в бою
  * чередуются строго (в бою двое, выбитая команда — конец партии). На ход —
@@ -262,12 +263,14 @@ export function createDuels({ db, players, friends, analytics, notify, now = () 
     const t = now();
     const fin = tx(db, () => {
       q.addTurn.run(d.id, n, me.id, 'move', JSON.stringify(cmds), JSON.stringify(state), hash, t);
-      // Как у меня сошёлся прошлый ход соперника
-      const prev = n > 1 ? q.turn.get(d.id, n - 1) : null;
-      if (prev && typeof body.prevHash === 'string') {
-        q.seenHash.run(body.prevHash.slice(0, 32), d.id, n - 1);
+      // Как у меня сошёлся последний восстановленный ход (prevTurn; за
+      // пропуском свёртки нет — тогда это ход до него)
+      const pn = Number.isSafeInteger(body.prevTurn) && body.prevTurn < n ? body.prevTurn : n - 1;
+      const prev = pn >= 1 ? q.turn.get(d.id, pn) : null;
+      if (prev?.kind === 'move' && typeof body.prevHash === 'string') {
+        q.seenHash.run(body.prevHash.slice(0, 32), d.id, pn);
         if (prev.hash && prev.hash !== body.prevHash) {
-          log.warn?.(`[duels] дуэль ${d.id}, ход ${n - 1}: состояние разошлось ${prev.hash} != ${body.prevHash}`);
+          log.warn?.(`[duels] дуэль ${d.id}, ход ${pn}: состояние разошлось ${prev.hash} != ${body.prevHash}`);
         }
       }
       const s1 = d.p1 === me.id ? 0 : d.skips1, s2 = d.p2 === me.id ? 0 : d.skips2;

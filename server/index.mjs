@@ -35,7 +35,7 @@
  *   POST /api/duels {opponent} | {link}   → {duel}            новая: с другом или ссылкой с кодом
  *   POST /api/duels/join {code}           → {duel}            принять по ссылке
  *   GET  /api/duels/:id                   → {duel}            с историей ходов
- *   POST /api/duels/:id/turn {turn, cmds, state, hash, prevHash, over, winner} → {duel}
+ *   POST /api/duels/:id/turn {turn, cmds, state, hash, prevHash, prevTurn, over, winner} → {duel}
  *   POST /api/duels/:id/resign            → {duel}
  *   GET  /api/tournaments                 → {items}
  *   GET  /api/tournaments/:id             → турнир, сетка, мой матч
