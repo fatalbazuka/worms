@@ -56,19 +56,20 @@ export class Coach {
   _build() {
     const s = this.scene;
     const W = CFG.VIEW_W;
-    const y = 214;            // ниже ленты оружия: к ней указывает стрелка шага «Оружие»
+    const hud = s.hud;
+    const topH = (hud.strip ? hud.strip.y + hud.strip.r + 10 : 110);
+    const L = this._layout(W, topH);
+    const y = L.y;
     const fix = (o, d = DEPTH.HUD + 6) => { s.rig.ui(o.setScrollFactor(0).setDepth(d)); this.items.push(o); return o; };
     this.panel = fix(s.add.graphics());
-    this.titleText = fix(s.add.text(W / 2, y + 14, '', font(23, 800, '#5a4413')).setOrigin(0.5, 0), DEPTH.HUD + 7);
-    this.bodyText = fix(s.add.text(W / 2, y + 50, '', font(28, 800, '#1a1408'))
-      .setOrigin(0.5, 0).setAlign('center').setWordWrapWidth(W - 90), DEPTH.HUD + 7);
+    this.titleText = fix(s.add.text(L.cx, y + L.titleY, '', font(L.title, 800, '#5a4413')).setOrigin(0.5, 0), DEPTH.HUD + 7);
+    this.bodyText = fix(s.add.text(L.cx, y + L.bodyY, '', font(L.body, 800, '#1a1408'))
+      .setOrigin(0.5, 0).setAlign('center').setWordWrapWidth(L.w - L.pad * 2), DEPTH.HUD + 7);
     this.arrow = fix(s.add.graphics(), DEPTH.HUD + 8);
-    this.cheer = fix(s.add.text(W / 2, y + 190, '', font(40, 800, '#8ef0a0')).setOrigin(0.5).setStroke('#10131a', 6).setAlpha(0), DEPTH.HUD + 8);
+    this.cheer = fix(s.add.text(L.cx, L.cheerY, '', font(40, 800, '#8ef0a0')).setOrigin(0.5).setStroke('#10131a', 6).setAlpha(0), DEPTH.HUD + 8);
     // Лишнее на первой минуте — приглушить: верхняя полоса (ветер, команды,
     // лента оружия) и плашка троса, пока до неё не дошли. Касания проходят
     // насквозь: это только тень
-    const hud = s.hud;
-    const topH = (hud.strip ? hud.strip.y + hud.strip.r + 10 : 110);
     this.dimTop = fix(s.add.rectangle(0, -400, W, topH + 400, 0x0b1021, 0.6).setOrigin(0, 0), DEPTH.HUD + 5);
     const hp = hud.hookPlate;
     this.dimHook = hp
@@ -76,8 +77,40 @@ export class Coach {
       : null;
     this.flagGfx = s.rig.world(s.add.graphics().setDepth(DEPTH.WORM - 2));
     this.items.push(this.flagGfx);
+    this.layout = L;
     this.panelY = y;
     this._show();
+    // Низ панели нужен сразу: плашка первого хода встаёт под неё
+    this.panelBottom = y + this._panelH();
+  }
+
+  /**
+   * Где панель. В портрете — во всю ширину под лентой оружия: экран
+   * высокий, боец и мишень далеко внизу. В альбомной высота всего 720, и
+   * та же панель на y=214 ложилась ровно на этаж бойца, а плашка хода под
+   * ней — на него самого. Поэтому в альбомной панель компактная и встаёт
+   * в верхнюю полосу, между лентой оружия и кнопками «☺ ⋯»: полоса на
+   * время обучения всё равно приглушена.
+   */
+  _layout(W, topH) {
+    const hud = this.scene.hud;
+    const port = { y: 214, x: 28, w: W - 56, title: 23, body: 28, titleY: 14, bodyY: 50, pad: 17, tail: 18 };
+    if (W <= CFG.VIEW_H) return { ...port, cx: W / 2, cheerY: port.y + 190 };
+    const st = hud.strip;
+    const left = (hud.buttons?.arsenal?.x ?? 0) + 30 + 16;
+    const right = W - 14 - 60 - 68 - 18;
+    const land = { title: 18, body: 24, titleY: 7, bodyY: 29, pad: 22, tail: 9 };
+    // Полосы не хватает (узкий экран) — под ней, но тоже компактно
+    const inStrip = st && right - left >= 520;
+    const x = inStrip ? left : 28;
+    const w = inStrip ? right - left : W - 56;
+    const y = inStrip ? st.y - st.r - 4 : topH + 4;
+    return { ...land, x, w, y, cx: x + w / 2, cheerY: Math.round(CFG.VIEW_H * 0.3) + 4 };
+  }
+
+  _panelH() {
+    const L = this.layout;
+    return L.bodyY + this.bodyText.height + L.tail;
   }
 
   _show() {
@@ -217,17 +250,20 @@ export class Coach {
   }
 
   _drawPanel(mine) {
-    const W = CFG.VIEW_W, y = this.panelY;
-    const h = 50 + this.bodyText.height + 18;
+    const L = this.layout, y = this.panelY;
+    const h = this._panelH();
     const g = this.panel;
     g.clear();
     this.panelBottom = y + h;
-    g.fillStyle(0xffe27a, mine ? 0.97 : 0.6).fillRoundedRect(28, y, W - 56, h, 18);
-    g.lineStyle(3, 0x1a1408, 0.9).strokeRoundedRect(28, y, W - 56, h, 18);
+    const r = L.title < 20 ? 14 : 18;
+    g.fillStyle(0xffe27a, mine ? 0.97 : 0.6).fillRoundedRect(L.x, y, L.w, h, r);
+    g.lineStyle(3, 0x1a1408, 0.9).strokeRoundedRect(L.x, y, L.w, h, r);
     // Кружки шагов
+    const right = L.x + L.w - (L.title < 20 ? 18 : 28);
+    const dy = L.title < 20 ? 15 : 24;
     STEPS.forEach((_, i) => {
       g.fillStyle(i < this.step ? 0x3fa45b : i === this.step ? 0x1a1408 : 0x1a1408, i <= this.step ? 1 : 0.25)
-        .fillCircle(W - 56 - (STEPS.length - 1 - i) * 18, y + 24, 6);
+        .fillCircle(right - (STEPS.length - 1 - i) * (L.title < 20 ? 15 : 18), y + dy, L.title < 20 ? 5 : 6);
     });
     this.titleText.setAlpha(mine ? 1 : 0.6);
     this.bodyText.setAlpha(mine ? 1 : 0.6);
