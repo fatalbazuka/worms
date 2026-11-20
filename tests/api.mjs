@@ -54,8 +54,8 @@ const server = createServer(app);
 await new Promise((r) => server.listen(0, '127.0.0.1', r));
 const base = `http://127.0.0.1:${server.address().port}`;
 
-async function call(method, path, body, token, headers = {}) {
-  const res = await fetch(base + path, {
+async function call(method, path, body, token, headers = {}, at = base) {
+  const res = await fetch(at + path, {
     method,
     headers: { ...(body ? { 'content-type': 'application/json' } : {}),
       ...(token ? { authorization: `Bearer ${token}` } : {}), ...headers },
@@ -67,6 +67,7 @@ async function call(method, path, body, token, headers = {}) {
 }
 const hook = (update, secret = app.webhookSecret) =>
   call('POST', '/api/bot/webhook', update, null, { 'x-telegram-bot-api-secret-token': secret });
+const callAt = call;
 const calls = (method) => tgCalls.filter((c) => c.method === method);
 const signed = (user) => signInitData({ query_id: 'q', user, auth_date: String(Math.floor(clock / 1000)) }, BOT);
 
@@ -578,6 +579,91 @@ check('«твой ход» бот не пишет', !calls('sendMessage').some((
   check('медиа: картинка для сторис загружается и отдаётся, HTML и без входа — нет',
     up.status === 200 && got?.status === 200 && got.headers.get('content-type') === 'image/jpeg' && body.equals(jpg)
       && html.status === 415 && anon.status === 401, `${up.status} ${JSON.stringify(r)} ${got?.status} ${html.status} ${anon.status}`);
+}
+
+// --- друзья: кого позвал, кто позвал, с кем доиграл бой на рейтинг; «обогнал» раз в день ---
+{
+  // Свой сервер: здесь много боёв подряд, а лимит записи — на адрес в минуту
+  const fdb = openDb(':memory:');
+  const fapp = createApp({
+    db: fdb, botToken: BOT, mediaDir, publicUrl: 'https://example.test/worms',
+    telegramApiBase: `http://127.0.0.1:${fakeTg.address().port}`, now: () => clock,
+    log: { warn() {}, log() {}, error: console.error },
+  });
+  const fsrv = createServer(fapp);
+  await new Promise((res) => fsrv.listen(0, '127.0.0.1', res));
+  const at = `http://127.0.0.1:${fsrv.address().port}`;
+  const call = (method, path, body, token) => callAt(method, path, body, token, {}, at);
+  const hook = (update) => callAt('POST', '/api/bot/webhook', update, null, { 'x-telegram-bot-api-secret-token': fapp.webhookSecret }, at);
+  const login = async (id, first_name, extra = {}) => {
+    const r = await call('POST', '/api/telegram', { initData: await signInitData({
+      query_id: 'q', user: { id, first_name }, auth_date: String(Math.floor(clock / 1000)), ...extra,
+    }, BOT) });
+    return { token: r.data?.token, player: r.data?.player };
+  };
+  const db = fdb;
+  const realNow = clock;
+  clock = Date.UTC(2026, 10, 20, 10, 0);            // 20 ноября, 13:00 МСК — днём бот пишет
+  const host = await login(6001, 'Хозяин');
+  const guest = await login(6002, 'Гость', { start_param: 'ref_6001' });
+  const foe = await login(6003, 'Соперник'), spat = await login(6004, 'Спорщик'), far = await login(6005, 'Чужой');
+  const duel = async (w, l, room) => {
+    await call('POST', '/api/result', { room, seed: 1, opponent: l.player.id, won: true }, w.token);
+    return call('POST', '/api/result', { room, seed: 1, opponent: w.player.id, won: false }, l.token);
+  };
+  await duel(host, foe, 'FRND01');
+  // Спорный бой (оба «победили») друзьями не делает; бой соперника с чужим — не мой друг
+  await call('POST', '/api/result', { room: 'FRND02', seed: 1, opponent: spat.player.id, won: true }, host.token);
+  await call('POST', '/api/result', { room: 'FRND02', seed: 1, opponent: host.player.id, won: true }, spat.token);
+  await duel(foe, far, 'FRND03');
+  const mine = (await call('GET', '/api/friends', null, host.token)).data;
+  const ids = mine.friends.map((f) => f.id);
+  const ratings = mine.friends.map((f) => f.rating);
+  check('друзья: позванный и соперник по бою на рейтинг, сам игрок с местом; спорный бой и друг друга — нет',
+    ids.length === 3 && ids.includes(guest.player.id) && ids.includes(foe.player.id) && ids.includes(host.player.id)
+      && !ids.includes(spat.player.id) && !ids.includes(far.player.id)
+      && ratings.every((x, i) => !i || ratings[i - 1] >= x) && mine.place === 1 && mine.friends[0].me === true
+      && mine.total === 3 && mine.friends.every((f) => f.skin && f.place && f.seenAt), JSON.stringify(mine));
+  const theirs = (await call('GET', '/api/friends', null, guest.token)).data.friends.map((f) => f.id);
+  check('друзья взаимны: позвавший — друг позванного', theirs.length === 2 && theirs.includes(host.player.id));
+
+  // Гость выше хозяина; хозяин выигрывает — и обгоняет его
+  const setRating = (id, rating) => db.prepare('update player set rating = ?, wins = max(wins, 1) where id = ?').run(rating, id);
+  const overtakes = () => calls('sendMessage').filter((c) => c.params.chat_id === 6002 && /обогнал/.test(c.params.text));
+  const round = async (room) => {
+    setRating(host.player.id, 1000); setRating(guest.player.id, 1005); setRating(foe.player.id, 1000);
+    await duel(host, foe, room);
+    await new Promise((res) => setTimeout(res, 150));
+  };
+  await round('OVER01');
+  const first = overtakes();
+  check('обогнал друга — другу сообщение с кнопкой в топ друзей; соперник по бою такого не получает',
+    first.length === 1 && first[0].params.reply_markup.inline_keyboard[0][0].web_app.url.endsWith('?top=friends')
+      && !calls('sendMessage').some((c) => c.params.chat_id === 6003 && /обогнал/.test(c.params.text)), JSON.stringify(first[0]?.params));
+  await round('OVER02');
+  check('та же пара в тот же день — второго сообщения нет', overtakes().length === 1);
+  clock += 86400_000;
+  await round('OVER03');
+  check('на следующий день — снова можно', overtakes().length === 2);
+  await hook({ message: { from: { id: 6002, first_name: 'Гость' }, chat: { id: 6002, type: 'private' }, text: '/mute' } });
+  clock += 86400_000;
+  await round('OVER04');
+  check('после /mute «обогнал» не приходит', overtakes().length === 2);
+  await hook({ message: { from: { id: 6002, first_name: 'Гость' }, chat: { id: 6002, type: 'private' }, text: '/unmute' } });
+
+  // Вызов другу через бота: только другу и не чаще раза в 10 минут
+  let ch = await call('POST', '/api/friends/challenge', { id: guest.player.id, room: 'ZWFR12' }, host.token);
+  const inv = calls('sendMessage').at(-1)?.params;
+  check('«Вызвать»: бот пишет другу, кнопка — сразу в комнату башни',
+    ch.data?.sent === true && inv?.chat_id === 6002 && inv.reply_markup.inline_keyboard[0][0].web_app.url.endsWith('?room=ZWFR12'),
+    JSON.stringify(ch.data));
+  const again = await call('POST', '/api/friends/challenge', { id: guest.player.id, room: 'ZWFR13' }, host.token);
+  const stranger = await call('POST', '/api/friends/challenge', { id: far.player.id, room: 'ZWFR14' }, host.token);
+  check('«Вызвать»: повтор сразу — нет (игра позовёт карточкой), не другу — отказ',
+    again.data?.sent === false && again.data.reason === 'limit' && stranger.status === 403, `${JSON.stringify(again.data)} ${stranger.status}`);
+  clock = realNow;
+  fsrv.close();
+  fdb.close();
 }
 
 // Клип из Android приходит WebM — сервер с ffmpeg отдаёт MP4 (Telegram берёт в сторис только его)

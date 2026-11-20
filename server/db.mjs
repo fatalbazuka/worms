@@ -210,6 +210,25 @@ const MIGRATIONS = [
   );
   insert into promo (code, boxes, created_at) values ('skipper77', 3, cast(strftime('%s','now') as integer) * 1000);
   `,
+  // 10: друзья — кого позвал, кто позвал тебя, с кем сыграл бой на рейтинг.
+  // Своей таблицы дружбы нет: друзья выводятся из player.referred_by и
+  // match, здесь только индексы под это и журнал сообщений боту о друзьях
+  // (обогнал, вызов на бой) — чтобы не писать одному и тому же чаще правил
+  `
+  create index if not exists player_referred on player (referred_by) where referred_by is not null;
+  create index if not exists match_p1 on match (p1, status);
+  create index if not exists match_p2 on match (p2, status);
+  create table if not exists friend_ping (
+    id         integer primary key,
+    kind       text not null,                   -- overtake | duel
+    from_id    text not null references player (id) on delete cascade,
+    to_id      text not null references player (id) on delete cascade,
+    day        text not null,                   -- YYYY-MM-DD в поясе бота
+    created_at integer not null
+  );
+  create index if not exists friend_ping_to on friend_ping (to_id, day, kind);
+  create index if not exists friend_ping_from on friend_ping (from_id, day, kind);
+  `,
 ];
 
 export function openDb(path) {
