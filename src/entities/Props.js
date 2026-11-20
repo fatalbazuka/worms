@@ -1,6 +1,7 @@
 import { CFG, DEPTH } from '../config.js';
 import { has } from '../core/assets.js';
 import { subRng } from '../core/rng.js';
+import { PASS } from '../core/shapes.js';
 
 /**
  * Эмодзи на башне: фон и предметы на этажах.
@@ -79,6 +80,9 @@ const SILHOUETTE = {
 };
 export const SOLID = new Set(Object.keys(SILHOUETTE));
 
+// Сбоку от укрытия до другой земли — не меньше ширины бойца с запасом
+const SIDE = CFG.WORM_W + 8;
+
 const BARREL_BLAST = { radius: 34, damageRadius: 70, damage: 30, knockback: 300, shake: 0.008 };
 
 export class Props {
@@ -149,7 +153,7 @@ export class Props {
       const name = this.theme.props[r.int(0, this.theme.props.length - 1)];
       const size = SIZE[name] ?? 36;
       if (SOLID.has(name)) {
-        this._stamp(name, p.x, p.y + 2, size);
+        if (this._roomFor(name, p.x, p.y + 2, size)) this._stamp(name, p.x, p.y + 2, size);
         continue;
       }
       const img = this._img(name, p.x, p.y + 3, size);
@@ -158,6 +162,32 @@ export class Props {
       this.scene.rig.world(img);
       this.items.push({ name, x: p.x, y: p.y + 3, size, img, vy: 0, alive: true });
     }
+  }
+
+  /**
+   * Есть ли укрытию место. Впечатанный силуэт оставлял щель с сосулькой
+   * или карнизом над ним — видно, а не пролезть, — или вовсе затыкал
+   * проход. Поэтому над ним на PASS (рост бойца с запасом) пусто, а по
+   * бокам на ширину бойца нет того, что свисает сверху; стена, растущая от
+   * пола, — тупик, не щель (но не у кроны дерева: под ней ходят, и щель
+   * между кроной и стеной сквозная). Пол под ним не в счёт: нижние 20 px
+   * не смотрим.
+   */
+  _roomFor(name, x, y, size) {
+    let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+    for (const [, sx, sy, sw, sh] of SILHOUETTE[name]) {
+      x0 = Math.min(x0, x + sx * size); x1 = Math.max(x1, x + (sx + sw) * size);
+      y0 = Math.min(y0, y + sy * size); y1 = Math.max(y1, y + (sy + sh) * size);
+    }
+    const floating = y1 < y - 4;
+    const t = this.terrain;
+    if (t.solidInRect(x0, y0 - PASS, x1, y - 20)) return false;
+    for (const [a, b] of [[x0 - SIDE, x0 - 1], [x1 + 1, x1 + SIDE]]) {
+      for (let cx = Math.round(a); cx <= b; cx++) {
+        if (t.solidInRect(cx, y0 - PASS, cx, y - 20) && (floating || !t.solidAt(cx, y - 20))) return false;
+      }
+    }
+    return true;
   }
 
   /** Укрытие — в землю: силуэт твердью, картинка поверх. */
