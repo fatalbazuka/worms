@@ -113,6 +113,9 @@ const info = () => page.evaluate(() => {
 
 // --- меню ---
 await menuReady();
+// Бонус серии всплывает после первого боя и перехватил бы тапы по меню —
+// его проверяет свой тест ниже
+await page.evaluate(() => { window.__WORMS__.scene.getScene('Menu').streakShown = true; });
 const rootButtons = await page.evaluate(
   () => Object.keys(window.__WORMS__.scene.getScene('Menu').buttons));
 check('на главном экране «Играть», режимы и вкладки',
