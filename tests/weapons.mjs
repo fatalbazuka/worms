@@ -410,7 +410,12 @@ for (const id of ['bazooka', 'grenade', 'cluster', 'mole', 'banana', 'holy', 'mo
     s.addSpring(w.x, w.y - 2, null);
     const y0 = w.y; let minY = y0;
     for (let i = 0; i < 60; i++) { s.springs[0]?.update(1 / 60); w.update(1 / 60); minY = Math.min(minY, w.y); }
-    // Батут-оружие: боец летит по прицелу, под ногами пружина с тем же броском
+    // Батут-оружие: боец летит по прицелу, под ногами пружина с тем же броском.
+    // Бросок — на пару сотен пикселей вправо и вверх, а старт — от зерна, и
+    // после правки генерации он может оказаться под потолком: ставим бойца
+    // туда, где над ним и справа пусто, — такое место на башне есть всегда
+    const roomy = s.terrain.standSpots().find((p) => !s.terrain.solidInRect(p.x - 20, p.y - 300, p.x + 280, p.y - 40));
+    if (roomy) { w.x = roomy.x; w.y = roomy.y; w.vx = 0; w.vy = 0; w.snapToGround(); w.fallStartY = w.y; }
     const other = s.worms.find((o) => o !== w && o.alive);
     const n0 = s.springs.length;
     const wx = w.x;
@@ -463,6 +468,9 @@ for (const id of ['bazooka', 'grenade', 'cluster', 'mole', 'banana', 'holy', 'mo
     const { WEAPONS, WEAPONS_BY_ID, WEAPON_RARITY } = await import('/src/weapons/index.js');
     const { Projectile } = await import('/src/entities/Projectile.js');
     const w = s.turn.activeWorm;
+    // Как и выше: туда, где справа и сверху пусто (бумеранг летит вправо)
+    const roomy = s.terrain.standSpots().find((p) => !s.terrain.solidInRect(p.x - 20, p.y - 300, p.x + 280, p.y - 40));
+    if (roomy) { w.x = roomy.x; w.y = roomy.y; w.vx = 0; w.vy = 0; w.snapToGround(); w.fallStartY = w.y; }
     const foe = s.worms.find((o) => o.alive && o.team !== w.team);
     const step = (p, n, f) => { for (let i = 0; i < n && p.alive; i++) { p.update(1 / 60); f?.(p); } };
     // Сплит-ракета: тап — три осколка веером
