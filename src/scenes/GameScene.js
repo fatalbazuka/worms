@@ -52,6 +52,9 @@ import { EMOTE_BY_ID, EMOTE_COOLDOWN } from '../core/emotes.js';
 import { CHALLENGES, CHALLENGE_BY_ID, starsFor } from '../campaign/challenges.js';
 import { saveChallenge } from '../platform/challenges.js';
 import { grantCoins } from '../platform/daily.js';
+import { battleXp, COS_LABEL } from '../core/levels.js';
+import { gainXp } from '../platform/levels.js';
+import { item as cosItem } from '../core/cosmetics.js';
 import { CameraRig } from '../ui/CameraRig.js';
 import { Coach } from '../ui/Coach.js';
 import { voice } from '../audio/Voice.js';
@@ -1915,17 +1918,20 @@ export default class GameScene extends Phaser.Scene {
     const color = winner >= 0 ? TEAM_COLORS[winner] : 0xffffff;
 
     let box = 0;
-    // Первое прохождение — монеты сверх обычных за бой
+    // Первое прохождение — монеты сверх обычных за бой (и опыт: 1 — бой, 2 — босс)
     let firstCoins = 0;
+    let firstClear = 0;
     if (this.match.mode === 'campaign' && winner === mine) {
-      if (!loadProgress().has(this.match.missionId)) firstCoins = FIRST_CLEAR_COINS.mission;
+      if (!loadProgress().has(this.match.missionId)) { firstCoins = FIRST_CLEAR_COINS.mission; firstClear = 1; }
       markDone(this.match.missionId);
       // За первую, каждую вторую и последнюю миссию — коробка со скином
       box = syncCampaignBoxes();
     }
     if (this.match.mode === 'ascent' && winner === mine) {
       if (markAscentDone(this.match.ascentId)) {
-        firstCoins = ASCENT_BY_ID[this.match.ascentId]?.boss ? FIRST_CLEAR_COINS.boss : FIRST_CLEAR_COINS.ascent;
+        const boss = ASCENT_BY_ID[this.match.ascentId]?.boss;
+        firstCoins = boss ? FIRST_CLEAR_COINS.boss : FIRST_CLEAR_COINS.ascent;
+        firstClear = boss ? 2 : 1;
       }
       box = syncCampaignBoxes();
     }
@@ -2007,7 +2013,7 @@ export default class GameScene extends Phaser.Scene {
     this.gameOverUi = [shade, title, sub];
 
     // Испытание: звёзды и монеты за новые звёзды — строкой над заголовком
-    if (this.match.mode === 'challenge') this._challengeResult(winner >= 0 && winner === mine);
+    const newStars = this.match.mode === 'challenge' ? this._challengeResult(winner >= 0 && winner === mine) : 0;
     // Башня дня: итог — в таблицу дня, за первую победу дня монеты
     if (this.match.mode === 'daily') this._dailyResult(winner >= 0 && winner === mine);
 
@@ -2035,6 +2041,14 @@ export default class GameScene extends Phaser.Scene {
       this.tweens.add({ targets: line, scale: 1, duration: 380, delay: 250, ease: 'Back.easeOut' });
       this.gameOverUi.push(line);
     }
+
+    // Опыт — за любой доигранный бой, и за проигрыш тоже: полоса уровня
+    // внизу экрана итога, подарок за новый уровень — сразу
+    this.xpGain = gainXp(battleXp({
+      won: winner >= 0 && winner === mine, hotseat: !solo, online: Boolean(this.net?.connected),
+      damage: this.battleStats.damage, firstClear, stars: newStars,
+    }).total);
+    this._xpResult(this.xpGain);
 
     // В сетевом бою тапом никуда не уходим: там есть выбор — реванш или
     // меню, — и случайное касание не должно решать за игрока.
@@ -2144,10 +2158,10 @@ export default class GameScene extends Phaser.Scene {
     });
   }
 
-  /** Звёзды испытания на экране итога. */
+  /** Звёзды испытания на экране итога. @returns {number} сколько звёзд добыто впервые */
   _challengeResult(won) {
     const c = CHALLENGE_BY_ID[this.match.challengeId];
-    if (!c) return;
+    if (!c) return 0;
     const mine = this.worms.filter((w) => w.team === this.myTeamIndex);
     const hpLost = mine.reduce((a, w) => a + (CFG.MAX_HEALTH - (w.alive ? w.health : 0)), 0);
     const stars = starsFor(c, { won, myTurns: this.myTurns, hpLost });
@@ -2181,6 +2195,126 @@ export default class GameScene extends Phaser.Scene {
       this.tweens.add({ targets: gift, scale: 1, duration: 380, delay: 1100, ease: 'Back.easeOut' });
       this.gameOverUi?.push(gift);
     }
+    return res.gained;
+  }
+
+  /**
+   * Опыт на экране итога: «Ур. 5», полоса и «+N опыта» — полосой внизу
+   * экрана. Она ложится поверх кнопок боя (джойстик, «огонь», оружие): бой
+   * кончился, а полоса так никому не мешает и не лезет в середину, где
+   * заголовок, звёзды и кнопки итога. Полоса доливается на глазах; взят
+   * уровень — она добегает до конца, номер подпрыгивает, а над кнопками
+   * итога на пару секунд встаёт карточка с подарком.
+   */
+  _xpResult(gain) {
+    if (!gain?.xp) return;
+    const W = CFG.VIEW_W, H = CFG.VIEW_H, cx = W / 2;
+    // В портрете джойстик и «огонь» выше — полоса закрывает их целиком
+    const fh = H > W ? 210 : 104, y = H - fh / 2 - 6;
+    const bw = Math.min(340, W - 380), bh = 16;
+    const left = cx - bw / 2 + 10;
+    const ui = (o, d = 32) => {
+      this.rig.ui(o.setScrollFactor(0).setDepth(DEPTH.HUD + d));
+      this.gameOverUi?.push(o);
+      return o;
+    };
+    // Подложка до самого низа (и под рамку безопасной области); ловит тапы,
+    // чтобы под ней ничего не нажималось
+    ui(this.add.rectangle(0, H - fh, W, fh + 400, 0x0b1018, 0.94).setOrigin(0, 0), 31).setInteractive();
+    ui(this.add.rectangle(0, H - fh, W, 2, 0xffc247, 0.35).setOrigin(0, 0), 31);
+    const by = y - 10;
+    const lvl = ui(this.add.text(left - 16, by, `Ур. ${gain.before.level}`, font(26, 900, '#ffe27a'))
+      .setOrigin(1, 0.5).setStroke('#10131a', 5));
+    ui(this.add.rectangle(left, by, bw, bh, 0x0b1220, 0.9).setOrigin(0, 0.5).setStrokeStyle(2, 0xffc247, 0.55));
+    const fill = ui(this.add.rectangle(left, by, Math.max(4, bw * gain.before.progress), bh - 4, 0xffc247)
+      .setOrigin(0, 0.5));
+    const plus = ui(this.add.text(left + bw + 16, by, `+${gain.xp} опыта`, font(23, 800, '#8fe3ff'))
+      .setOrigin(0, 0.5).setStroke('#10131a', 5).setScale(0.4));
+    const toNext = (st) => `до ур. ${st.level + 1} ещё ${st.need - st.into}`;
+    const note = ui(this.add.text(left + bw / 2, by + 16, toNext(gain.before), font(16, 700, UI.textDim))
+      .setOrigin(0.5, 0));
+    this.tweens.add({ targets: plus, scale: 1, duration: 320, delay: 600, ease: 'Back.easeOut' });
+
+    const to = (k, onComplete) => this.tweens.add({
+      targets: fill, width: Math.max(4, bw * k), duration: 700, ease: 'Cubic.easeOut', onComplete,
+    });
+    this.time.delayedCall(800, () => {
+      if (!fill.active) return;
+      if (!gain.rewards.length) { to(gain.after.progress, () => note.active && note.setText(toNext(gain.after))); return; }
+      to(1, () => {
+        if (!fill.active) return;
+        lvl.setText(`Ур. ${gain.after.level}`);
+        this.tweens.add({ targets: lvl, scale: { from: 1.8, to: 1 }, duration: 420, ease: 'Back.easeOut' });
+        fill.width = 4;
+        to(gain.after.progress);
+        note.setText(toNext(gain.after));
+        this._levelUpCard(gain);
+      });
+    });
+  }
+
+  /** Что в подарке — одной строкой: «+150 монет · коробка со скином». */
+  _rewardText(rewards) {
+    const coins = rewards.reduce((a, r) => a + r.coins, 0);
+    const boxes = rewards.reduce((a, r) => a + r.boxes, 0);
+    const parts = [];
+    if (coins) parts.push(`+${coins} монет`);
+    if (boxes) parts.push(boxes > 1 ? `коробки со скином ×${boxes}` : 'коробка со скином');
+    for (const r of rewards) {
+      if (r.cos) parts.push(`${COS_LABEL[r.cos.kind]} «${cosItem(r.cos.kind, r.cos.id)?.name}»`);
+    }
+    return parts.join(' · ');
+  }
+
+  /** Новый уровень: карточка с подарком над кнопками итога, конфетти, вибрация. */
+  _levelUpCard(gain) {
+    const W = CFG.VIEW_W, H = CFG.VIEW_H, cx = W / 2;
+    const cw = Math.min(W - 40, 560), ch = 220;
+    const cy = H / 2 - 112;
+    const top = cy - ch / 2;
+    const items = [];
+    const add = (o) => {
+      this.rig.ui(o.setScrollFactor(0).setDepth(DEPTH.HUD + 14));
+      items.push(o);
+      this.gameOverUi?.push(o);
+      return o;
+    };
+    const card = add(this.add.graphics());
+    card.fillStyle(0x1c1440, 0.96).fillRoundedRect(cx - cw / 2, top, cw, ch, 26);
+    card.lineStyle(4, 0xffc247, 0.9).strokeRoundedRect(cx - cw / 2, top, cw, ch, 26);
+    add(this.add.text(cx, top + 34, 'Новый уровень!', font(24, 800, '#ffe9c2')).setOrigin(0.5));
+    add(this.add.text(cx, top + 92, `Уровень ${gain.after.level}`, font(52, 900, '#ffe27a'))
+      .setOrigin(0.5).setStroke('#5a2a08', 7));
+    const boxes = gain.rewards.some((r) => r.boxes);
+    const icon = boxes && this.textures.exists('shot_crate_weapon') ? 'shot_crate_weapon'
+      : this.textures.exists('menu-coin') && gain.rewards.some((r) => r.coins) ? 'menu-coin' : null;
+    const line = add(this.add.text(cx, top + 166, `${icon ? '' : '🎁 '}${this._rewardText(gain.rewards)}`, font(23, 800, '#8ef0a0'))
+      .setOrigin(0.5).setStroke('#10131a', 5).setWordWrapWidth(cw - (icon ? 110 : 40)).setAlign('center'));
+    if (icon) {
+      const img = add(this.add.image(cx - line.width / 2 - 30, top + 166, icon));
+      img.setScale(Math.min(46 / img.width, 46 / img.height));
+      line.setX(cx + 22);
+      img.setX(line.x - line.width / 2 - 30);
+    }
+    // Вся карточка — из центра, с перехлёстом: это главный момент экрана
+    const pivot = { k: 0.2 };
+    const place = () => {
+      for (const o of items) {
+        if (!o.active) continue;
+        o.__base ??= { x: o.x, y: o.y, s: o.scale };
+        o.setScale(o.__base.s * pivot.k);
+        o.setPosition(cx + (o.__base.x - cx) * pivot.k, cy + (o.__base.y - cy) * pivot.k);
+      }
+    };
+    place();
+    this.tweens.add({ targets: pivot, k: 1, duration: 460, ease: 'Back.easeOut', onUpdate: place });
+    this.fx.confetti();
+    this.fx.sound('pickup');
+    haptic('win');
+    // Карточка уходит сама: экран итога под ней нужен целиком
+    this.time.delayedCall(3200, () => {
+      this.tweens.add({ targets: items.filter((o) => o.active), alpha: 0, duration: 450 });
+    });
   }
 
   /** Кнопка на затемнении итога. */

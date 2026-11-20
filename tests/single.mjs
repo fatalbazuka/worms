@@ -450,6 +450,14 @@ check('испытание за один ход без потерь — три з
   ch.stars === 3 && ch.coins - coins0 >= 120, `звёзд ${ch.stars}, монет +${ch.coins - coins0}`);
 const nextBtn = await page.evaluate(() => Boolean(window.__WORMS__.scene.getScene('Game').overButtons?.next));
 check('после пройденного испытания на итоге есть «Дальше»', nextBtn);
+// Опыт: за бой, победу и новые звёзды — сохранён, второй уровень взят, подарок выдан
+const lv = await page.evaluate(() => ({
+  saved: JSON.parse(localStorage.getItem('worms.level.v1') ?? '{}'),
+  gain: window.__WORMS__.scene.getScene('Game').xpGain,
+}));
+check('бой приносит опыт, уровень и подарок за него сохранены',
+  lv.gain?.xp >= 70 && lv.saved.xp >= lv.gain.xp && lv.saved.rewarded >= 2 && lv.gain.after.level >= 2,
+  JSON.stringify(lv));
 
 // Голоса: фразы подгрузились после первого касания, итог боя сказан вслух
 const vo = await page.evaluate(async () => {
