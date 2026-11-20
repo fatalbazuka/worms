@@ -245,27 +245,38 @@ check('прицел на 45°', start.angle === 45, `${start.angle}°`);
 // Пологие дальние выстрелы то и дело уходили в воду, и проверка мигала.
 const SHOT = { angle: 0.95, power: 0.32 };
 const WEAPONS = [
-  { name: 'базука', ...SHOT },
-  { name: 'граната', ...SHOT },
-  { name: 'кассета', ...SHOT },
-  { name: 'крот', ...SHOT },
+  { name: 'базука', id: 'bazooka', ...SHOT },
+  { name: 'граната', id: 'grenade', ...SHOT },
+  { name: 'кассета', id: 'cluster', ...SHOT },
+  { name: 'крот', id: 'mole', ...SHOT },
 ];
 for (let i = 0; i < WEAPONS.length; i++) {
   await waitAim();
-  const before = await page.evaluate(([wi, angle]) => {
+  const before = await page.evaluate(([wi, angle, power]) => {
     const s = window.__WORMS__.scene.getScene('Game');
+    // Крота в начале партии нет (startAmmo 0): без патрона setWeaponIndex
+    // молча оставлял прежний ствол, и «крот» на деле проверял гранату
+    if (s.turn.ammoOf(wi) <= 0) s.turn.ammo[s.turn.currentTeam][wi] = 1;
     s.turn.setWeaponIndex(wi);
+    // Отпускаем ровно на нужной силе — в том же кадре, где шкала её
+    // набрала. Отпускание по часам теста под нагрузкой опаздывало на
+    // десяток кадров: сила 0.32 превращалась в 0.9, граната улетала
+    // с острова и рвалась в воздухе — воронки ноль, проверка мигала
+    const release = () => {
+      if (s.charging && s.charge >= power) { s.events.off('update', release); s.releaseCharge(); }
+    };
+    s.events.on('update', release);
     // Целимся в сторону ближайшего противника: так снаряд летит вдоль
     // острова, а не с него.
     const w = s.turn.activeWorm;
     const e = s.worms.find((o) => o.alive && o.team !== w.team);
     if (e) w.facing = e.x >= w.x ? 1 : -1;
     s.aimAngle = angle;
-    return { turn: s.turn.turnNumber, solid: s.terrain.solid.reduce((a, v) => a + v, 0) };
-  }, [i, WEAPONS[i].angle]);
+    return { turn: s.turn.turnNumber, solid: s.terrain.solid.reduce((a, v) => a + v, 0), weapon: s.turn.weapon.id };
+  }, [i, WEAPONS[i].angle, WEAPONS[i].power]);
 
-  // Кнопку отпускаем не по часам, а по самой шкале: сила выстрела тогда
-  // одна и та же в каждом прогоне, а не «сколько успело набежать».
+  // Заряд набирается настоящим нажатием «Огня»; выстрел уходит из кадра,
+  // где шкала дошла до силы (release выше), отпускание пальца — следом
   await page.mouse.move(...px(BTN.fire.x, BTN.fire.y));
   await page.mouse.down();
   await page.waitForFunction(
@@ -283,8 +294,8 @@ for (let i = 0; i < WEAPONS.length; i++) {
   const after = await page.evaluate(
     () => window.__WORMS__.scene.getScene('Game').terrain.solid.reduce((a, v) => a + v, 0),
   );
-  check(`${WEAPONS[i].name}: воронка в земле`, before.solid - after > 200,
-    `${before.solid - after} px`);
+  check(`${WEAPONS[i].name}: воронка в земле`, before.weapon === WEAPONS[i].id && before.solid - after > 200,
+    `${before.weapon}, ${before.solid - after} px`);
 }
 
 // Четыре взрыва подряд иногда выбивают команду целиком, и партия

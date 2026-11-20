@@ -144,11 +144,18 @@ P(`Причины гибели: ${Object.entries(deaths).map(([k, v]) => `${k} $
 P();
 
 // --- бот: время на решение ---
-const dm = R.flatMap((r) => r.decideMs ?? []);
-if (dm.length) {
+const dmBy = {};
+for (const r of R) {
+  // Старый формат — общий список на бой; новый — по уровням
+  if (Array.isArray(r.decideMs)) (dmBy.all ??= []).push(...r.decideMs);
+  else for (const [l, xs] of Object.entries(r.decideMs ?? {})) (dmBy[l] ??= []).push(...xs);
+}
+if (Object.keys(dmBy).length) {
   P('## Бот: время на решение хода');
   P();
-  P(`Настоящее время Bot.decide (перебор траекторий), без замедления процессора: ${dm.length} решений, медиана ${q(dm, 0.5)} мс, p95 ${q(dm, 0.95)} мс, максимум ${Math.max(...dm)} мс. Это один кадр, в который игра стоит.`);
+  P('Настоящее время одного вызова Bot.decide (перебор траекторий) без замедления процессора, на общей нагруженной машине. Пока он считает, кадр стоит.');
+  P();
+  P(table(['уровень', 'решений', 'медиана, мс', 'p95, мс', 'p99, мс', 'максимум, мс'], Object.entries(dmBy).map(([l, xs]) => [l, xs.length, q(xs, 0.5), q(xs, 0.95), q(xs, 0.99), Math.max(...xs)])));
   P();
 }
 

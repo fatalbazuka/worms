@@ -2,10 +2,12 @@
 /**
  * Бот против бота: сотни полных боёв на ускоренном времени — и цифры.
  *
- *   node tools/sim/run.mjs                    # весь набор (~230 боёв)
+ *   node tools/sim/run.mjs                    # весь набор (3 круга, 280 боёв)
  *   node tools/sim/run.mjs --only tower       # один вид: tower|classic|ascent|challenge|campaign
  *   node tools/sim/run.mjs --repro tower-ice-sniper-rookie-1   # один бой по id из отчёта
  *   node tools/sim/run.mjs --rounds 2 --workers 3 --out tools/sim/report.json
+ *   node tools/sim/run.mjs --fps 30           # физика слабого телефона: шаг 1/30 с
+ *   SIM_PROFILE=1 SIM_DEBUG=1 node tools/sim/run.mjs --repro …   # профиль ЦП боя
  *
  * Поднимает сервер игры на 5613 (как tests/run.mjs, с временной базой),
  * открывает страницы в headless Chromium, грузит в каждую tools/sim/agent.js
@@ -45,8 +47,8 @@ const LIMIT = Number(opt('limit', 0));
 const HANG_MS = Number(opt('hang', 240)) * 1000;
 // Отрисовка в headless идёт программным WebGL и стоит в десятки раз
 // дороже самой игры: даже кадр из трёхсот растягивал бой втрое. Поэтому
-// по умолчанию бой не рисуется (0), рисуются только кадры перехода
-// меню ↔ бой и экран итога. --render N — рисовать каждый N-й кадр боя
+// по умолчанию бой не рисуется (0), рисуются только кадры запуска боя и
+// возврата в меню. --render N — рисовать каждый N-й кадр боя
 const RENDER = Number(opt('render', 0));
 
 // --------------------------------------------------------------- набор боёв
@@ -211,7 +213,7 @@ async function worker(wi, queue) {
       n = 0;
     }
     n++;
-    const rec = { ...b, status, phases, realSec: Math.round((Date.now() - started) / 100) / 10, info, ...res, errors: [...new Set(errors)] };
+    const rec = { ...res, ...b, status, phases, realSec: Math.round((Date.now() - started) / 100) / 10, info, errors: [...new Set(errors)] };
     results.push(rec);
     if (n % 5 === 0 || !queue.length) {
       memory.push({ worker: wi, n, heapMB: await heap(pg.cdp), counts: await pg.page.evaluate(() => window.__sim.counts()) });

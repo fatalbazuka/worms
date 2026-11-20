@@ -80,32 +80,113 @@ async function measureOnce() {
   if (PROFILE) await cdp.send('Profiler.enable');
 
   // --- до меню ---
+  if (PROFILE) await cdp.send('Profiler.start');
   await page.goto(`${BASE}/?lang=ru&seed=4242`, { waitUntil: 'commit' });
   await page.waitForFunction(() => window.__WORMS__?.scene.isActive('Menu')
     && Object.keys(window.__WORMS__.scene.getScene('Menu').buttons ?? {}).length > 0, null, { timeout: 120000, polling: 50 });
   const toMenu = await page.evaluate(() => Math.round(performance.now()));
+  let bootTop = null;
+  if (PROFILE) {
+    const { profile } = await cdp.send('Profiler.stop');
+    bootTop = topSelf(profile, 15);
+    console.log('до меню, тяжелее всего:');
+    for (const l of bootTop.filter((x) => !/\((idle|program)\)/.test(x)).slice(0, 10)) console.log(`      ${l}`);
+  }
   await page.evaluate(() => { window.__WORMS__.scene.getScene('Menu').streakShown = true; });
   await page.waitForTimeout(1500);
 
+  // Счётчики на кадр — один раз на страницу. В headless нет видеокарты:
+  // WebGL рисует программно в отдельном процессе, и кадр по
+  // requestAnimationFrame меряет в основном его. Поэтому рядом — то, что
+  // от видеокарты не зависит и на телефоне ложится на процессор: время
+  // update и подготовки отрисовки на главном потоке (под замедлением ×4),
+  // число вызовов отрисовки и заливки текстур за кадр
+  await page.evaluate(() => {
+    const g = window.__WORMS__;
+    const gl = g.renderer.gl;
+    const P = (window.__perf = { draws: 0, uploads: 0, bytes: 0, rec: null });
+    if (gl) {
+      for (const f of ['drawArrays', 'drawElements']) {
+        const o = gl[f].bind(gl);
+        gl[f] = (...a) => { P.draws++; return o(...a); };
+      }
+      for (const f of ['texImage2D', 'texSubImage2D']) {
+        const o = gl[f].bind(gl);
+        gl[f] = (...a) => {
+          P.uploads++;
+          const src = a[a.length - 1];
+          if (src && src.width) P.bytes += src.width * src.height * 4;
+          else if (typeof a[3] === 'number' && typeof a[4] === 'number') P.bytes += a[3] * a[4] * 4;
+          return o(...a);
+        };
+      }
+    }
+    let t0 = 0, t1 = 0, upd = 0, open = false;
+    g.events.on('prestep', () => { t0 = performance.now(); open = true; P.draws = 0; P.uploads = 0; P.bytes = 0; });
+    g.events.on('poststep', () => { upd = performance.now() - t0; });
+    g.events.on('prerender', () => { t1 = performance.now(); });
+    g.events.on('postrender', () => {
+      // Кадр считается, только если его начало видели: иначе первый кадр
+      // после установки счётчиков брал бы t0 = 0 и выходил на десятки секунд
+      if (!P.rec || !open || t1 < t0) return;
+      open = false;
+      P.rec.push({ upd, ren: performance.now() - t1, draws: P.draws, uploads: P.uploads, bytes: P.bytes });
+    });
+  });
+
+  // Кадры по requestAnimationFrame: сколько их реально показал браузер.
+  // В headless их мало (программная отрисовка), поэтому основной замер —
+  // ниже: игра шагает сама, кадр за кадром, и мерится время главного
+  // потока на кадр (update + подготовка отрисовки) — то, что на телефоне
+  // ложится на процессор при замедлении ×4
   const frames = async (secs) => page.evaluate((ms) => new Promise((resolve) => {
-    const out = [];
-    let last = 0;
+    const g = window.__WORMS__;
+    const raf = [];
+    let lastRaf = 0;
+    const onRaf = (t) => { if (lastRaf) raf.push(t - lastRaf); lastRaf = t; if (window.__perf.rec) requestAnimationFrame(onRaf); };
+    requestAnimationFrame(onRaf);
+    g.loop.sleep();
+    if (window.__perfHide) g.canvas.style.visibility = 'hidden';
+    window.__perf.rec = [];
     const t0 = performance.now();
-    const tick = (t) => {
-      if (last) out.push(t - last);
-      last = t;
-      if (t - t0 < ms) requestAnimationFrame(tick); else resolve(out);
+    let last = t0;
+    const tick = () => {
+      const now = performance.now();
+      g.step(now, Math.min(now - last, 100));
+      last = now;
+      if (now - t0 < ms) { setTimeout(tick, 0); return; }
+      const rec = window.__perf.rec;
+      window.__perf.rec = null;
+      g.loop.wake();
+      g.canvas.style.visibility = '';
+      resolve({ raf, rec });
     };
-    requestAnimationFrame(tick);
+    setTimeout(tick, 0);
   }), secs * 1000);
 
-  const stats = (arr) => {
-    const s = [...arr].sort((a, b) => a - b);
-    const q = (p) => s[Math.min(s.length - 1, Math.floor(p * s.length))] ?? 0;
-    const med = q(0.5), p95 = q(0.95);
-    return { frames: s.length, medianMs: +med.toFixed(1), p95Ms: +p95.toFixed(1), maxMs: +(s.at(-1) ?? 0).toFixed(1), fps: +(1000 / med).toFixed(1), fps5: +(1000 / p95).toFixed(1) };
+  const q = (arr, p) => { const s = [...arr].sort((a, b) => a - b); return s[Math.min(s.length - 1, Math.floor(p * s.length))] ?? 0; };
+  const mean = (arr) => (arr.length ? arr.reduce((a, v) => a + v, 0) / arr.length : 0);
+  const stats = ({ raf, rec }) => {
+    const cpu = rec.map((r) => r.upd + r.ren);
+    const med = q(cpu, 0.5), p95 = q(cpu, 0.95);
+    return {
+      // fps — сколько кадров в секунду выдержал бы главный поток (1000 / медиана),
+      // fps5 — то же по 95-му перцентилю, то есть «5-й перцентиль FPS»
+      frames: rec.length, medianMs: +med.toFixed(1), p95Ms: +p95.toFixed(1), maxMs: +Math.max(0, ...cpu).toFixed(1),
+      fps: +Math.min(60, 1000 / med).toFixed(1), fps5: +Math.min(60, 1000 / p95).toFixed(1),
+      rafFrames: raf.length, rafMedianMs: +q(raf, 0.5).toFixed(1),
+      updMs: +q(rec.map((r) => r.upd), 0.5).toFixed(1), renMs: +q(rec.map((r) => r.ren), 0.5).toFixed(1),
+      draws: Math.round(q(rec.map((r) => r.draws), 0.5)),
+      uploads: +mean(rec.map((r) => r.uploads)).toFixed(2),
+      uploadKB: Math.round(mean(rec.map((r) => r.bytes)) / 1024),
+    };
   };
 
+  // Канвас на время замера прячем: без видеокарты браузер иначе тратит
+  // почти всё время на программный показ кадра (1–2 к/с при ×4), и
+  // замер выходил бы про SwiftShader, а не про игру. WebGL-команды при
+  // этом исполняются как обычно. --show — не прятать
+  if (!argv.includes('--show')) await page.evaluate(() => { window.__perfHide = true; });
   const screens = {};
   async function screen(name, setup, opts = {}) {
     await page.evaluate(setup);
@@ -118,8 +199,8 @@ async function measureOnce() {
       res.top = topSelf(profile);
     }
     screens[name] = res;
-    console.log(`${name.padEnd(12)} медиана ${res.medianMs} мс (${res.fps} к/с) · p95 ${res.p95Ms} мс (${res.fps5} к/с) · худший ${res.maxMs} мс · кадров ${res.frames}`);
-    if (PROFILE) for (const l of res.top.slice(0, 6)) console.log(`      ${l}`);
+    console.log(`${name.padEnd(12)} кадр ЦП ${res.medianMs}/${res.p95Ms} мс (${res.fps}/${res.fps5} к/с), худший ${res.maxMs} · update ${res.updMs}, отрисовка ${res.renMs} · draw ${res.draws} · заливок ${res.uploads}/кадр, ${res.uploadKB} КБ · кадров ${res.frames} (rAF ${res.rafFrames} по ${res.rafMedianMs} мс)`);
+    if (PROFILE) for (const l of res.top.filter((x) => !/\((idle|program)\)/.test(x)).slice(0, 8)) console.log(`      ${l}`);
   }
 
   const menu = 'window.__WORMS__.scene.getScene("Menu")';
@@ -153,7 +234,7 @@ async function measureOnce() {
   await screen('result', `window.__WORMS__.scene.getScene('Game').turn._gameOver(0)`, { settle: 1200 });
 
   await ctx.close();
-  return { toMenuMs: toMenu, screens, errors };
+  return { toMenuMs: toMenu, bootTop, screens, errors };
 }
 
 const runs = [];
@@ -168,19 +249,19 @@ server.kill();
 rmSync(tmp, { recursive: true, force: true });
 
 // Медиана по прогонам
-const med = (xs) => { const s = [...xs].sort((a, b) => a - b); return s[Math.floor(s.length / 2)]; };
-const summary = { toMenuMs: med(runs.map((r) => r.toMenuMs)), screens: {} };
+const med = (xs) => {
+  const s = [...xs].sort((a, b) => a - b), m = s.length >> 1;
+  return s.length % 2 ? s[m] : +((s[m - 1] + s[m]) / 2).toFixed(2);
+};
+const summary = { toMenuMs: med(runs.map((r) => r.toMenuMs)), bootTop: runs[0].bootTop, screens: {} };
 for (const k of Object.keys(runs[0].screens)) {
-  summary.screens[k] = {
-    medianMs: med(runs.map((r) => r.screens[k].medianMs)),
-    p95Ms: med(runs.map((r) => r.screens[k].p95Ms)),
-    fps: med(runs.map((r) => r.screens[k].fps)),
-    fps5: med(runs.map((r) => r.screens[k].fps5)),
-    maxMs: med(runs.map((r) => r.screens[k].maxMs)),
-    top: runs[0].screens[k].top,
-  };
+  summary.screens[k] = { top: runs[0].screens[k].top };
+  for (const f of Object.keys(runs[0].screens[k])) {
+    if (f !== 'top') summary.screens[k][f] = med(runs.map((r) => r.screens[k][f]));
+  }
 }
 const all = existsSync(OUT) ? JSON.parse(readFileSync(OUT, 'utf8')) : {};
-all[LABEL] = { at: new Date().toISOString(), rate: RATE, viewport: '390x844', runs: RUNS, ...summary };
+all[LABEL] = { at: new Date().toISOString(), rate: RATE, viewport: '390x844', runs: RUNS, ...summary,
+  perRun: runs.map((r) => ({ toMenuMs: r.toMenuMs, screens: Object.fromEntries(Object.entries(r.screens).map(([k, v]) => [k, { medianMs: v.medianMs, p95Ms: v.p95Ms, maxMs: v.maxMs }])) })) };
 writeFileSync(OUT, JSON.stringify(all, null, 1));
 console.log(`\n→ ${OUT} [${LABEL}]`);

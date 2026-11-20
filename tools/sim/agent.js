@@ -18,6 +18,7 @@ const realNow = performance.now.bind(performance);
 let virt = realNow();
 performance.now = () => virt;
 
+window.__simRealNow = realNow;
 const g = window.__WORMS__;
 g.loop.sleep();
 
@@ -104,7 +105,7 @@ Worm.prototype.damage = function (amount, cause = '') {
   const own = s && t && this.team === t.team;
   const w = (cur.weapons[key] ??= { shots: 0, hitTurns: 0, foeDamage: 0, selfDamage: 0, kills: 0 });
   if (own) w.selfDamage += lost; else w.foeDamage += lost;
-  if (t && !own) t.foeDamage += lost;
+  if (t && !own && key === t.weapon) t.foeDamage += lost;
   if (t && own) t.selfDamage = (t.selfDamage ?? 0) + lost;
   if (!this.alive && !own) w.kills++;
 };
@@ -121,7 +122,7 @@ const origDecide = Bot.prototype.decide;
 Bot.prototype.decide = function (...a) {
   const t0 = realNow();
   const r = origDecide.apply(this, a);
-  if (cur) cur.decideMs.push(Math.round((realNow() - t0) * 10) / 10);
+  if (cur) (cur.decideMs[this.level.id] ??= []).push(Math.round((realNow() - t0) * 10) / 10);
   return r;
 };
 
@@ -210,7 +211,8 @@ function instrument(s, cfg) {
       } else {
         const bot = s.botFor(tm.currentTeam);
         t.end = bot?.phase === 'give-up' || bot?.phase === 'done' ? 'pass' : 'ended';
-        if (t.end === 'pass' && !t.fired) cur.passes++;
+        // Мишень (dummy) пропускает ход нарочно — это не считается
+        if (t.end === 'pass' && !t.fired && !bot?.level.passive) cur.passes++;
       }
     }
     return end();
@@ -326,12 +328,15 @@ window.__sim = {
   },
 
   start(cfg) {
+    // Бой ещё открыт — сначала в меню: иначе перезапуск сцены встал бы
+    // в очередь, и обёртки легли бы на старый бой
+    if (g.scene.isActive('Game')) this.toMenu();
     Math.random = mulberry(cfg.rand ?? cfg.seed ?? 1);
     const match = buildMatch(cfg);
     const menu = g.scene.getScene('Menu');
     cur = {
       id: cfg.id, gameTime: 0, frames: 0, turns: [], turn: null, weapons: {}, anomalies: [],
-      deaths: {}, fallDamage: 0, passes: 0, decideMs: [], maxProjectiles: 0, winner: undefined,
+      deaths: {}, fallDamage: 0, passes: 0, decideMs: {}, maxProjectiles: 0, winner: undefined,
       mon: { worm: {}, stateKey: '', stateTime: 0, flyMax: 0 }, stuck: false, cfg,
     };
     menu.start(match);
