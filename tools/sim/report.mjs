@@ -86,15 +86,25 @@ P();
 P('Бои на башне и классических картах. Строка — уровень стороны, которая ходит первой (команда 0), столбец — соперник; в клетке — доля побед первой стороны и число боёв. Ничья считается не победой.');
 P();
 const LV = ['rookie', 'fighter', 'sniper', 'sim_all'];
+if (before) P('С прогоном «до» в клетке через стрелку: было → стало.');
+if (before) P();
 for (const kind of ['tower', 'classic']) {
   const xs = R.filter((r) => r.kind === kind && r.status === 'ok');
   if (!xs.length) continue;
+  const bs = before ? before.results.filter((r) => r.kind === kind && r.status === 'ok') : [];
   P(`**${kind}**`);
   P();
   const cols = LV.filter((l) => xs.some((r) => r.level1 === l));
+  const cell = (rs, l0, l1) => {
+    const c = rs.filter((r) => r.level0 === l0 && r.level1 === l1);
+    return c.length ? `${pct(c.filter((r) => r.winner === 0).length, c.length)}` : null;
+  };
   P(table(['первые ↓ / соперник →', ...cols], LV.filter((l) => xs.some((r) => r.level0 === l)).map((l0) => [l0, ...cols.map((l1) => {
-    const c = xs.filter((r) => r.level0 === l0 && r.level1 === l1);
-    return c.length ? `${pct(c.filter((r) => r.winner === 0).length, c.length)} (${c.length})` : '—';
+    const now = cell(xs, l0, l1);
+    if (!now) return '—';
+    const n = xs.filter((r) => r.level0 === l0 && r.level1 === l1).length;
+    const was = before ? cell(bs, l0, l1) : null;
+    return was ? `${was} → ${now} (${n})` : `${now} (${n})`;
   })])));
   P();
 }
@@ -115,7 +125,8 @@ if (tw.length) {
 for (const kind of ['ascent', 'challenge', 'campaign']) {
   const xs = R.filter((r) => r.kind === kind);
   if (!xs.length) continue;
-  P(`**${kind}**: бот за игрока выиграл ${xs.filter((r) => r.winner === 0).length} из ${xs.length}; не доиграно ${xs.filter((r) => r.status !== 'ok').length}.`);
+  const bx = before ? before.results.filter((r) => r.kind === kind) : [];
+  P(`**${kind}**: бот за игрока выиграл ${xs.filter((r) => r.winner === 0).length} из ${xs.length}${bx.length ? ` (до — ${bx.filter((r) => r.winner === 0).length} из ${bx.length})` : ''}; не доиграно ${xs.filter((r) => r.status !== 'ok').length}.`);
   P();
   const lost = xs.filter((r) => r.winner !== 0);
   if (lost.length) {
@@ -129,15 +140,47 @@ P('## Оружие');
 P();
 P('Выстрел — каждый вызов onFired; «попал» — ход, где этот ствол снял здоровье у чужих; урон — снятое здоровье (не больше, чем было). «env» — урон до выстрела (аффиксы, монстры в начале хода), «monsters» — ход монстров и события места после выстрела.');
 P();
-const W = {};
-for (const r of R) for (const [k, v] of Object.entries(r.weapons ?? {})) {
-  const w = (W[k] ??= { shots: 0, hitTurns: 0, foeDamage: 0, selfDamage: 0, kills: 0 });
-  for (const f of Object.keys(w)) w[f] += v[f] ?? 0;
-}
-P(table(['ствол', 'выстрелов', 'ходов с попаданием', 'урон чужим', 'урон своим', 'на выстрел', 'добиваний'],
-  Object.entries(W).sort((a, b) => b[1].shots - a[1].shots).map(([k, w]) => [k, w.shots, w.shots ? `${w.hitTurns} (${pct(w.hitTurns, w.shots)})` : w.hitTurns,
-    w.foeDamage, w.selfDamage, w.shots ? (w.foeDamage / w.shots).toFixed(1) : '—', w.kills])));
+const weaponStats = (rs) => {
+  const W = {};
+  for (const r of rs) for (const [k, v] of Object.entries(r.weapons ?? {})) {
+    const w = (W[k] ??= { shots: 0, hitTurns: 0, foeDamage: 0, selfDamage: 0, kills: 0 });
+    for (const f of Object.keys(w)) w[f] += v[f] ?? 0;
+  }
+  return W;
+};
+const W = weaponStats(R);
+const BW = before ? weaponStats(before.results) : null;
+const shotsOf = (ws) => Object.values(ws).reduce((a, w) => a + w.shots, 0);
+const allShots = shotsOf(W), bShots = BW ? shotsOf(BW) : 0;
+const keys = [...new Set([...Object.keys(W), ...Object.keys(BW ?? {})])].sort((a, b) => (W[b]?.shots ?? 0) - (W[a]?.shots ?? 0) || (BW?.[b]?.shots ?? 0) - (BW?.[a]?.shots ?? 0));
+P(table(['ствол', ...(BW ? ['до: выстрелов (доля)'] : []), 'выстрелов (доля)', 'ходов с попаданием', 'урон чужим', 'урон своим', 'на выстрел', 'добиваний'],
+  keys.map((k) => {
+    const w = W[k] ?? { shots: 0, hitTurns: 0, foeDamage: 0, selfDamage: 0, kills: 0 };
+    const b = BW?.[k];
+    return [k, ...(BW ? [b?.shots ? `${b.shots} (${pct(b.shots, bShots)})` : '—'] : []),
+      w.shots ? `${w.shots} (${pct(w.shots, allShots)})` : '—',
+      w.shots ? `${w.hitTurns} (${pct(w.hitTurns, w.shots)})` : w.hitTurns,
+      w.foeDamage, w.selfDamage, w.shots ? (w.foeDamage / w.shots).toFixed(1) : '—', w.kills];
+  })));
 P();
+// Чем стреляет каждый уровень (поле usage пишет agent.js с этой версии)
+const usageOf = (rs) => {
+  const U = {};
+  for (const r of rs) for (const [lv, m] of Object.entries(r.usage ?? {})) for (const [k, n] of Object.entries(m)) (U[lv] ??= {})[k] = (U[lv][k] ?? 0) + n;
+  return U;
+};
+const share = (m) => {
+  if (!m) return '—';
+  const t = Object.values(m).reduce((a, b) => a + b, 0);
+  return Object.entries(m).sort((a, b) => b[1] - a[1]).filter(([, n]) => n / t >= 0.01).map(([k, n]) => `${k} ${pct(n, t)}`).join(', ');
+};
+const U = usageOf(R), BU = before ? usageOf(before.results) : {};
+if (Object.keys(U).length) {
+  P('Чем стреляет каждый уровень бота (доли выстрелов, от 1%):');
+  P();
+  P(table(['уровень', ...(before ? ['до'] : []), 'после'], LV.filter((l) => U[l] || BU[l]).map((l) => [l, ...(before ? [share(BU[l])] : []), share(U[l])])));
+  P();
+}
 const deaths = {};
 for (const r of R) for (const [k, v] of Object.entries(r.deaths ?? {})) deaths[k] = (deaths[k] ?? 0) + v;
 P(`Причины гибели: ${Object.entries(deaths).map(([k, v]) => `${k} ${v}`).join(', ')}. Урон падением всего: ${R.reduce((a, r) => a + (r.fallDamage ?? 0), 0)}.`);

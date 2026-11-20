@@ -22,7 +22,7 @@ window.__simRealNow = realNow;
 const g = window.__WORMS__;
 g.loop.sleep();
 
-const [{ Bot, BOT_LEVELS }, { Worm }, { WEAPONS }, { CFG }, M, { STATE }] = await Promise.all([
+const [{ Bot, BOT_LEVELS }, { Worm }, { WEAPONS, BOMBLET, AIR_MISSILE, SPLITLET }, { CFG }, M, { STATE }] = await Promise.all([
   import('/src/ai/Bot.js'),
   import('/src/entities/Worm.js'),
   import('/src/weapons/index.js'),
@@ -31,13 +31,9 @@ const [{ Bot, BOT_LEVELS }, { Worm }, { WEAPONS }, { CFG }, M, { STATE }] = awai
   import('/src/core/TurnManager.js'),
 ]);
 
-// Тестовый уровень: точность «Снайпера», но в ход идут все стволы с полётом —
-// иначе боты гоняли бы только базуку, гранату, кассетную и крота
-BOT_LEVELS.sim_all = {
-  ...BOT_LEVELS.sniper, id: 'sim_all', name: 'Все стволы',
-  weapons: ['bazooka', 'grenade', 'cluster', 'mole', 'banana', 'holy', 'mortar', 'shotgun',
-    'weight', 'sticky', 'boomerang', 'homing', 'airstrike', 'bat'],
-};
+// Тестовый уровень: точность и стволы «Снайпера», но патронов на всё, что
+// бот умеет, — не меньше двух: иначе до редких стволов дело не доходило бы
+BOT_LEVELS.sim_all = { ...BOT_LEVELS.sniper, id: 'sim_all', name: 'Все стволы' };
 
 // Сколько кадров на один отрисованный (0 — не рисовать вовсе)
 let RENDER_EVERY = window.__simRenderEvery ?? 8;
@@ -88,7 +84,21 @@ function game() {
   return s && g.scene.isActive('Game') && s.turn ? s : null;
 }
 
-// --- урон и смерти: по причине и по стволу, которым стреляли в этот ход ---
+// --- урон и смерти: по причине и по стволу, от которого пришёл урон ---
+//
+// Ствол берём не из «чем стреляли в этот ход», а из самого удара: взрыв
+// узнаём по его описанию (у каждого ствола своё, у бомблетов, осколков и
+// ракет авиаудара — тоже), биту и бумеранг — по причине урона. Иначе
+// дробовик и бита, которые бьют внутри fire() ещё до onFired, писались
+// в «env», а мина, сработавшая в чужой ход, — на ствол того, кто на неё
+// наступил.
+const BLAST_OWNER = new Map(WEAPONS.map((w) => [w.explosion, w.id]));
+BLAST_OWNER.set(BOMBLET.explosion, 'cluster');
+BLAST_OWNER.set(AIR_MISSILE.explosion, 'airstrike');
+BLAST_OWNER.set(SPLITLET.explosion, 'mortar');
+const CAUSE_OWNER = { 'бита': 'bat', 'бумеранг': 'boomerang' };
+const newStat = () => ({ shots: 0, hitTurns: 0, foeDamage: 0, selfDamage: 0, kills: 0 });
+
 const origDamage = Worm.prototype.damage;
 Worm.prototype.damage = function (amount, cause = '') {
   const before = this.health;
@@ -98,14 +108,17 @@ Worm.prototype.damage = function (amount, cause = '') {
   const lost = before - this.health;
   if (lost <= 0) return;
   const t = cur.turn;
-  const s = game();
   if (cause === 'падение') { cur.fallDamage += lost; return; }
+  const src = cur.blast ?? (CAUSE_OWNER[cause] ? { id: CAUSE_OWNER[cause], team: t?.team } : null);
   // Монстры и события места ходят после выстрела — их урон не на ствол
-  const key = cur.monsterPhase ? 'monsters' : (t?.weapon && t.fired ? t.weapon : 'env');
-  const own = s && t && this.team === t.team;
-  const w = (cur.weapons[key] ??= { shots: 0, hitTurns: 0, foeDamage: 0, selfDamage: 0, kills: 0 });
+  const key = src?.id ?? (cur.monsterPhase ? 'monsters' : (t?.weapon && t.fired ? t.weapon : 'env'));
+  // «Свои» — свои тому, чей это заряд: мина бьёт в чужой ход
+  const team = src ? src.team : t?.team;
+  const own = team != null && this.team === team;
+  const w = (cur.weapons[key] ??= newStat());
   if (own) w.selfDamage += lost; else w.foeDamage += lost;
   if (t && !own && key === t.weapon) t.foeDamage += lost;
+  if (t && !own) (t.hit ??= new Set()).add(key);
   if (t && own) t.selfDamage = (t.selfDamage ?? 0) + lost;
   if (!this.alive && !own) w.kills++;
 };
@@ -113,6 +126,11 @@ const origKill = Worm.prototype.kill;
 Worm.prototype.kill = function (cause = '') {
   if (cur && this.alive) {
     cur.deaths[cause || '?'] = (cur.deaths[cause || '?'] ?? 0) + 1;
+    // Утонул после толчка — добил тот ствол, которым стреляли в этот ход
+    const t = cur.turn;
+    if (cause === 'утонул' && t?.fired && t.weapon && this.team !== t.team) {
+      (cur.weapons[t.weapon] ??= newStat()).kills++;
+    }
   }
   return origKill.call(this, cause);
 };
@@ -149,7 +167,8 @@ function finishTurn() {
   if (cur) cur.monsterPhase = false;
   const t = cur?.turn;
   if (!t) return;
-  if (t.fired && t.weapon && t.foeDamage > 0) cur.weapons[t.weapon].hitTurns++;
+  // Ход с попаданием — для каждого ствола, чей удар в этот ход задел чужих
+  for (const k of t.hit ?? []) (cur.weapons[k] ??= newStat()).hitTurns++;
   cur.turns.push({ n: t.n, team: t.team, weapon: t.weapon, shots: t.shots, dmg: t.foeDamage, self: t.selfDamage ?? 0, end: t.end, booms: t.booms, from: t.from, aim: t.aim });
   cur.turn = null;
 }
@@ -193,7 +212,11 @@ function instrument(s, cfg) {
       if (w && !t.from) t.from = { x: Math.round(w.x), y: Math.round(w.y), hang: w.hang ?? null };
       if (!t.aim) t.aim = { angle: +s.aimAngle.toFixed(2), facing: w?.facing };
     }
-    (cur.weapons[id] ??= { shots: 0, hitTurns: 0, foeDamage: 0, selfDamage: 0, kills: 0 }).shots++;
+    (cur.weapons[id] ??= newStat()).shots++;
+    // Чем стреляет каждый уровень бота — для сводки «до и после»
+    const lv = s.botFor(tm.currentTeam)?.level.id ?? '?';
+    const u = (cur.usage[lv] ??= {});
+    u[id] = (u[id] ?? 0) + 1;
     return fired();
   };
   const end = tm.endTurn.bind(tm);
@@ -221,7 +244,10 @@ function instrument(s, cfg) {
   s.explode = (x, y, c, o) => {
     const t = cur.turn;
     if (t && !cur.monsterPhase) (t.booms ??= []).length < 4 && t.booms.push({ x: Math.round(x), y: Math.round(y), r: c.radius });
-    return explode(x, y, c, o);
+    const id = BLAST_OWNER.get(c);
+    const prev = cur.blast;
+    cur.blast = id ? { id, team: o?.team ?? t?.team } : null;
+    try { return explode(x, y, c, o); } finally { cur.blast = prev; }
   };
   const over = proto.onGameOver.bind(s);
   s.onGameOver = (winner) => {
@@ -242,7 +268,9 @@ function monitor(s, dt) {
   // Фаза хода
   const key = `${tm.turnNumber}:${tm.state}`;
   if (key !== m.stateKey) {
-    if (m.prevState === STATE.FLYING && m.flyMax >= CFG.FLY_TIMEOUT) {
+    // Страховка срабатывает в том же кадре, где полёт кончается, и последнего
+    // значения часов мы уже не видим — поэтому порог чуть раньше
+    if (m.prevState === STATE.FLYING && m.flyMax >= CFG.FLY_TIMEOUT - 0.3) {
       anomaly('flyTimeout', { projectiles: m.flySnap });
     }
     if (m.prevState === STATE.RESOLVE && m.resolveSnap) {
@@ -336,7 +364,7 @@ window.__sim = {
     const menu = g.scene.getScene('Menu');
     cur = {
       id: cfg.id, gameTime: 0, frames: 0, turns: [], turn: null, weapons: {}, anomalies: [],
-      deaths: {}, fallDamage: 0, passes: 0, decideMs: {}, maxProjectiles: 0, winner: undefined,
+      deaths: {}, fallDamage: 0, passes: 0, decideMs: {}, maxProjectiles: 0, winner: undefined, usage: {}, blast: null,
       mon: { worm: {}, stateKey: '', stateTime: 0, flyMax: 0 }, stuck: false, cfg,
     };
     menu.start(match);
@@ -384,7 +412,7 @@ window.__sim = {
     const r = {
       id: cur.id, winner: cur.winner ?? null, turns: cur.turnCount ?? s?.turn.turnNumber ?? null,
       gameTime: Math.round((cur.endTime ?? cur.gameTime) * 10) / 10, frames: cur.frames,
-      weapons: cur.weapons, anomalies: cur.anomalies, deaths: cur.deaths, fallDamage: cur.fallDamage,
+      weapons: cur.weapons, usage: cur.usage, anomalies: cur.anomalies, deaths: cur.deaths, fallDamage: cur.fallDamage,
       passes: cur.passes, maxProjectiles: cur.maxProjectiles,
       decideMs: cur.decideMs,
       selfTurns: cur.turns.filter((t) => t.self > 0),
