@@ -45,6 +45,17 @@ export function font(size, weight = 800, color = UI.text) {
   };
 }
 
+/**
+ * Цвет текста — только если он другой. В Phaser setColor всегда заново
+ * рисует надпись на её холсте и перезаливает текстуру, даже с тем же
+ * цветом: в HUD это делалось каждый кадр (таймер, «чей ход», метки бойцов
+ * за краем экрана) и на слабом телефоне съедало заметную часть кадра.
+ */
+export function setTextColor(text, color) {
+  if (text.style.color !== color) text.setColor(color);
+  return text;
+}
+
 function roundRect(ctx, x, y, w, h, r) {
   ctx.beginPath();
   ctx.moveTo(x + r, y);

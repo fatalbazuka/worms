@@ -1,7 +1,7 @@
 import { CFG, DEPTH, TEAM_COLORS, TEAM_NAMES } from '../config.js';
 import { WEAPONS, WEAPON_RARITY } from '../weapons/index.js';
 import { has as hasAsset, weaponIcon, fitScale } from '../core/assets.js';
-import { UI, font, ensureButton, ensureRoundButton, ensureIcon } from './theme.js';
+import { UI, font, ensureButton, ensureRoundButton, ensureIcon, setTextColor } from './theme.js';
 import { Inventory } from './Inventory.js';
 import { isDesktop } from '../platform/device.js';
 import { sfx } from '../audio/Sfx.js';
@@ -1046,7 +1046,7 @@ export class Hud {
     if (this.turnText) {
       this.teamChip.fillColor = TEAM_COLORS[team];
       this.turnText.setText(worm ? `Боец ${worm.name}` : TEAM_NAMES[team]);
-      this.turnText.setColor(hex(TEAM_COLORS[team]));
+      setTextColor(this.turnText, hex(TEAM_COLORS[team]));
       const shape = scene.shape && scene.shape.id !== 'island' ? ` · ${scene.shape.name}` : '';
       const hooks = scene.hookPerTurn > 0 ? ` · крюков ${scene.hooksLeft}` : '';
       this.subText.setText(`${TEAM_NAMES[team]} · ${scene.terrain.biome.name}${shape} · ${turn.weapon.name}${hooks}`);
@@ -1070,7 +1070,7 @@ export class Hud {
     const color = urgent ? 0xff6b6b : left <= 12 ? 0xffd166 : 0x6ee36e;
 
     this.timerText.setText(Math.ceil(left).toString());
-    this.timerText.setColor(urgent ? '#ff9a9a' : UI.text);
+    setTextColor(this.timerText, urgent ? '#ff9a9a' : UI.text);
     // Под конец хода цифра пульсирует: одного цвета мало, его не замечают
     this.timerText.setScale(urgent ? 1 + Math.sin(this.scene.time.now / 90) * 0.09 : 1);
 
