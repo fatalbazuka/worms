@@ -40,13 +40,13 @@ export function skinPrice(id) {
 
 export const SKINS = [
   { id: 'classic', name: 'Смайлик', sheet: 'smiley', rarity: 'common' },
-  { id: 'ice', name: 'Ледышка', sheet: 'skin_ice', rarity: 'common' },
+  { id: 'ice', name: 'Ледышка', sheet: 'skin_ice', rarity: 'rare' },
   { id: 'alien', name: 'Пришелец', sheet: 'skin_alien', rarity: 'rare' },
-  { id: 'toxic', name: 'Токсик', sheet: 'skin_toxic', rarity: 'common' },
+  { id: 'toxic', name: 'Токсик', sheet: 'skin_toxic', rarity: 'rare' },
   { id: 'pumpkin', name: 'Тыква', sheet: 'skin_pumpkin', rarity: 'common' },
   { id: 'rage', name: 'Злюка', sheet: 'skin_rage', rarity: 'rare' },
   { id: 'devil', name: 'Чертёнок', sheet: 'skin_devil', rarity: 'epic' },
-  { id: 'clown', name: 'Клоун', sheet: 'skin_clown', rarity: 'rare' },
+  { id: 'clown', name: 'Клоун', sheet: 'skin_clown', rarity: 'epic' },
   { id: 'cool', name: 'Крутой', sheet: 'skin_cool', rarity: 'common' },
   { id: 'nerd', name: 'Ботаник', sheet: 'skin_nerd', rarity: 'common' },
   { id: 'sleepy', name: 'Соня', sheet: 'skin_sleepy', rarity: 'common' },
@@ -54,8 +54,16 @@ export const SKINS = [
   { id: 'pirate', name: 'Пират', sheet: 'skin_pirate', rarity: 'rare' },
   { id: 'robot', name: 'Робот', sheet: 'skin_robot', rarity: 'rare' },
   { id: 'astro', name: 'Космонавт', sheet: 'skin_astro', rarity: 'epic' },
-  { id: 'king', name: 'Король', sheet: 'skin_king', rarity: 'epic' },
+  { id: 'king', name: 'Король', sheet: 'skin_king', rarity: 'legendary' },
   { id: 'rainbow', name: 'Радуга', sheet: 'skin_rainbow', rarity: 'legendary' },
+  { id: 'detective', name: 'Детектив', sheet: 'skin_detective', rarity: 'common' },
+  { id: 'chef', name: 'Шеф', sheet: 'skin_chef', rarity: 'rare' },
+  { id: 'bubblegum', name: 'Жвачка', sheet: 'skin_bubblegum', rarity: 'rare' },
+  { id: 'zipper', name: 'Молния', sheet: 'skin_zipper', rarity: 'rare' },
+  { id: 'knight', name: 'Рыцарь', sheet: 'skin_knight', rarity: 'epic' },
+  { id: 'bomb', name: 'Бомба', sheet: 'skin_bomb', rarity: 'epic' },
+  { id: 'beardo', name: 'Бородач', sheet: 'skin_beardo', rarity: 'legendary' },
+  { id: 'poophead', name: 'Какашка', sheet: 'skin_poophead', rarity: 'legendary' },
 ];
 
 /** Что может выпасть из коробки: все, кроме стартового. */

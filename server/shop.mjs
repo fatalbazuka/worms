@@ -21,6 +21,8 @@ export const SKIN_NAMES = {
   rage: 'Злюка', devil: 'Чертёнок', clown: 'Клоун',
   cool: 'Крутой', nerd: 'Ботаник', sleepy: 'Соня', ninja: 'Ниндзя', pirate: 'Пират',
   robot: 'Робот', astro: 'Космонавт', king: 'Король', rainbow: 'Радуга',
+  detective: 'Детектив', chef: 'Шеф', bubblegum: 'Жвачка', zipper: 'Молния',
+  knight: 'Рыцарь', bomb: 'Бомба', beardo: 'Бородач', poophead: 'Какашка',
 };
 export const SKIN_IDS = Object.keys(SKIN_NAMES);
 
