@@ -107,14 +107,13 @@ export class Terrain {
    */
   _addWalls() {
     const ctx = this.maskCtx, w = this.width, h = this.height;
-    const edge = (y, k) => 22 + Math.sin(y / 41 + k) * 7 + Math.sin(y / 13 + k * 2) * 3;
     ctx.globalCompositeOperation = 'source-over';
     ctx.fillStyle = '#ffffff';
     for (const side of [0, 1]) {
       ctx.beginPath();
       ctx.moveTo(side ? w : 0, 0);
       for (let y = 0; y <= h; y += 8) {
-        const d = edge(y, side * 3.1);
+        const d = wallEdge(y, side);
         ctx.lineTo(side ? w - d : d, y);
       }
       ctx.lineTo(side ? w : 0, h);
@@ -571,6 +570,16 @@ export class Terrain {
     if (this.solidInRect(x - 14, top - 40, x + 14, top - 4)) return false; // низкий потолок
     return true;
   }
+}
+
+/**
+ * Толщина каменной стены башни на высоте y (side: 0 — левая, 1 — правая).
+ * Нужна и генерации этажей (shapes.js): к стене либо прирастают, либо
+ * оставляют просвет, в который пролезет боец.
+ */
+export function wallEdge(y, side) {
+  const k = side * 3.1;
+  return 22 + Math.sin(y / 41 + k) * 7 + Math.sin(y / 13 + k * 2) * 3;
 }
 
 /** Оконная функция острова: 1 в центре, плавно к 0 у краёв. */
