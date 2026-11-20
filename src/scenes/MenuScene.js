@@ -33,6 +33,7 @@ import { leagueOf, nextLeague, leagueProgress, toNextLeague, leagueLabel } from 
 import { BOT_LEVELS } from '../ai/Bot.js';
 import { isDesktop, setUiMode, aimScheme, setAimScheme } from '../platform/device.js';
 import { sfx } from '../audio/Sfx.js';
+import { music } from '../audio/Music.js';
 import { SKINS, SKIN_BY_ID, BOX_SKINS, RARITY, RARITY_ORDER, skinPrice, rewardMissions } from '../core/skins.js';
 import {
   skinState, equippedSkin, equipSkin, openSkinBox, syncCampaignBoxes, buySkin, applyServerOwned,
@@ -96,6 +97,8 @@ export default class MenuScene extends Phaser.Scene {
     this.buttons = {};
 
     this.cameras.main.setBackgroundColor('#0d1220');
+    // Своя тема у меню: из боя переходим в неё плавно, без обрыва
+    music.play('menu');
     // Вернулись в меню — в лобби мы снова свободны
     this.lobby?.idle();
     const f = CFG.FRAME;
@@ -514,7 +517,11 @@ export default class MenuScene extends Phaser.Scene {
     this.items.push(name);
     this._iconButton('sound', W - pad - 30, top + 36, sfx.muted ? 'mute' : 'sound',
       () => { sfx.setMuted(!sfx.muted); this.showRoot(); }, 60);
-    this.items.push(this.add.text(W - pad - 76, top + 18,
+    // Музыка — отдельно от звука: эффекты оставить, мелодию выключить.
+    // Общий «звук выкл» глушит и её, но переключатель помнит своё
+    this._iconButton('music', W - pad - 96, top + 36, music.enabled ? 'music' : 'music-off',
+      () => { music.toggle(); this.showRoot(); }, 60);
+    this.items.push(this.add.text(W - pad - 142, top + 18,
       `${me.rating}${me.rank ? ` · место ${me.rank}` : ''}`, font(28, 800, UI.accent)).setOrigin(1, 0));
     this._leagueBar(cx, top + 84, me.rating, Math.min(W - pad * 2, 760), 18);
     // Монеты — вход в магазин: плашка с «+», как в любой игре. На узком

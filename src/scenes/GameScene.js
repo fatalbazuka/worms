@@ -55,6 +55,7 @@ import { grantCoins } from '../platform/daily.js';
 import { CameraRig } from '../ui/CameraRig.js';
 import { Coach } from '../ui/Coach.js';
 import { voice } from '../audio/Voice.js';
+import { music, battleTheme } from '../audio/Music.js';
 import { askText, closeOverlay } from '../ui/Overlay.js';
 import { isDesktop, aimScheme } from '../platform/device.js';
 
@@ -146,6 +147,9 @@ export default class GameScene extends Phaser.Scene {
     this._applyBaseZoom();
 
     const biome = this._chooseBiome();
+    // Музыка места: у льда, лавы и космоса своя, остальное — обычная боевая.
+    // Переигровка того же места тему не обрывает
+    music.play(battleTheme(this.variant?.id, biome.id));
 
     this._buildSky(biome);
     this._buildTerrain(biome);
@@ -1933,6 +1937,9 @@ export default class GameScene extends Phaser.Scene {
     // Партия доиграна: запись сессии больше не нужна
     this.net?.forget();
     this.fx.sound(winner === mine ? 'victory' : 'defeat');
+    // Тема боя уходит, следом — короткая заставка. В хотсите победил
+    // кто-то из своих, это праздник; ничья и проигрыш — грустное «ва-ва»
+    music.sting(winner >= 0 && (winner === mine || !solo) ? 'victory' : 'defeat');
     // Первая настоящая победа (не испытание): дальше «Играть» — с «Бойцом»
     if (solo && winner >= 0 && winner === mine && this.match.mode !== 'challenge') {
       markWon();

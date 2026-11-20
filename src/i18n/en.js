@@ -871,5 +871,7 @@ export const EN = {
  "это ты": "that's you",
  "Вызвать": "Challenge",
  "отправляю вызов: {0}…": "sending the challenge: {0}…",
- "Вызов ушёл в Telegram: {0}. Ждём здесь": "Challenge sent via Telegram: {0}. Waiting here"
+ "Вызов ушёл в Telegram: {0}. Ждём здесь": "Challenge sent via Telegram: {0}. Waiting here",
+ "🎵 Музыка: вкл": "🎵 Music: on",
+ "🎵 Музыка: выкл": "🎵 Music: off"
 };

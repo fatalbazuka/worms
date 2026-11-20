@@ -282,6 +282,8 @@ class Sfx {
     // Время последнего запуска по имени звука — для ограничения частоты
     this._last = new Map();
     this._armed = false;
+    // Кому сказать, что звук выключили или сменили громкость (музыке)
+    this._watchers = new Set();
     this.arm();
   }
 
@@ -334,10 +336,23 @@ class Sfx {
   /** Состояние контекста — удобно для отладки и тестов: null до первого жеста. */
   get state() { return this.ctx?.state ?? null; }
 
+  /** Подписаться на смену громкости и «звук выкл». Возвращает отписку. */
+  watch(fn) {
+    this._watchers.add(fn);
+    return () => this._watchers.delete(fn);
+  }
+
+  _changed() {
+    for (const fn of this._watchers) {
+      try { fn(); } catch { /* подписчик сломался — звук всё равно переключён */ }
+    }
+  }
+
   setVolume(v) {
     this._volume = clamp(Number(v) || 0, 0, 1);
     if (this.master) this.master.gain.value = this._muted ? 0 : this._volume;
     saveState({ volume: this._volume, muted: this._muted });
+    this._changed();
     return this._volume;
   }
 
@@ -345,6 +360,7 @@ class Sfx {
     this._muted = Boolean(on);
     if (this.master) this.master.gain.value = this._muted ? 0 : this._volume;
     saveState({ volume: this._volume, muted: this._muted });
+    this._changed();
     return this._muted;
   }
 

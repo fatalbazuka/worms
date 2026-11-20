@@ -293,6 +293,8 @@ const ICONS = {
   },
   sound: (ctx, s) => speaker(ctx, s, false),
   mute: (ctx, s) => speaker(ctx, s, true),
+  music: (ctx, s) => note(ctx, s, false),
+  'music-off': (ctx, s) => note(ctx, s, true),
   help: (ctx, s) => {
     stroke(ctx, s);
     ctx.lineCap = 'round';
@@ -331,6 +333,31 @@ function speaker(ctx, s, muted) {
     ctx.arc(s * 0.5, c, s * 0.27, -Math.PI / 4, Math.PI / 4);
   }
   ctx.stroke();
+}
+
+/** Две восьмые под ребром — значок музыки; off — перечёркнут. */
+function note(ctx, s, off) {
+  stroke(ctx, s);
+  ctx.fillStyle = UI.text;
+  const r = s * 0.1;
+  const heads = [[s * 0.32, s * 0.7], [s * 0.7, s * 0.62]];
+  for (const [x, y] of heads) {
+    ctx.beginPath();
+    ctx.ellipse(x, y, r * 1.25, r, -0.35, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.beginPath();
+  ctx.moveTo(heads[0][0] + r * 1.1, heads[0][1]);
+  ctx.lineTo(heads[0][0] + r * 1.1, s * 0.26);
+  ctx.lineTo(heads[1][0] + r * 1.1, s * 0.18);
+  ctx.lineTo(heads[1][0] + r * 1.1, heads[1][1]);
+  ctx.stroke();
+  if (off) {
+    ctx.beginPath();
+    ctx.moveTo(s * 0.18, s * 0.18);
+    ctx.lineTo(s * 0.82, s * 0.82);
+    ctx.stroke();
+  }
 }
 
 function stroke(ctx, s) {

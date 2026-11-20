@@ -7,11 +7,12 @@ import {
   inTelegram, canOfferHomeScreen, addToHomeScreen, openInvoice, haptic,
 } from '../platform/telegram.js';
 import { el, openOverlay, closeOverlay, closeButton, isOverlayOpen } from './Overlay.js';
+import { music } from '../audio/Music.js';
 
 /**
  * Личный кабинет. Аккаунт — это Telegram: имя и аватар оттуда, входить
  * отдельно не нужно. Здесь статистика, титулы, история боёв, иконка на
- * рабочий стол и поддержка игры звёздами.
+ * рабочий стол, музыка вкл/выкл и поддержка игры звёздами.
  */
 
 let current = null;
@@ -31,6 +32,16 @@ export function avatar(p, small = false) {
     return img;
   }
   return el('div', { class: cls }, initial(p));
+}
+
+/** Музыка вкл/выкл — надпись меняется на месте, окно не перерисовываем. */
+function musicButton() {
+  const label = () => (music.enabled ? '🎵 Музыка: вкл' : '🎵 Музыка: выкл');
+  const btn = el('button', {
+    class: 'acc-btn', type: 'button',
+    onclick: () => { music.toggle(); btn.textContent = label(); },
+  }, label());
+  return btn;
 }
 
 const initial = (p) => (p?.name ?? '?').trim().charAt(0).toUpperCase() || '?';
@@ -74,6 +85,7 @@ function guestView(box, render) {
       onclick: async () => { await telegramLogin(); render(); },
     }, 'Войти ещё раз')));
   }
+  children.push(el('div', { class: 'acc-row' }, musicButton()));
   box.append(...children);
 }
 
@@ -122,7 +134,7 @@ function profileView(box, { onTop, onTours, history }) {
     onclick: () => { closeAccountDialog(); onTours(); } }, '🏆 Турниры'));
   if (onTop) row.append(el('button', { class: 'acc-btn', type: 'button',
     onclick: () => { closeAccountDialog(); onTop(); } }, 'Таблица лидеров'));
-  const row2 = el('div', { class: 'acc-row' });
+  const row2 = el('div', { class: 'acc-row' }, musicButton());
   if (canOfferHomeScreen()) {
     row2.append(el('button', { class: 'acc-btn', type: 'button', onclick: () => addToHomeScreen() }, '📲 На рабочий стол'));
   }
