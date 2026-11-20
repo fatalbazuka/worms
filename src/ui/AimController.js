@@ -390,6 +390,8 @@ export class AimController {
     // Рычаг на экране тянется так же — видно, за что браться
     const padReach = CFG.SLING_PAD_MAX * 0.72 * k;
     this.padHint = { dx: -dx * padReach, dy: -dy * padReach };
+    // Куда «палец» уезжает целиком — рычаг ловит касание и на этом пути
+    this.padHintDir = { dx: -dx, dy: -dy };
     const g = this.gfx;
     if (k > 0.02) {
       g.lineStyle(3, 0xffffff, 0.35).lineBetween(o.x, o.y, fx, fy);

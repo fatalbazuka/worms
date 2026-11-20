@@ -31,7 +31,7 @@ import {
 } from '../platform/telegram.js';
 import { canStory, snapshot as frameShot, fighterFrame, drawStory, shareStory } from '../platform/story.js';
 import { ClipRecorder, canClip, saveClip, clipToStory } from '../platform/clip.js';
-import { HOTSEAT, towerMatch, challengeMatch, ascentMatch } from '../core/match.js';
+import { HOTSEAT, towerMatch, rookieMatch, challengeMatch, ascentMatch } from '../core/match.js';
 import { ASCENT } from '../campaign/ascent.js';
 import { markAscentDone } from '../platform/ascent.js';
 import { markWon, claimTutorialBox } from '../platform/onboard.js';
@@ -447,6 +447,8 @@ export default class GameScene extends Phaser.Scene {
   get hookHint() {
     if (this.coach) return this.coach.wantsHookHint;
     if (!this.sling || this.slingHint) return false;
+    // Только в первых двух своих ходах боя: дальше строка висела весь бой
+    if (this.myTurns > 2) return false;
     if (this._hookUses == null) {
       try { this._hookUses = Number(localStorage.getItem('worms.hookUses')) || 0; } catch { this._hookUses = 0; }
     }
@@ -2232,7 +2234,7 @@ export default class GameScene extends Phaser.Scene {
    */
   _nextAction(won) {
     if (!won) return null;
-    if (this.match.tutorial) return { label: 'В бой!', match: towerMatch('rookie') };
+    if (this.match.tutorial) return { label: 'В бой!', match: rookieMatch() };
     if (this.match.mode === 'challenge') {
       const i = CHALLENGES.findIndex((c) => c.id === this.match.challengeId);
       const c = CHALLENGES[i + 1];

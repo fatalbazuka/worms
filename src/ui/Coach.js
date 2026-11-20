@@ -88,7 +88,9 @@ export class Coach {
 
   /** Игрок выстрелил (GameScene): шаг выстрела сделан. */
   onShot() {
-    if (SHOOTS.has(this.current?.id)) this._next(this.current.id === 'shoot' ? 'Бабах!' : null);
+    // Шаг «Добей» не закрывается выстрелом: он длится до конца боя, а после
+    // промаха панель подсказывает, как поправиться
+    if (this.current?.id === 'shoot') this._next('Бабах!');
   }
 
   /** Шаг сделан: «Отлично!», звук, вибрация — и к следующему. */
@@ -193,6 +195,7 @@ export class Coach {
     const h = 50 + this.bodyText.height + 18;
     const g = this.panel;
     g.clear();
+    this.panelBottom = y + h;
     g.fillStyle(0xffe27a, mine ? 0.97 : 0.6).fillRoundedRect(28, y, W - 56, h, 18);
     g.lineStyle(3, 0x1a1408, 0.9).strokeRoundedRect(28, y, W - 56, h, 18);
     // Кружки шагов

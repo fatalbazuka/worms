@@ -178,7 +178,7 @@ export class Hud {
 
     // Подсказка новичку под панелью: гаснет сама после трёх тросов
     this.hintText = this.fix(s.add.text(Math.round(W / 2), TOP_H + (this.compact ? 96 : 14),
-      'коснись светящейся точки — трос подтянет туда', font(15, 800, '#1a1408'))
+      'коснись светящейся точки — трос подтянет туда', font(this.compact ? 22 : 17, 800, '#1a1408'))
       .setOrigin(0.5, 0).setPadding(12, 6, 12, 6).setBackgroundColor('#ffe27a'), DEPTH.HUD + 1)
       .setVisible(false);
   }
@@ -430,7 +430,15 @@ export class Hud {
     const p = this.slingPad;
     if (!p) return false;
     const px = pointer.x - CFG.FRAME.left, py = pointer.y - CFG.FRAME.top;
-    return Math.hypot(px - p.x, py - p.y) <= p.r + CFG.SLING_PAD_SLOP;
+    // Пока подсказка тянет «палец» от рычага, хватать можно и там, где он
+    // нарисован: новичок берётся за то, что видит
+    if (Math.hypot(px - p.x, py - p.y) <= p.r + CFG.SLING_PAD_SLOP) return true;
+    const h = this.scene.slingHint && this.scene.aim?.padHintDir;
+    if (!h) return false;
+    // Отрезок от рычага туда, куда уезжает «палец» подсказки, — и 36 px вокруг
+    const ux = h.dx, uy = h.dy, L = CFG.SLING_PAD_MAX * 0.72;
+    const t = Math.max(0, Math.min(L, (px - p.x) * ux + (py - p.y) * uy));
+    return Math.hypot(px - (p.x + ux * t), py - (p.y + uy * t)) <= 36;
   }
 
   _drawSlingPad(scene) {
@@ -1116,7 +1124,8 @@ export class Hud {
       // На тренировке своя панель с шагами — строка подсказки не нужна
       const splitting = !scene.replaying && !scene.isBotTurn?.() && scene.isLocalTeam?.(scene.turn.currentTeam)
         && scene.projectiles?.some((p) => p.alive && p.weapon.projectile.split);
-      const show = splitting || (!this.helpVisible && scene.canPlayerAct() && !scene.coach
+      const bannerUp = (scene.fx?.bannerUntil ?? 0) > scene.time.now;
+      const show = splitting || (!this.helpVisible && !bannerUp && scene.canPlayerAct() && !scene.coach
         && (spring || sling || (scene.hookHint && scene.hooksLeft > 0)));
       if (show) {
         this.hintText.setText(splitting ? 'тапни по экрану — ракета разделится на три' : spring

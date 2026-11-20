@@ -3,7 +3,7 @@ import { CFG } from '../config.js';
 import { MISSIONS, loadProgress, isUnlocked } from '../campaign/missions.js';
 import { objectiveText } from '../campaign/objectives.js';
 import {
-  quickMatch, campaignMatch, onlineMatch, towerMatch, fallbackMatch, challengeMatch, ascentMatch, dailyMatch, QUICK_OPTIONS,
+  quickMatch, campaignMatch, onlineMatch, towerMatch, rookieMatch, tutorialMatch, fallbackMatch, challengeMatch, ascentMatch, dailyMatch, QUICK_OPTIONS,
 } from '../core/match.js';
 import { CHALLENGES, challengeOpen, totalStars, STAR_COINS } from '../campaign/challenges.js';
 import { ASCENT, CHAPTERS, ascentOpen, bossName, chapterOf } from '../campaign/ascent.js';
@@ -592,7 +592,8 @@ export default class MenuScene extends Phaser.Scene {
     this._button('play', cx, playY, 'ИГРАТЬ',
       tutorial ? 'Первый бой · научим стрелять'
         : choice.level ? `Башня · бот «${BOT_LEVELS[choice.level].name}»` : 'Башня · вдвоём на одном телефоне',
-      () => this.start(tutorial ? { ...challengeMatch('first'), tutorial: true } : towerMatch(choice.level)),
+      () => this.start(tutorial ? tutorialMatch()
+        : choice.level === 'rookie' && onboardStage() === 'rookie' ? rookieMatch() : towerMatch(choice.level)),
       { w: Math.min(W - 72, 560), h: playH, variant: 'primary', big: true });
     // Под «Играть»: другие режимы и вызов друга — бок о бок
     const subY = playY + playH / 2 + (portrait ? 48 : 36);
