@@ -647,6 +647,8 @@ export class Worm {
     this.flashUntil = this.scene.time.now + 110;     // белая вспышка: «попали»
     this.squash = 0.8;
     this.scene.fx.damageNumber(this.x, this.centerY - 10, amount);
+    // Сцене — для достижений: кого задел выстрел, досталось ли своим
+    this.scene.onWormHurt?.(this, amount, cause);
     if (this.health <= 0) this.kill(cause);
   }
 

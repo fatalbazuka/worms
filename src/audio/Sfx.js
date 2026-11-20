@@ -209,6 +209,15 @@ const VOICES = {
     arpeggio(ctx, out, [660, 880, 1320], { t, step: 0.06, dur: 0.14, peak: 0.16 });
   },
 
+  /**
+   * Достижение: звонкое арпеджио вверх через октаву и искра сверху — ярче
+   * ящика, но короче победы: может прозвучать посреди боя.
+   */
+  achievement(ctx, out, t) {
+    arpeggio(ctx, out, [784, 988, 1175, 1568], { t, step: 0.07, dur: 0.16, peak: 0.15 });
+    tone(ctx, out, { type: 'sine', from: 2093, to: 2350, t: t + 0.3, dur: 0.35, peak: 0.08 });
+  },
+
   /** Выбор оружия и нажатия кнопок: сухой короткий клик, чтобы не мешал. */
   select(ctx, out, t) {
     tone(ctx, out, { type: 'square', from: 880, to: 660, t, dur: 0.05, peak: 0.1 });

@@ -337,7 +337,7 @@ export class Projectile {
       if (w === this.owner && back) continue;
       if (Math.hypot(w.x - nx, w.centerY - ny) > 22) continue;
       hit.add(w);
-      this.scene.boomerangHit?.(w, p.hitDamage, this.vx, this.vy, this.owner);
+      this.scene.boomerangHit?.(w, p.hitDamage, this.vx, this.vy, this.owner, back);
     }
     // Вернулся к бросившему — пойман
     if (back && this.owner?.alive && this.age > 0.4 && Math.hypot(this.owner.x - nx, this.owner.centerY - ny) < 24) {

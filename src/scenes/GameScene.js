@@ -56,6 +56,9 @@ import { grantCoins } from '../platform/daily.js';
 import { battleXp, COS_LABEL } from '../core/levels.js';
 import { gainXp } from '../platform/levels.js';
 import { item as cosItem } from '../core/cosmetics.js';
+import { shotStats, battleEndStats, isLongShot } from '../core/achievements.js';
+import { bumpAch, checkAchievements, onAchievement } from '../platform/achievements.js';
+import { AchToasts } from '../ui/AchToast.js';
 import { CameraRig } from '../ui/CameraRig.js';
 import { Coach } from '../ui/Coach.js';
 import { voice } from '../audio/Voice.js';
@@ -79,6 +82,12 @@ export default class GameScene extends Phaser.Scene {
     this.myTurns = 0;            // своих ходов — для звёзд испытаний
     // Счётчики боя для ежедневных заданий: только за свою команду
     this.battleStats = { hits: 0, damage: 0, kills: 0, hooks: 0, crates: 0, grenadeHits: 0 };
+    // Достижения: открытые за бой (для экрана итога), трюк текущего своего
+    // выстрела, досталось ли своим за бой и здоровье на старте
+    this.achGot = [];
+    this._trick = null;
+    this._myHurt = false;
+    this._hpAtStart = null;
     this.rules = this.match.rules ?? {};
     this.turnTime = this.rules.turnTime ?? CFG.TURN_TIME;
 
@@ -205,6 +214,17 @@ export default class GameScene extends Phaser.Scene {
     // интерфейс надо разложить заново.
     this.game.events.on('worms-resize', this.relayout, this);
     this.events.once('shutdown', this._shutdown, this);
+    // Открытое достижение — плашкой сверху, сбоку от главного; после боя —
+    // ещё и списком на экране итога
+    this.achToasts = new AchToasts(this, {
+      adopt: (o) => this.rig.ui(o.setDepth(DEPTH.HUD + 20)),
+      place: () => this._achToastPlace(),
+    });
+    const offAch = onAchievement((list) => {
+      this.achGot.push(...list);
+      if (!this.gameOverUi) this.achToasts.push(list);
+    });
+    this.events.once('shutdown', offAch);
     // Клип своего красивого выстрела — для шортсов и сторис
     this.clip = canClip() ? new ClipRecorder(this.game.canvas) : null;
 
@@ -372,6 +392,136 @@ export default class GameScene extends Phaser.Scene {
     }, won);
   }
 
+  // -------------------------------------------------------- достижения
+
+  /**
+   * Идут ли бои в достижения. Как и задания — только против бота или
+   * человека: вдвоём на одном телефоне обе стороны свои. И не в обучении:
+   * новичку там нужен один выстрел, а не плашки.
+   */
+  get _achSolo() {
+    return Boolean((this.bots?.some(Boolean) || this.net?.connected) && !this.match.tutorial);
+  }
+
+  /** Где встать плашке достижения: под лентой оружия, сбоку от плашки хода. */
+  _achToastPlace() {
+    const W = CFG.VIEW_W, H = CFG.VIEW_H;
+    const top = this.hud?.compact ? TOP_H + 98 : TOP_H + 16;
+    // В портрете плашка «Твой ход» ниже, на трети экрана, — можно по центру;
+    // в ландшафте она под лентой, поэтому — слева
+    if (H > W) return { x: W / 2, y: top + 40, center: true };
+    return { x: 16 + (CFG.CORNER || 0), y: top, center: false };
+  }
+
+  /** Идёт ли сейчас свой выстрел, из которого может выйти трюк. */
+  _trickLive() {
+    const t = this._trick;
+    return Boolean(t) && !this.replaying && t.turn === this.turn.turnNumber
+      && this.turn.currentTeam === this.myTeamIndex;
+  }
+
+  /** Свой выстрел: запомнить, как стрелял (на тросе, с батута, откуда). */
+  _trickShot(w) {
+    if (!this._achSolo || !this._myStrike() || !w) return;
+    // Трюк — один выстрел: второй выстрел дробовика считается отдельно
+    this._finishTrick();
+    this._trick = {
+      turn: this.turn.turnNumber, hit: new Set(), kills: 0, drowns: 0, far: false, back: false,
+      weapon: this.turn.weapon?.id ?? null,
+      // Авиаудар бьёт в выбранную точку — «через полкарты» им не считается
+      targeted: Boolean(this.turn.weapon?.targeted),
+      hang: Boolean(w.hang),
+      // С батута — летит после пружины в этот же ход, ещё не приземлился
+      sprung: !w.grounded && !w.hang && w.sprungTurn === this.turn.turnNumber,
+      x: w.x, y: w.centerY,
+    };
+  }
+
+  /** Бойцу досталось (Worm.damage): для трюков и «Ни царапины». */
+  onWormHurt(w, amount) {
+    if (this.replaying || amount <= 0) return;
+    if (w.team === this.myTeamIndex) this._myHurt = true;
+    else if (this._trickLive()) {
+      const t = this._trick;
+      t.hit.add(w);
+      if (!t.targeted && isLongShot(Math.hypot(w.x - t.x, w.centerY - t.y), CFG.WORLD_W, CFG.WORLD_H)) t.far = true;
+    }
+  }
+
+  /** Ход отыгран или бой кончился: что вышло из своего выстрела — в трюки. */
+  _finishTrick() {
+    const t = this._trick;
+    this._trick = null;
+    if (!t) return;
+    const add = shotStats({
+      weapon: t.weapon, hang: t.hang, sprung: t.sprung, hits: t.hit.size,
+      kills: t.kills, drowns: t.drowns, far: t.far, back: t.back,
+    });
+    if (Object.keys(add).length) bumpAch(add);
+  }
+
+  /**
+   * Конец боя: победы, добитые, «Блиц», «На волоске», «Ни царапины» — и
+   * заодно вехи по прогрессу (уровень, звёзды, главы уже записаны).
+   */
+  _achBattleEnd(winner) {
+    this._finishTrick();
+    if (!this._achSolo) { checkAchievements(); return; }
+    const mine = this.worms.filter((w) => w.team === this.myTeamIndex);
+    // В сети урон своим приходит снимком мимо Worm.damage — сверяем ещё и
+    // здоровье с тем, что было на старте
+    const hurt = this._myHurt || mine.some((w) => !w.alive || w.health < (this._hpAtStart?.get(w) ?? w.health));
+    checkAchievements(battleEndStats({
+      won: winner >= 0 && winner === this.myTeamIndex, mode: this.match.mode, myTurns: this.myTurns, hurt,
+      mine: mine.map((w) => ({ alive: w.alive, health: w.health })), kills: this.battleStats.kills,
+    }));
+  }
+
+  /**
+   * Достижения за бой на экране итога: значок, название, награда. В
+   * портрете — над итогом под лентой, в ландшафте — колонкой слева от
+   * кнопок: в середине и так звёзды, монеты и заголовок.
+   */
+  _achResult() {
+    const list = this.achGot;
+    if (!list.length) return;
+    this.time.delayedCall(350, () => this.fx.sound('achievement'));
+    const W = CFG.VIEW_W, H = CFG.VIEW_H;
+    const portrait = H > W;
+    const cw = portrait ? Math.min(W - 80, 520) : Math.min(420, W / 2 - 300);
+    if (cw < 260) return;
+    const x0 = portrait ? (W - cw) / 2 : 24 + (CFG.CORNER || 0);
+    let y = portrait ? TOP_H + 150 : H / 2 - 170;
+    const ui = (o, d = 13) => {
+      this.rig.ui(o.setScrollFactor(0).setDepth(DEPTH.HUD + d));
+      this.gameOverUi?.push(o);
+      return o;
+    };
+    ui(this.add.text(x0 + cw / 2, y, '🏅 Достижения за бой', font(22, 800, '#ffe27a'))
+      .setOrigin(0.5, 0).setStroke('#10131a', 5));
+    y += 40;
+    const rh = 62, shown = list.slice(0, 4);
+    shown.forEach((a, i) => {
+      const parts = [];
+      const g = ui(this.add.graphics());
+      g.fillStyle(0x1c1440, 0.94).fillRoundedRect(x0, y, cw, rh - 8, 16);
+      g.lineStyle(2, 0xffc247, 0.8).strokeRoundedRect(x0, y, cw, rh - 8, 16);
+      parts.push(g);
+      const key = `emoji_${a.icon}`;
+      if (this.textures.exists(key)) parts.push(ui(this.add.image(x0 + 32, y + (rh - 8) / 2, key).setScale(38 / 128), 14));
+      parts.push(ui(this.add.text(x0 + 60, y + 15, a.title, font(20, 800, UI.text)).setOrigin(0, 0.5), 14));
+      const reward = [a.coins ? `+${a.coins} монет` : '', a.boxes ? 'коробка со скином' : ''].filter(Boolean).join(' · ');
+      parts.push(ui(this.add.text(x0 + 60, y + 38, reward, font(15, 700, '#8ef0a0')).setOrigin(0, 0.5), 14));
+      for (const o of parts) o.setAlpha(0);
+      this.tweens.add({ targets: parts, alpha: 1, duration: 260, delay: 350 + i * 160 });
+      y += rh;
+    });
+    if (list.length > shown.length) {
+      ui(this.add.text(x0 + cw / 2, y, `и ещё ${list.length - shown.length} — в меню, «Достижения»`,
+        font(16, 700, UI.textDim)).setOrigin(0.5, 0));
+    }
+  }
+
   // ------------------------------------------------------------------ крюк
 
   /**
@@ -497,6 +647,8 @@ export default class GameScene extends Phaser.Scene {
       });
     }
     if (this.turn.currentTeam === this.myTeamIndex) this.myTurns++;
+    // Здоровье на старте — для «Ни царапины»
+    this._hpAtStart ??= new Map(this.worms.map((w) => [w, w.health]));
     // Тот, чей ход, подпрыгивает на месте: глаз сразу находит своего
     const active = this.turn.activeWorm;
     if (active) active.squash = -0.9;
@@ -1550,6 +1702,8 @@ export default class GameScene extends Phaser.Scene {
 
     // Выстрел с уроном — потом посмотрим, попал ли (дразнилка на промах)
     if (!this.replaying && (this.turn.weapon?.explosion?.damage ?? 0) > 0) this._turnShot = { team: this.turn.currentTeam, hits: 0 };
+    // Как стрелял — для трюков: с троса, с батута, откуда
+    if (!this.replaying) this._trickShot(w);
     // Свой выстрел — пишем: вдруг выйдет красиво
     if (!this.replaying && !this.isBotTurn() && this.isLocalTeam(this.turn.currentTeam)) this.clip?.start();
     const len = Math.hypot(vx, vy) || 1;
@@ -1770,10 +1924,12 @@ export default class GameScene extends Phaser.Scene {
    * Бумеранг задел бойца: урон и отброс по ходу полёта. При показе чужого
    * хода — только картинка: урон придёт снимком.
    */
-  boomerangHit(w, dmg, vx, vy, owner) {
+  boomerangHit(w, dmg, vx, vy, owner, back = false) {
     this.fx.dust(w.x, w.centerY, 6);
     this.fx.sound('thunk');
     if (this.replaying) return;
+    // Задел врага на обратном пути — трюк «Возвращается!»
+    if (back && owner && w.team !== owner.team && this._trickLive()) this._trick.back = true;
     w.applyImpulse(Math.sign(vx || 1) * 170, -150);
     w.damage(dmg, 'бумеранг');
     this._countHit(w, dmg);
@@ -1907,6 +2063,8 @@ export default class GameScene extends Phaser.Scene {
     const shot = this._turnShot;
     this._turnShot = null;
     this.clip?.finish();
+    // Свой ход отыгран: трюк, если вышел, — плашкой, пока помнится выстрел
+    this._finishTrick();
     if (shot && shot.team === actedTeam && shot.hits === 0 && !this.gameOverUi) {
       const mockers = this.worms.filter((w) => w.alive && w.team !== actedTeam);
       for (const w of mockers) w.taunt();
@@ -1916,7 +2074,16 @@ export default class GameScene extends Phaser.Scene {
     this.explosionLog = [];
   }
 
-  onWormDied(worm) {
+  onWormDied(worm, cause = '') {
+    // Трюки: кого добил своим выстрелом и кто из них ушёл в воду; свой
+    // выбыл — «Ни царапины» уже не будет (утонувшему урона не наносят)
+    if (!this.replaying) {
+      if (worm.team === this.myTeamIndex) this._myHurt = true;
+      else if (this._trickLive()) {
+        this._trick.kills++;
+        if (cause === 'утонул') this._trick.drowns++;
+      }
+    }
     // Добивание — главное событие хода: мир замирает на полсекунды. Решающее
     // (команда выбита) — дольше, с наездом камеры и выкриком
     const decisive = this.checkVictory() !== null;
@@ -2156,6 +2323,11 @@ export default class GameScene extends Phaser.Scene {
       damage: this.battleStats.damage, firstClear, stars: newStars,
     }).total) : null;
     this._xpResult(this.xpGain);
+    // Достижения: итог боя и вехи по прогрессу — после опыта, звёзд и глав:
+    // они уже записаны. Открытое за бой — списком на экране итога, без плашек
+    this.achToasts.clear();
+    this._achBattleEnd(winner);
+    this._achResult();
 
     // Дуэль: реванш — новая дуэль с тем же соперником, или к списку дуэлей
     if (duel) {
