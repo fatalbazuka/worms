@@ -417,6 +417,42 @@ check('один в лобби никого не находит', findMatch(p('a'
       && !loadoutApplies(ascentMatch('up-1')));
 }
 
+// --- «Что дальше»: одна ближайшая цель по порядку важности ---
+{
+  const { nextGoal } = await import('../src/core/nextgoal.js');
+  const level = { level: 5, into: 100, need: 170 };
+  const base = { daily: { tasks: [], coins: 0 }, boxes: 0, level, ach: [] };
+  check('что дальше: выполненное задание — первым',
+    nextGoal({ ...base, boxes: 2, daily: { coins: 0, tasks: [{ id: 'hits6', progress: 6, claimed: false }] } })?.action === 'tasks');
+  check('что дальше: коробка ждёт', nextGoal({ ...base, boxes: 1 })?.action === 'skins');
+  const t = nextGoal({ ...base, daily: { coins: 0, tasks: [
+    { id: 'play3', progress: 1, claimed: false }, { id: 'hits6', progress: 4, claimed: false }] } });
+  check('что дальше: задание ближе всего к концу', t?.text === 'Попади ещё 2 раза — +60 монет', t?.text);
+  const lv = nextGoal({ ...base, level: { level: 5, into: 150, need: 170 } });
+  check('что дальше: уровень в паре боёв', lv?.text === 'ещё 1 бой до ур. 6: +100 монет', lv?.text);
+  check('что дальше: монеты до коробки', nextGoal({ ...base, level: { level: 9, into: 0, need: 290 }, daily: { tasks: [], coins: 460 } })?.text === 'до коробки 140 монет');
+  check('что дальше: всегда есть что сказать', nextGoal(base)?.kind === 'level');
+}
+
+// --- «Башня дня»: серия дней с победой и бонус на 3-й и 7-й ---
+{
+  const D = await import('../src/core/dailytower.js');
+  let st = D.normalizeDT(null);
+  const run = (day, won) => { const r = D.recordDailyRun(st, day, won); st = r.state; return r; };
+  const a = run('2026-11-18', true);
+  const again = run('2026-11-18', true);
+  run('2026-11-19', false);
+  const b = run('2026-11-19', true);
+  const c = run('2026-11-20', true);
+  check('башня дня: монеты за первую победу дня — один раз', a.coins === 60 && again.coins === 0 && again.bonus === 0);
+  check('башня дня: серия растёт по дням, бонус на 3-й', b.streak === 2 && c.streak === 3 && c.bonus === 100 && b.bonus === 0,
+    `${b.streak} ${c.streak} ${c.bonus}`);
+  check('башня дня: пропуск дня — серия с начала', D.streakNow(st, '2026-11-21') === 3 && D.streakNow(st, '2026-11-22') === 0
+    && D.recordDailyRun(st, '2026-11-23', true).streak === 1);
+  check('башня дня: облако — по более поздней победе',
+    D.mergeDT({ lastWin: '2026-11-20', streak: 3 }, { lastWin: '2026-11-19', streak: 9 }).streak === 3);
+}
+
 console.log(failures.length
   ? `\nне прошло: ${failures.length}`
   : '\nпроверки подбора пройдены');

@@ -20,6 +20,8 @@ import { ShotTrace } from '../ui/ShotTrace.js';
 import { KoLog } from '../ui/KoLog.js';
 import { koCause, koSummary } from '../core/knockouts.js';
 import { battleLoadout, loadoutApplies, loadoutAmmo } from '../core/loadout.js';
+import { currentGoal } from '../platform/nextgoal.js';
+import { plural } from '../core/nextgoal.js';
 import { font, UI, ensureButton } from '../ui/theme.js';
 import { WEAPONS, WEAPON_RARITY } from '../weapons/index.js';
 import { captureCommand, captureMove } from '../net/protocol.js';
@@ -57,6 +59,7 @@ import { EMOTE_BY_ID, EMOTE_COOLDOWN } from '../core/emotes.js';
 import { CHALLENGES, CHALLENGE_BY_ID, starsFor } from '../campaign/challenges.js';
 import { saveChallenge } from '../platform/challenges.js';
 import { grantCoins } from '../platform/daily.js';
+import { recordDailyTower } from '../platform/dailytower.js';
 import { battleXp, COS_LABEL } from '../core/levels.js';
 import { gainXp } from '../platform/levels.js';
 import { item as cosItem } from '../core/cosmetics.js';
@@ -1966,6 +1969,7 @@ export default class GameScene extends Phaser.Scene {
     const st = this.battleStats;
     const lines = [];
     if (this.match.mode === 'daily') lines.push(`Башня дня взята за ${this.myTurns} ${this.myTurns < 5 ? 'хода' : 'ходов'}`);
+    if (this.match.mode === 'daily' && this._daily?.place) lines.push(`${this._daily.place}-е место из ${this._daily.players}`);
     else lines.push(`Урон за бой: ${st.damage}${st.kills ? ` · добито: ${st.kills}` : ''}`);
     lines.push(`Ходов: ${this.turn.turnNumber}`);
     const bot = telegramConfig().bot;
@@ -2514,7 +2518,7 @@ export default class GameScene extends Phaser.Scene {
       const next = this._nextAction(winner >= 0 && winner === mine);
       this.gameOverUi.push(next
         ? this._overButton(-140, next.label, () => this._startNext(next.match), 'next')
-        : this._overButton(-140, 'Ещё раз', () => this.scene.restart(), 'again'));
+        : this._overButton(-140, this.match.mode === 'daily' ? 'Ещё попытка' : 'Ещё раз', () => this.scene.restart(), 'again'));
       this.gameOverUi.push(this._overButton(140, 'В меню', () => this.toMenu(), 'menu'));
       // Позвать друга — прямо отсюда: после боя хочется, а до вкладки
       // «Задания» никто не доходит. По ссылке — обоим по коробке
@@ -2531,7 +2535,13 @@ export default class GameScene extends Phaser.Scene {
         if (!this.gameOverUi || !this.clip?.best) return;
         this.gameOverUi.push(this._overButton(0, '🎬 Клип', () => this._clipMenu(sub), 'clip', 184));
       });
-      if (link && this.match.mode !== 'hotseat' && solo) {
+      if (link && this.match.mode === 'daily') {
+        // Башня дня одна на всех: делимся местом — друг идёт её побить
+        this.gameOverUi.push(this._overButton(story ? 140 : 0, 'Поделиться', () => {
+          trackStep('invite');
+          shareLink(link, this._dailyShareText());
+        }, 'share', 92));
+      } else if (link && this.match.mode !== 'hotseat' && solo) {
         this.gameOverUi.push(this._overButton(story ? 140 : 0, 'Позвать друга', () => {
           trackStep('invite');
           shareLink(link, won
@@ -2570,31 +2580,49 @@ export default class GameScene extends Phaser.Scene {
     this.scene.restart();
   }
 
-  /** Башня дня: монеты за первую победу дня и место в таблице. */
+  /**
+   * Башня дня: монеты за первую победу дня, серия дней и карточка итога
+   * «Башня дня · 4 хода · 3-е место из 27» — над заголовком, место
+   * приходит с сервера. Кнопки «Поделиться» и «Ещё попытка» — в общем ряду.
+   */
   _dailyResult(won) {
     const day = this.match.day;
     const hp = this.worms.filter((w) => w.team === this.myTeamIndex && w.alive).reduce((a, w) => a + w.health, 0);
-    let st = {};
-    try { st = JSON.parse(localStorage.getItem('worms.dailyTower.v1') ?? '{}') || {}; } catch { st = {}; }
-    let coins = 0;
-    if (won && st.rewarded !== day) {
-      coins = 60;
-      grantCoins(coins);
-      st.rewarded = day;
-      try { localStorage.setItem('worms.dailyTower.v1', JSON.stringify(st)); } catch { /* инкогнито */ }
-    }
-    const head = won ? `Башня дня: ${this.myTurns} ${this.myTurns < 5 ? 'хода' : 'ходов'}` : 'Башня дня: не взята';
-    const t = this.rig.ui(this.add.text(CFG.VIEW_W / 2, CFG.VIEW_H / 2 + 62,
-      `${head}${coins ? ` · +${coins} монет` : ''} · отправляю…`, font(18, 800, UI.accent))
-      .setOrigin(0.5).setScrollFactor(0).setDepth(DEPTH.HUD + 11)
-      .setWordWrapWidth(CFG.VIEW_W - 40).setAlign('center'));
-    this.gameOverUi?.push(t);
-    submitDailyTower({ day, won, turns: this.myTurns, hp }).then((res) => {
+    const res = recordDailyTower(won, day);
+    const turns = `${this.myTurns} ${plural(this.myTurns, ['ход', 'хода', 'ходов'])}`;
+    this._daily = { won, turns, place: null, players: null };
+    const W = CFG.VIEW_W, cx = W / 2, y = CFG.VIEW_H / 2 - 168;
+    const cw = Math.min(W - 40, 560), ch = 96;
+    const ui = (o, d = 11) => { this.rig.ui(o.setScrollFactor(0).setDepth(DEPTH.HUD + d)); this.gameOverUi?.push(o); return o; };
+    const g = ui(this.add.graphics());
+    g.fillStyle(0x10131a, 0.9).fillRoundedRect(cx - cw / 2, y - ch / 2, cw, ch, 20);
+    g.lineStyle(3, 0xffd23f, 0.85).strokeRoundedRect(cx - cw / 2, y - ch / 2, cw, ch, 20);
+    const head = won ? `Башня дня · ${turns}` : 'Башня дня не взята';
+    const t = ui(this.add.text(cx, y - 18, `${head} · отправляю…`, font(22, 800, '#ffe27a')).setOrigin(0.5));
+    const extra = [];
+    if (res.coins) extra.push(`+${res.coins} монет за первую победу дня`);
+    if (res.streak) extra.push(`серия: ${res.streak} ${plural(res.streak, ['день', 'дня', 'дней'])}`);
+    if (res.bonus) extra.push(`+${res.bonus} монет за серию`);
+    if (!won) extra.push('серия держится, пока башня берётся каждый день');
+    const t2 = ui(this.add.text(cx, y + 20, extra.join(' · '), font(17, 700, res.bonus ? '#8ef0a0' : UI.textDim)).setOrigin(0.5));
+    for (const o of [t, t2]) if (o.width > cw - 24) o.setScale((cw - 24) / o.width);
+    submitDailyTower({ day, won, turns: this.myTurns, hp }).then((r) => {
       if (!t.active) return;
-      if (!res?.me) { t.setText(`${head}${coins ? ` · +${coins} монет` : ''} · без сервера не в таблице`); return; }
-      const best = res.accepted ? 'лучшая попытка' : 'прежняя попытка лучше';
-      t.setText(`${head}${coins ? ` · +${coins} монет` : ''} · место ${res.me.place} из ${res.players} · ${best}`);
+      if (!r?.me) { t.setText(`${head} · без сервера не в таблице`); return; }
+      this._daily.place = r.me.place;
+      this._daily.players = r.players;
+      // Таблица хранит лучшую попытку: место — её, а не этой
+      t.setText(`${head} · ${r.me.place}-е место из ${r.players}${r.accepted ? '' : ' (лучшая — прежняя)'}`);
+      if (t.width > cw - 24) t.setScale((cw - 24) / t.width);
     });
+  }
+
+  /** Текст «Поделиться» после «Башни дня». */
+  _dailyShareText() {
+    const d = this._daily;
+    if (!d?.won) return 'Попробуй «Башню дня» в Smiles — одна башня на всех, кто быстрее?';
+    const place = d.place ? `, ${d.place}-е место из ${d.players}` : '';
+    return `Башня дня: ${d.turns}${place} 💥 Побьёшь?`;
   }
 
   /** Звёзды испытания на экране итога. @returns {number} сколько звёзд добыто впервые */
@@ -2672,6 +2700,8 @@ export default class GameScene extends Phaser.Scene {
     const toNext = (st) => `до ур. ${st.level + 1} ещё ${st.need - st.into}`;
     const note = ui(this.add.text(left + bw / 2, by + 16, toNext(gain.before), font(16, 700, UI.textDim))
       .setOrigin(0.5, 0));
+    // Что дальше — строкой под полосой: тяга в следующий бой
+    this._goalResult(cx, by + (H > W ? 62 : 44), ui);
     this.tweens.add({ targets: plus, scale: 1, duration: 320, delay: 600, ease: 'Back.easeOut' });
 
     const to = (k, onComplete) => this.tweens.add({
@@ -2690,6 +2720,28 @@ export default class GameScene extends Phaser.Scene {
         this._levelUpCard(gain);
       });
     });
+  }
+
+  /**
+   * «Что дальше»: одна ближайшая цель (core/nextgoal.js) с полоской
+   * прогресса. Ведёт в меню (задания, коробки, дорога наград) — строка
+   * нажимается; цель «просто сыграй» нажимать незачем, для неё есть «Ещё раз».
+   */
+  _goalResult(cx, y, ui) {
+    if (this.match.tutorial) return;
+    const goal = currentGoal();
+    if (!goal) return;
+    const menu = { tasks: 'tasks', skins: 'skins', road: 'road', achievements: 'achievements' }[goal.action];
+    const t = ui(this.add.text(cx, y, `🎯 ${goal.text}${menu ? ' ›' : ''}`, font(19, 800, menu ? '#8ef0a0' : '#ffe9c2'))
+      .setOrigin(0.5).setStroke('#10131a', 5));
+    if (t.width > CFG.VIEW_W - 40) t.setScale((CFG.VIEW_W - 40) / t.width);
+    const bw = Math.min(t.displayWidth, 320);
+    ui(this.add.rectangle(cx - bw / 2, y + 17, bw, 5, 0x0b1220, 0.9).setOrigin(0, 0.5));
+    ui(this.add.rectangle(cx - bw / 2, y + 17, Math.max(3, bw * Math.min(1, goal.progress)), 5, 0x8ef0a0).setOrigin(0, 0.5));
+    if (!menu) return;
+    t.setInteractive({ useHandCursor: true });
+    t.on('pointerup', () => this.toMenu(menu));
+    (this.overButtons ??= {}).goal = { x: cx, y };
   }
 
   /** Что в подарке — одной строкой: «+150 монет · коробка со скином». */
@@ -2795,10 +2847,13 @@ export default class GameScene extends Phaser.Scene {
       this.registry.set('returnTo', returnTo ?? 'duels');
     }
     forgetStartRoom();
+    // «Что дальше» ведёт в свой раздел меню — это важнее списка режима
+    const goal = ['tasks', 'skins', 'road', 'achievements'].includes(returnTo) && this.match.mode !== 'duel';
+    if (goal) this.registry.set('returnTo', returnTo);
     // Из испытания — обратно к списку испытаний
-    if (this.match.mode === 'challenge' && !this.match.tutorial) this.registry.set('returnTo', 'challenges');
-    if (this.match.mode === 'ascent') this.registry.set('returnTo', 'ascent');
-    if (this.match.mode === 'daily') this.registry.set('returnTo', 'daily');
+    else if (this.match.mode === 'challenge' && !this.match.tutorial) this.registry.set('returnTo', 'challenges');
+    else if (this.match.mode === 'ascent') this.registry.set('returnTo', 'ascent');
+    else if (this.match.mode === 'daily') this.registry.set('returnTo', 'daily');
     if (new URLSearchParams(location.search).has('room')) {
       const url = new URL(location.href);
       url.searchParams.delete('room');

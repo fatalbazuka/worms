@@ -11,6 +11,9 @@ import { AFFIXES, DEFAULT_AFFIXES } from '../entities/Affixes.js';
 import { ascentDone } from '../platform/ascent.js';
 import { challengeStars } from '../platform/challenges.js';
 import { onboardStage, isNewbie } from '../platform/onboard.js';
+import { currentGoal } from '../platform/nextgoal.js';
+import { dailyTowerStreak, dailyTowerWon } from '../platform/dailytower.js';
+import { streakBonus } from '../core/dailytower.js';
 import { SHAPES } from '../core/shapes.js';
 import { randomRoom, copyText } from '../net/transport.js';
 import { isCasualRoom, isTowerRoom } from '../net/rooms.js';
@@ -162,6 +165,12 @@ export default class MenuScene extends Phaser.Scene {
     if (this.registry.get('returnTo') === 'duels') {
       this.registry.set('returnTo', null);
       this.time.delayedCall(30, () => this.showDuels());
+    }
+    // «Что дальше» с экрана итога — в свой раздел
+    const goalTo = { tasks: 'showTasks', skins: 'showSkins', road: 'showRoad', achievements: 'showAchievements' }[this.registry.get('returnTo')];
+    if (goalTo) {
+      this.registry.set('returnTo', null);
+      this.time.delayedCall(30, () => this[goalTo]());
     }
     if (this.registry.get('returnTo') === 'root') this.registry.set('returnTo', null);
     const back = this.registry.get('returnTour');
@@ -620,6 +629,8 @@ export default class MenuScene extends Phaser.Scene {
     // Партия оборвалась (Telegram перезапустился, погас экран), а мы
     // открылись без ссылки: предлагаем вернуться, пока соперник ждёт
     let areaBottom = playY - playH / 2 - 22;
+    // «Что дальше» — одна строка над «Играть». Новичку не нужна: ему — «Играть»
+    if (!isNewbie()) areaBottom = this._goalLine(cx, areaBottom - 16, Math.min(W - 72, 560)) - 22;
     const pending = pendingSession();
     if (pending && Date.now() - pending.at < 15 * 60 * 1000) {
       const y = areaBottom - 30;
@@ -687,6 +698,31 @@ export default class MenuScene extends Phaser.Scene {
         this.buttons.box = { x: bx, y: by - 20 * k + this.oy, w: 50 * k, h: 46 * k, enabled: true };
       }
     }
+  }
+
+  /**
+   * Ближайшая цель (core/nextgoal.js) строкой с полоской прогресса. Тап —
+   * в её раздел: задания, коробки, дорога наград, достижения.
+   * @returns {number} верхний край строки
+   */
+  _goalLine(cx, y, w) {
+    const goal = currentGoal();
+    if (!goal) return y + 16;
+    const go = { tasks: () => this.showTasks(), skins: () => this.showSkins(), road: () => this.showRoad(),
+      achievements: () => { this.achFrom = 'root'; this.showAchievements(); } }[goal.action];
+    const t = this.add.text(cx, y - 8, `🎯 ${goal.text}${go ? ' ›' : ''}`, font(20, 800, go ? '#8ef0a0' : '#ffe9c2'))
+      .setOrigin(0.5);
+    if (t.width > w) t.setScale(w / t.width);
+    const bw = Math.min(t.displayWidth, 320);
+    this.items.push(t,
+      this.add.rectangle(cx - bw / 2, y + 12, bw, 5, 0x0b1220, 0.9).setOrigin(0, 0.5),
+      this.add.rectangle(cx - bw / 2, y + 12, Math.max(3, bw * Math.min(1, goal.progress)), 5, 0x8ef0a0).setOrigin(0, 0.5));
+    if (go) {
+      t.setInteractive({ useHandCursor: true });
+      t.on('pointerup', () => { if (!this._dragging) { haptic('tap'); go(); } });
+      this.buttons.goal = { x: cx, y: y - 8 + this.oy, w: t.displayWidth, h: 32, enabled: true };
+    }
+    return y - 24;
   }
 
   // ------------------------------------------------------------- уровень
@@ -1766,7 +1802,15 @@ export default class MenuScene extends Phaser.Scene {
     if (res) {
       const head = res.players ? `сегодня сыграли: ${res.players}` : 'сегодня ещё никто не играл — будь первым';
       this.items.push(this.add.text(cx, y, head, font(this.fs(14), 700, UI.textDim)).setOrigin(0.5, 0));
-      y += 40;
+      y += 34;
+      // Планка дня — чтобы было что побить ещё до боя
+      const best = res.top[0];
+      if (best?.won) {
+        this.items.push(this.add.text(cx, y, `лучший сегодня: ${best.turns} ${best.turns < 5 ? 'хода' : 'ходов'} — ${best.name}`,
+          font(this.fs(16), 800, '#ffe27a')).setOrigin(0.5, 0));
+        y += 36;
+      }
+      y += 6;
       res.top.slice(0, this.portrait ? 10 : 5).forEach((r, i) => {
         const what = r.won ? `${r.turns} ${r.turns < 5 ? 'хода' : 'ходов'} · ${r.hp} hp` : 'не взял';
         this.items.push(this.add.text(cx - w / 2, y, `${i + 1}. ${r.name}`, font(this.fs(15), 800, i < 3 ? UI.accent : UI.text)).setOrigin(0, 0));
@@ -1783,7 +1827,19 @@ export default class MenuScene extends Phaser.Scene {
       this.items.push(this.add.text(cx, y, 'таблица дня — в Telegram', font(this.fs(14), 700, UI.textDim)).setOrigin(0.5, 0));
       y += 40;
     }
-    this._button('daily-go', cx, Math.max(y + 70, this.portrait ? 640 : 0), 'В бой', 'первая победа дня — +60 монет',
+    // Своя серия «Башни дня»: дни подряд с победой, бонус на 3-й и 7-й
+    const streak = dailyTowerStreak(day);
+    let next = streak + 1;
+    while (!streakBonus(next)) next++;
+    const left = next - streak;
+    const streakLine = streak
+      ? `серия башни: ${streak} ${plural(streak, 'день', 'дня', 'дней')} · ещё ${left} ${plural(left, 'день', 'дня', 'дней')} — +${streakBonus(next)} монет`
+      : `бери башню каждый день: на 3-й день подряд +${streakBonus(3)} монет`;
+    this.items.push(this.add.text(cx, y + 6, streakLine, font(this.fs(15), 800, streak ? '#8fe3ff' : UI.textDim)).setOrigin(0.5, 0));
+    y += 40;
+    const won = dailyTowerWon(day);
+    this._button('daily-go', cx, Math.max(y + 70, this.portrait ? 640 : 0), won ? 'Ещё попытка' : 'В бой',
+      won ? 'в таблице — лучшая попытка дня' : 'первая победа дня — +60 монет',
       () => this.start(dailyMatch(day)),
       this.portrait ? { variant: 'primary', w: 360, h: 96, titleSize: 30 } : { variant: 'primary', w: 320, h: 74 });
     this._back(() => this.showModes());

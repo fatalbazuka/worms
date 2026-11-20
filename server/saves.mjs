@@ -11,7 +11,7 @@
 /** Какие ключи можно хранить — те же, что в localStorage игры. */
 export const SAVE_KEYS = new Set([
   'worms.skins.v1', 'worms.daily.v1', 'worms.challenges.v1', 'worms.ascent.v1', 'worms.cosmetics.v1',
-  'worms.level.v1', 'worms.ach.v1',
+  'worms.level.v1', 'worms.ach.v1', 'worms.dailytower.v1',
 ]);
 const MAX_VALUE = 32 * 1024;
 
