@@ -22,6 +22,7 @@ export default class BootScene extends Phaser.Scene {
 
     this.load.on('loaderror', (file) => missing.add(file.key));
     this.load.on('progress', (p) => label.setText(`Загрузка… ${Math.round(p * 100)}%`));
+    this.label = label;
 
     for (const [key, path] of Object.entries(IMAGES)) {
       this.load.image(key, path);
@@ -39,7 +40,30 @@ export default class BootScene extends Phaser.Scene {
     }
   }
 
+  /**
+   * Второй заход за тем, что не догрузилось. На слабом мобильном интернете
+   * часть картинок обрывалась, и вместо бойцов рисовались зелёные
+   * квадраты-заглушки до следующего запуска. Один повтор почти всегда
+   * спасает: обрыв случайный, а не «файла нет».
+   */
   create() {
+    if (missing.size && !this.retried) {
+      this.retried = true;
+      const again = [...missing];
+      missing.clear();
+      for (const key of again) {
+        if (IMAGES[key]) this.load.image(key, IMAGES[key]);
+        else if (key.startsWith('emoji_')) this.load.svg(key, `assets/emoji/${key.slice(6)}.svg`, { width: 128, height: 128 });
+        else if (SHEETS[key] && meta(key)) {
+          const m = meta(key);
+          this.load.spritesheet(key, `assets/${key}.png`, { frameWidth: m.frameWidth, frameHeight: m.frameHeight });
+        }
+      }
+      this.label?.setText('Догружаю…');
+      this.load.once('complete', () => this.create());
+      this.load.start();
+      return;
+    }
     for (const [key, def] of Object.entries(SHEETS)) {
       if (!def.anims || missing.has(key) || !this.textures.exists(key)) continue;
       const total = this.textures.get(key).frameTotal - 1; // минус служебный __BASE
