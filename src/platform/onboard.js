@@ -42,3 +42,14 @@ export function markWon() {
   if (st.won) return;
   try { localStorage.setItem(KEY, JSON.stringify({ ...st, won: 1 })); } catch { /* инкогнито */ }
 }
+
+/** Новичок: ещё ни разу не победил по-настоящему — меню без лишних окон и точек. */
+export function isNewbie() { return onboardStage() !== 'free'; }
+
+/** Награда за обучение — один раз на устройство. @returns {boolean} выдать ли сейчас */
+export function claimTutorialBox() {
+  const st = read();
+  if (st.box) return false;
+  try { localStorage.setItem(KEY, JSON.stringify({ ...st, box: 1 })); } catch { return false; }
+  return true;
+}

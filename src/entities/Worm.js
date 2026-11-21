@@ -640,6 +640,9 @@ export class Worm {
 
   damage(amount, cause = '') {
     if (!this.alive || amount <= 0) return;
+    // В обучении своего бойца не ранит: проиграть урок собственным взрывом
+    // нельзя — «Поражение» на первой минуте игры закрывало вкладку
+    if (this.scene.match?.tutorial && this.team === this.scene.myTeamIndex) return;
     this.health = Math.max(0, this.health - amount);
     // Пару секунд лицо помнит, что было больно; после падения — кружится голова
     this.hurtPose = cause === 'падение' ? 'worm_dizzy' : 'worm_hurt';
@@ -647,6 +650,8 @@ export class Worm {
     this.flashUntil = this.scene.time.now + 110;     // белая вспышка: «попали»
     this.squash = 0.8;
     this.scene.fx.damageNumber(this.x, this.centerY - 10, amount);
+    // Сцене — для достижений: кого задел выстрел, досталось ли своим
+    this.scene.onWormHurt?.(this, amount, cause);
     if (this.health <= 0) this.kill(cause);
   }
 

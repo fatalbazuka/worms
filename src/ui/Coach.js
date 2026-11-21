@@ -2,30 +2,36 @@ import { CFG, DEPTH } from '../config.js';
 import { WEAPONS } from '../weapons/index.js';
 import { font } from './theme.js';
 import { haptic } from '../platform/telegram.js';
+import { solveShot, placeTarget } from './coachAim.js';
 
 /**
  * Пошаговая тренировка новичка — в испытании «Первый выстрел» (match.tutorial).
- * Учит тому, чем в бою пользуются каждый ход, по одному приёму за раз:
+ * Сначала самое весёлое — взрыв, потом остальное, по одному приёму за раз:
  *
- *   1. walk   — стиком дойти до флажка;
- *   2. jump   — прыжок (рывок стика вверх или круглая кнопка);
- *   3. hook   — коснуться светящейся точки: трос подтянет туда;
- *   4. weapon — выбрать гранату на ленте сверху;
- *   5. shoot  — потянуть рычаг от мишени и отпустить.
+ *   1. shoot  — базука в руке (взрыв сразу, без запала): потянуть рычаг от мишени и отпустить;
+ *   2. walk   — стиком дойти до флажка;
+ *   3. jump   — прыжок (рывок стика вверх или круглая кнопка);
+ *   4. hook   — коснуться светящейся точки: трос подтянет туда;
+ *   5. finish — добить мишень; после промаха «палец» показывает точный жест.
+ *
+ * Мишень живучая (100 жизней, граната снимает 50), так что первый выстрел
+ * её почти никогда не добивает, а если добьёт — тоже хорошо: урок короче,
+ * ходьбе и тросу научат подсказки в следующих боях.
  *
  * Шаг засчитывается сам, как только игрок это сделал. Над шагом — панель с
- * номером и одной строкой, к нужному месту прыгает стрелка. Пока не дошли до
- * выстрела, ход не сгорает и рычаг заперт: случайно выстрелить на первом же
- * шаге — значит пропустить половину урока. Звезда за испытание и всё, что
- * дальше, — как у обычного «Первого выстрела».
+ * номером и одной строкой, к нужному месту прыгает стрелка. Пока целишься,
+ * ход не сгорает; на шагах ходьбы, прыжка и троса рычаг заперт — случайно
+ * выстрелить посреди урока значит пропустить его. Звезда за испытание и
+ * всё, что дальше, — как у обычного «Первого выстрела».
  */
 const STEPS = [
+  { id: 'shoot', title: 'Выстрел', text: 'Тяни жёлтый рычаг ОТ мишени и отпусти' },
   { id: 'walk', title: 'Ходьба', text: 'Веди стик внизу слева в сторону — дойди до флажка' },
   { id: 'jump', title: 'Прыжок', text: 'Рывок стика вверх или круглая кнопка справа — прыжок' },
   { id: 'hook', title: 'Трос', text: 'Коснись светящейся точки — трос подтянет туда' },
-  { id: 'weapon', title: 'Оружие', text: 'Выбери гранату на ленте сверху' },
-  { id: 'shoot', title: 'Выстрел', text: 'Тяни жёлтый рычаг ОТ мишени и отпусти' },
+  { id: 'finish', title: 'Добей', text: 'Мишень ещё стоит — тяни рычаг и добей её!' },
 ];
+const SHOOTS = new Set(['shoot', 'finish']);
 
 export class Coach {
   constructor(scene) {
@@ -41,27 +47,70 @@ export class Coach {
   get current() { return STEPS[this.step] ?? null; }
   get finished() { return this.step >= STEPS.length; }
 
-  /** Рычаг и натяжка с бойца — только на последнем шаге. */
-  get lockShot() { return !this.finished && this.current?.id !== 'shoot'; }
+  /** Рычаг и натяжка с бойца — только на шагах выстрела. */
+  get lockShot() { return !this.finished && !SHOOTS.has(this.current?.id); }
   /** Подсказки игры — только к своему шагу, иначе две вещи сразу. */
-  get wantsSlingHint() { return this.current?.id === 'shoot'; }
+  get wantsSlingHint() { return SHOOTS.has(this.current?.id); }
   get wantsHookHint() { return this.current?.id === 'hook'; }
 
   _build() {
     const s = this.scene;
     const W = CFG.VIEW_W;
-    const y = 214;            // ниже ленты оружия: к ней указывает стрелка шага «Оружие»
+    const hud = s.hud;
+    const topH = (hud.strip ? hud.strip.y + hud.strip.r + 10 : 110);
+    const L = this._layout(W, topH);
+    const y = L.y;
     const fix = (o, d = DEPTH.HUD + 6) => { s.rig.ui(o.setScrollFactor(0).setDepth(d)); this.items.push(o); return o; };
     this.panel = fix(s.add.graphics());
-    this.titleText = fix(s.add.text(W / 2, y + 14, '', font(23, 800, '#5a4413')).setOrigin(0.5, 0), DEPTH.HUD + 7);
-    this.bodyText = fix(s.add.text(W / 2, y + 50, '', font(28, 800, '#1a1408'))
-      .setOrigin(0.5, 0).setAlign('center').setWordWrapWidth(W - 90), DEPTH.HUD + 7);
+    this.titleText = fix(s.add.text(L.cx, y + L.titleY, '', font(L.title, 800, '#5a4413')).setOrigin(0.5, 0), DEPTH.HUD + 7);
+    this.bodyText = fix(s.add.text(L.cx, y + L.bodyY, '', font(L.body, 800, '#1a1408'))
+      .setOrigin(0.5, 0).setAlign('center').setWordWrapWidth(L.w - L.pad * 2), DEPTH.HUD + 7);
     this.arrow = fix(s.add.graphics(), DEPTH.HUD + 8);
-    this.cheer = fix(s.add.text(W / 2, y + 190, '', font(40, 800, '#8ef0a0')).setOrigin(0.5).setStroke('#10131a', 6).setAlpha(0), DEPTH.HUD + 8);
+    this.cheer = fix(s.add.text(L.cx, L.cheerY, '', font(40, 800, '#8ef0a0')).setOrigin(0.5).setStroke('#10131a', 6).setAlpha(0), DEPTH.HUD + 8);
+    // Лишнее на первой минуте — приглушить: верхняя полоса (ветер, команды,
+    // лента оружия) и плашка троса, пока до неё не дошли. Касания проходят
+    // насквозь: это только тень
+    this.dimTop = fix(s.add.rectangle(0, -400, W, topH + 400, 0x0b1021, 0.6).setOrigin(0, 0), DEPTH.HUD + 5);
+    const hp = hud.hookPlate;
+    this.dimHook = hp
+      ? fix(s.add.rectangle(hp.x, hp.y, hp.displayWidth + 8, hp.displayHeight + 8, 0x0b1021, 0.6), DEPTH.HUD + 5)
+      : null;
     this.flagGfx = s.rig.world(s.add.graphics().setDepth(DEPTH.WORM - 2));
     this.items.push(this.flagGfx);
+    this.layout = L;
     this.panelY = y;
     this._show();
+    // Низ панели нужен сразу: плашка первого хода встаёт под неё
+    this.panelBottom = y + this._panelH();
+  }
+
+  /**
+   * Где панель. В портрете — во всю ширину под лентой оружия: экран
+   * высокий, боец и мишень далеко внизу. В альбомной высота всего 720, и
+   * та же панель на y=214 ложилась ровно на этаж бойца, а плашка хода под
+   * ней — на него самого. Поэтому в альбомной панель компактная и встаёт
+   * в верхнюю полосу, между лентой оружия и кнопками «☺ ⋯»: полоса на
+   * время обучения всё равно приглушена.
+   */
+  _layout(W, topH) {
+    const hud = this.scene.hud;
+    const port = { y: 214, x: 28, w: W - 56, title: 23, body: 28, titleY: 14, bodyY: 50, pad: 17, tail: 18 };
+    if (W <= CFG.VIEW_H) return { ...port, cx: W / 2, cheerY: port.y + 190 };
+    const st = hud.strip;
+    const left = (hud.buttons?.arsenal?.x ?? 0) + 30 + 16;
+    const right = W - 14 - 60 - 68 - 18;
+    const land = { title: 18, body: 24, titleY: 7, bodyY: 29, pad: 22, tail: 9 };
+    // Полосы не хватает (узкий экран) — под ней, но тоже компактно
+    const inStrip = st && right - left >= 520;
+    const x = inStrip ? left : 28;
+    const w = inStrip ? right - left : W - 56;
+    const y = inStrip ? st.y - st.r - 4 : topH + 4;
+    return { ...land, x, w, y, cx: x + w / 2, cheerY: Math.round(CFG.VIEW_H * 0.3) + 4 };
+  }
+
+  _panelH() {
+    const L = this.layout;
+    return L.bodyY + this.bodyText.height + L.tail;
   }
 
   _show() {
@@ -71,16 +120,42 @@ export class Coach {
     this.bodyText.setText(st.text);
   }
 
+  /**
+   * Точный жест для «Добей» — после первого промаха. Считается раз на ход
+   * и место бойца: перебор баллистики каждый кадр был бы лишним.
+   */
+  get aimSolution() {
+    if (this.current?.id !== 'finish' || this.misses < 1) return null;
+    const s = this.scene, w = s.turn.activeWorm;
+    if (!w || !s.canPlayerAct()) return null;
+    const key = `${s.turn.turnNumber}:${Math.round(w.x / 8)}:${Math.round(w.y / 8)}:${s.turn.weaponIndex}`;
+    if (this._solKey !== key) {
+      this._solKey = key;
+      const foe = s.worms.find((f) => f.alive && f.team !== w.team);
+      this._sol = solveShot(s, w, foe, s.turn.weapon);
+    }
+    return this._sol;
+  }
+
+  /** Игрок выстрелил (GameScene): шаг выстрела сделан. */
+  onShot() {
+    // Шаг «Добей» не закрывается выстрелом: он длится до конца боя, а после
+    // промаха панель подсказывает, как поправиться
+    if (this.current?.id === 'shoot') this._next('Бабах!');
+  }
+
   /** Шаг сделан: «Отлично!», звук, вибрация — и к следующему. */
-  _next() {
+  _next(cheer = null) {
     const s = this.scene;
     s.fx?.sound('pickup');
     haptic('win');
-    this.cheer.setText(['Отлично!', 'Есть!', 'Так держать!', 'Супер!'][this.step % 4]).setAlpha(1).setScale(0.6);
+    this.cheer.setText(cheer ?? ['Отлично!', 'Есть!', 'Так держать!', 'Супер!'][this.step % 4]).setAlpha(1).setScale(0.6);
     s.tweens.add({ targets: this.cheer, scale: 1, duration: 260, ease: 'Back.easeOut' });
     s.tweens.add({ targets: this.cheer, alpha: 0, delay: 800, duration: 300 });
     this.step++;
     this.doneAt = s.time.now;
+    this.shotTurn = undefined;   // промах считаем от хода, в который начался шаг
+    this.armed = false;          // к шагу выстрела — снова базука в руке
     if (this.finished) { this.destroy(); return; }
     this._show();
   }
@@ -109,9 +184,16 @@ export class Coach {
     if (this.finished || !this.items.length) return;
     const w = s.turn.activeWorm;
     const mine = w && w.team === 0 && s.canPlayerAct();
-    // Пока учимся, ход не сгорает
-    if (mine && this.lockShot) s.turn.timeLeft = Math.max(s.turn.timeLeft, 25);
+    // Пока учимся и целимся, ход не сгорает (отход после выстрела — по часам)
+    if (mine && s.turn.state === 'aim' && !s.turn.retreating) s.turn.timeLeft = Math.max(s.turn.timeLeft, 25);
     this._drawPanel(mine);
+    // Мишень — на виду и в досягаемости: один раз, когда все приземлились
+    if (mine && !this.targetPlaced && !s.landing()) {
+      this.targetPlaced = true;
+      const foe = s.worms.find((f) => f.alive && f.team !== w.team);
+      placeTarget(s, w, foe, WEAPONS.find((x) => x.id === 'bazooka'));
+    }
+    this.dimHook?.setVisible(this.current?.id !== 'hook');
     this.arrow.clear();
     this.flagGfx.clear();
     if (!mine) return;
@@ -144,20 +226,21 @@ export class Coach {
         if (w.zip) this._next();
         break;
       }
-      case 'weapon': {
-        const gi = WEAPONS.findIndex((x) => x.id === 'grenade');
-        const chip = hud.strip?.chips.find((c) => c.index === gi);
-        if (chip) this._drawArrow(chip.cx, hud.strip.y + hud.strip.r + 6, 'up');
-        if (s.turn.weaponIndex === gi) this._next();
-        break;
-      }
-      case 'shoot': {
+      case 'shoot':
+      case 'finish': {
+        // Базука — сразу в руке: рвётся при ударе, взрыв виден сразу. Граната
+        // с запалом лежала три секунды, и новички решали, что выстрела не было
+        if (!this.armed) {
+          const gi = WEAPONS.findIndex((x) => x.id === 'bazooka');
+          if (gi >= 0 && s.turn.weaponIndex !== gi) s.turn.setWeaponIndex(gi);
+          this.armed = true;
+        }
         const p = hud.slingPad;
         if (p) this._drawArrow(p.x, p.y - p.r - 26, 'down');
-        // Промах: ход ушёл к мишени и вернулся — подбодрить и поправить
-        if (s.turn.turnNumber > (this.shotTurn ?? s.turn.turnNumber)) {
+        // Промах на добивании: ход ушёл к мишени и вернулся — подбодрить и поправить
+        if (this.current.id === 'finish' && s.turn.turnNumber > (this.shotTurn ?? s.turn.turnNumber)) {
           this.misses++;
-          this.bodyText.setText('Мимо — не беда! Тяни дальше, если недолёт, и выше, если упёрлось в пол');
+          this.bodyText.setText('Мимо — не беда! Повтори за пальцем: тяни рычаг так же далеко и отпусти');
         }
         this.shotTurn = s.turn.turnNumber;
         break;
@@ -167,16 +250,20 @@ export class Coach {
   }
 
   _drawPanel(mine) {
-    const W = CFG.VIEW_W, y = this.panelY;
-    const h = 50 + this.bodyText.height + 18;
+    const L = this.layout, y = this.panelY;
+    const h = this._panelH();
     const g = this.panel;
     g.clear();
-    g.fillStyle(0xffe27a, mine ? 0.97 : 0.6).fillRoundedRect(28, y, W - 56, h, 18);
-    g.lineStyle(3, 0x1a1408, 0.9).strokeRoundedRect(28, y, W - 56, h, 18);
+    this.panelBottom = y + h;
+    const r = L.title < 20 ? 14 : 18;
+    g.fillStyle(0xffe27a, mine ? 0.97 : 0.6).fillRoundedRect(L.x, y, L.w, h, r);
+    g.lineStyle(3, 0x1a1408, 0.9).strokeRoundedRect(L.x, y, L.w, h, r);
     // Кружки шагов
+    const right = L.x + L.w - (L.title < 20 ? 18 : 28);
+    const dy = L.title < 20 ? 15 : 24;
     STEPS.forEach((_, i) => {
       g.fillStyle(i < this.step ? 0x3fa45b : i === this.step ? 0x1a1408 : 0x1a1408, i <= this.step ? 1 : 0.25)
-        .fillCircle(W - 56 - (STEPS.length - 1 - i) * 18, y + 24, 6);
+        .fillCircle(right - (STEPS.length - 1 - i) * (L.title < 20 ? 15 : 18), y + dy, L.title < 20 ? 5 : 6);
     });
     this.titleText.setAlpha(mine ? 1 : 0.6);
     this.bodyText.setAlpha(mine ? 1 : 0.6);

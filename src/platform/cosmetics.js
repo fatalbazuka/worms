@@ -2,7 +2,7 @@
  * Украшения игрока: на устройстве и копией в облаке Telegram.
  * Правила и каталог — core/cosmetics.js, монеты — platform/daily.js.
  */
-import { normalizeCos, mergeCos, buyCos, equipCos } from '../core/cosmetics.js';
+import { normalizeCos, mergeCos, buyCos, equipCos, item } from '../core/cosmetics.js';
 import { cloudReady, cloudLoad, cloudSave } from './cloud.js';
 import { coins, payCoins } from './daily.js';
 
@@ -33,6 +33,17 @@ export function buyCosmetic(kind, id) {
   if (!payCoins(res.price)) return 'poor';
   save(res.state);
   return 'ok';
+}
+
+/**
+ * Подарить вещь (награда за уровень): в собранные, но не надевать — что
+ * носить, игрок решает сам. @returns {boolean} false — уже была или нет такой
+ */
+export function grantCosmetic(kind, id) {
+  const st = load();
+  if (!item(kind, id) || st.owned[kind]?.includes(id)) return false;
+  save({ ...st, owned: { ...st.owned, [kind]: [...st.owned[kind], id] } });
+  return true;
 }
 
 export function equipCosmetic(kind, id) {

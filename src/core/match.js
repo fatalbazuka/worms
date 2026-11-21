@@ -68,6 +68,25 @@ export function towerMatch(botLevel = null) {
   };
 }
 
+/**
+ * Первые бои новичка: спокойная классическая башня, вода поднимается
+ * позже обычного. Случайный вариант
+ * (лава с извержением, лёд, ветер) в первом же бою путал: победа приходила
+ * от стихии, а не от выстрела.
+ */
+export function rookieMatch() {
+  const m = towerMatch('rookie');
+  // Вода — позже (с 15-го хода): первые бои должны решаться выстрелами.
+  // Слепые игроки побеждали, потому что соперник тонул сам, и не понимали за что
+  return { ...m, variant: 'classic', rules: { ...m.rules, flood: { after: 14, step: 85 } } };
+}
+
+/** Обучение: «Первый выстрел» без потопа — мишень не должна утонуть сама. */
+export function tutorialMatch() {
+  const m = challengeMatch('first');
+  return { ...m, tutorial: true, rules: { ...m.rules, flood: null } };
+}
+
 /** Варианты настроек быстрой игры — для меню и проверки сохранённых. */
 export const QUICK_OPTIONS = {
   worms: [2, 3, 4, 1],

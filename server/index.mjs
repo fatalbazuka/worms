@@ -29,6 +29,14 @@
  *   GET  /api/me/history                  → {items}          бои: дуэли и турниры
  *   POST /api/result {room, seed, opponent, won} → итог боя (дуэль или турнир)
  *   GET  /api/top?kind=rating|tourney     → {players}
+ *   GET  /api/friends                     → {friends, place, total}  топ друзей, сам игрок в нём с местом
+ *   POST /api/friends/challenge {id, room} → {sent}          вызов другу через бота; sent=false — звать карточкой
+ *   GET  /api/duels                       → {items, myTurn, max}  дуэли по переписке (server/duels.mjs)
+ *   POST /api/duels {opponent} | {link}   → {duel}            новая: с другом или ссылкой с кодом
+ *   POST /api/duels/join {code}           → {duel}            принять по ссылке
+ *   GET  /api/duels/:id                   → {duel}            с историей ходов
+ *   POST /api/duels/:id/turn {turn, cmds, state, hash, prevHash, prevTurn, over, winner} → {duel}
+ *   POST /api/duels/:id/resign            → {duel}
  *   GET  /api/tournaments                 → {items}
  *   GET  /api/tournaments/:id             → турнир, сетка, мой матч
  *   POST /api/tournaments/:id/join        → {ok} | {invoice} (платный)
@@ -69,6 +77,8 @@ import { createAdmin } from './admin.mjs';
 import { createMedia } from './media.mjs';
 import { createWeekly } from './weekly.mjs';
 import { createPromos } from './promo.mjs';
+import { createFriends } from './friends.mjs';
+import { createDuels } from './duels.mjs';
 
 export function createApp({
   db, botToken = '', trustProxy = false, staticDir = null, now = () => Date.now(),
@@ -77,7 +87,9 @@ export function createApp({
 }) {
   const admins = new Set(adminIds.map(Number).filter(Boolean));
   // login — подбор пароля: не больше 10 попыток в минуту с одного адреса
-  const limits = { write: limiter(120, 60_000), login: limiter(10, 60_000), media: limiter(30, 3600_000), promo: limiter(10, 60_000) };
+  const limits = { write: limiter(120, 60_000), login: limiter(10, 60_000), media: limiter(30, 3600_000), promo: limiter(10, 60_000),
+    // Новых дуэлей и входов по ссылке — не больше 20 в час на игрока
+    duel: limiter(20, 3600_000) };
   // Картинки для сторис и клипы: лежат несколько дней (server/media.mjs)
   const media = createMedia({ dir: mediaDir, now });
   const api = createTelegramApi({ token: botToken, base: telegramApiBase, log });
@@ -99,6 +111,12 @@ export function createApp({
   const admin = createAdmin({ db, players, analytics, tournaments, shop, saves, api, now, log });
   bot = createBot({ db, api, players, tournaments, analytics, admin, adminIds: admins, publicUrl, tz, now, log, appName, promos });
   weekly = createWeekly({ db, tournaments, shop, notify: (...a) => bot.notify(...a), tz, now, log });
+  const friends = createFriends({
+    db, players, analytics, now, log,
+    notify: (...a) => bot.notify(...a),
+    invite: (...a) => bot.inviteDuel(...a),
+  });
+  const duels = createDuels({ db, players, friends, analytics, now, log, notify: (...a) => bot.notify(...a) });
   const hookSecret = botToken ? webhookSecret(botToken, secret) : '';
 
   const q = {
@@ -184,7 +202,8 @@ export function createApp({
     if (isCasualRoom(room)) return { status: 'unrated', reason: 'casual', player: view() };
     if (!players.byId(opponent)) return { status: 'unrated', player: view() };
 
-    return tx(db, () => {
+    let rated = null;
+    const out = tx(db, () => {
       const t = now();
       let m = q.match.get(room, seed);
       if (!m) {
@@ -213,8 +232,12 @@ export function createApp({
       q.lost.run(s.loser, l.id);
       q.matchClose.run(claim, 'confirmed', s.delta, t, m.id);
       m = q.match.get(room, seed);
+      rated = { winnerId: w.id, loserId: l.id, before: w.rating, after: s.winner };
       return mine('confirmed');
     });
+    // Победитель мог обогнать друзей — им напишет бот, ответ игроку не ждёт
+    if (rated) friends.onRated(rated).catch((e) => log.error?.('[friends] обогнал', e));
+    return out;
   }
 
   function history(me) {
@@ -287,12 +310,48 @@ export function createApp({
       }
     }
 
+    const dm = /^\/api\/duels\/(\d+)(?:\/(turn|resign))?$/.exec(path);
+    if (dm) {
+      const me = auth(req);
+      const fail = (r) => { if (r.error) throw new HttpError(r.status ?? 400, r.error, r.duel ? { duel: r.duel } : {}); return r; };
+      if (method === 'GET' && !dm[2]) {
+        const d = duels.get(me.id, dm[1]);
+        if (!d) throw new HttpError(404, 'нет такой дуэли');
+        return { duel: d };
+      }
+      // Ход — приказы и снимок: длиннее обычного запроса
+      if (method === 'POST' && dm[2] === 'turn') return fail(await duels.submit(me, dm[1], await readJson(req, 96 * 1024)));
+      if (method === 'POST' && dm[2] === 'resign') return fail(await duels.resign(me, dm[1]));
+    }
+
     if (path.startsWith('/api/admin/')) return adminApi(method, path, url, req, ip);
 
     switch (`${method} ${path}`) {
       case 'GET /api/health': return { ok: true };
       case 'GET /api/config': return { bot: bot.username || null, stars: api.enabled };
       case 'GET /api/top': return top(url);
+      case 'GET /api/friends': return friends.list(auth(req).id);
+      case 'POST /api/friends/challenge': {
+        const me = auth(req);
+        const { id, room } = await readJson(req);
+        const code = String(room ?? '').toUpperCase();
+        // Только комната башни с другом — как у карточки вызова
+        if (!/^ZW[A-Z0-9]{2,10}$/.test(code)) throw new HttpError(400, 'не та комната');
+        const r = await friends.challenge(me, String(id ?? ''), code);
+        if (r.error) throw new HttpError(403, r.error);
+        return r;
+      }
+      case 'GET /api/duels': return duels.list(auth(req).id);
+      case 'POST /api/duels':
+      case 'POST /api/duels/join': {
+        const me = auth(req);
+        if (!limits.duel.hit(me.id)) throw new HttpError(429, 'слишком много дуэлей за час');
+        const body = await readJson(req);
+        const r = path.endsWith('/join') ? duels.join(me, body.code)
+          : duels.create(me, { opponent: body.opponent, link: body.link === true });
+        if (r.error) throw new HttpError(r.status ?? 400, r.error);
+        return r;
+      }
       case 'POST /api/telegram': return telegramLogin(await readJson(req));
       case 'POST /api/login': {
         if (!limits.login.hit(ip)) throw new HttpError(429, 'слишком много попыток, подожди минуту');
@@ -476,6 +535,8 @@ export function createApp({
   handle.analytics = analytics;
   handle.bot = bot;
   handle.players = players;
+  handle.friends = friends;
+  handle.duels = duels;
   handle.webhookSecret = hookSecret;
   /** Настроить бота (вебхук, меню) — вызывается при запуске сервера. */
   handle.setupBot = () => bot.setup({ secret: hookSecret });
@@ -521,6 +582,8 @@ if (isMain) {
       try { handle.weekly.tick(); } catch (e) { console.error('[weekly] tick', e); }
     }
     handle.bot.remind().catch((e) => console.error('[bot] напоминания', e));
+    // Дуэли по переписке: просроченный ход — пропуск, за два часа — напоминание
+    handle.duels.tick().catch((e) => console.error('[duels] tick', e));
   }, 30_000);
   const stop = () => {
     clearInterval(ticker);

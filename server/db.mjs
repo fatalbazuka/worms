@@ -210,6 +210,67 @@ const MIGRATIONS = [
   );
   insert into promo (code, boxes, created_at) values ('skipper77', 3, cast(strftime('%s','now') as integer) * 1000);
   `,
+  // 10: друзья — кого позвал, кто позвал тебя, с кем сыграл бой на рейтинг.
+  // Своей таблицы дружбы нет: друзья выводятся из player.referred_by и
+  // match, здесь только индексы под это и журнал сообщений боту о друзьях
+  // (обогнал, вызов на бой) — чтобы не писать одному и тому же чаще правил
+  `
+  create index if not exists player_referred on player (referred_by) where referred_by is not null;
+  create index if not exists match_p1 on match (p1, status);
+  create index if not exists match_p2 on match (p2, status);
+  create table if not exists friend_ping (
+    id         integer primary key,
+    kind       text not null,                   -- overtake | duel
+    from_id    text not null references player (id) on delete cascade,
+    to_id      text not null references player (id) on delete cascade,
+    day        text not null,                   -- YYYY-MM-DD в поясе бота
+    created_at integer not null
+  );
+  create index if not exists friend_ping_to on friend_ping (to_id, day, kind);
+  create index if not exists friend_ping_from on friend_ping (from_id, day, kind);
+  `,
+  // 11: дуэли по переписке — партия на двоих, где каждый ходит, когда
+  // удобно (server/duels.mjs). Ход n партии делает p1 при нечётном n и p2
+  // при чётном: команды в бою чередуются строго. duel_turn — история
+  // ходов: приказы для показа и снимок итога — по ним клиент
+  // восстанавливает партию с нуля. Только новые таблицы — старое не трогаем
+  `
+  create table if not exists duel (
+    id            integer primary key,
+    p1            text not null references player (id),   -- создатель, ходит первым (команда 0)
+    p2            text references player (id),            -- null — ждём, кто примет ссылку
+    code          text unique,                             -- код ссылки-приглашения
+    seed          integer not null,
+    turn          integer not null default 1,              -- номер хода, который ждём
+    deadline      integer,                                 -- до когда ходить, мс; null — ход не идёт
+    skips1        integer not null default 0,              -- пропусков подряд у p1
+    skips2        integer not null default 0,
+    seen1         integer,                                 -- когда p1 последний раз смотрел дуэль
+    seen2         integer,
+    reminded_turn integer,                                 -- за какой ход уже напомнили
+    status        text not null default 'active' check (status in ('open', 'active', 'finished', 'cancelled')),
+    winner        text references player (id),             -- null при ничьей
+    reason        text,                                    -- kill | draw | resign | timeout
+    created_at    integer not null,
+    updated_at    integer not null,
+    finished_at   integer
+  );
+  create index if not exists duel_p1 on duel (p1, status);
+  create index if not exists duel_p2 on duel (p2, status);
+  create index if not exists duel_deadline on duel (status, deadline);
+  create table if not exists duel_turn (
+    duel_id    integer not null references duel (id) on delete cascade,
+    n          integer not null,                           -- номер хода в партии
+    player_id  text not null references player (id),
+    kind       text not null default 'move' check (kind in ('move', 'skip')),
+    cmds       text,                                       -- JSON: что делал игрок (ходьба, трос, оружие, выстрел)
+    state      text,                                       -- JSON: снимок итога хода — истина
+    hash       text,                                       -- свёртка итога у ходившего
+    seen_hash  text,                                       -- что вышло у следующего, восстановившего ход
+    created_at integer not null,
+    primary key (duel_id, n)
+  );
+  `,
 ];
 
 export function openDb(path) {

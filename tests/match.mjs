@@ -134,8 +134,8 @@ check('один в лобби никого не находит', findMatch(p('a'
     `${first.skin} → ${dup.skin} +${dup.refund}`);
   check('пустую коробку открыть нельзя', openBox(emptyState()).skin === null);
   check('цена скина по редкости: обычный дешевле редкого, редкий — эпического, легендарный дороже всех',
-    skinPrice('cool') < skinPrice('ninja') && skinPrice('ninja') < skinPrice('king') && skinPrice('king') < skinPrice('rainbow')
-      && skinPrice('classic') === 0, ['cool', 'ninja', 'king', 'rainbow'].map(skinPrice).join());
+    skinPrice('cool') < skinPrice('bubblegum') && skinPrice('bubblegum') < skinPrice('devil') && skinPrice('devil') < skinPrice('rainbow')
+      && skinPrice('classic') === 0, ['cool', 'bubblegum', 'devil', 'rainbow'].map(skinPrice).join());
   st = { ...emptyState(), owned: ['classic', 'devil'] };
   check('надеть можно только свой скин',
     equip(emptyState(), 'devil').equipped === 'classic' && equip(st, 'devil').equipped === 'devil');
@@ -316,6 +316,155 @@ check('один в лобби никого не находит', findMatch(p('a'
     ['common', 'rare', 'epic', 'legendary'].every(near)
       && K.RARITY_ORDER.reduce((a, k) => a + K.RARITY[k].odds, 0) === 100, JSON.stringify(counts));
   check('у каждого скина есть редкость', K.SKINS.every((s) => K.RARITY[s.rarity]));
+}
+
+// --- уровень игрока: опыт, кривая, подарки, облачная копия ---
+{
+  const L = await import('../src/core/levels.js');
+  // Обучение — победа с тремя новыми звёздами — сразу даёт второй уровень,
+  // а проигрыш без урона — хотя бы что-то
+  const tutorial = L.battleXp({ won: true, damage: 100, stars: 3 }).total;
+  check('обучение сразу даёт второй уровень', L.levelOf(tutorial).level === 2, String(tutorial));
+  check('проигрыш тоже приносит опыт', L.battleXp({ won: false }).total > 0);
+  // Вдвоём на телефоне победа и урон «свои» с обеих сторон — только за бой
+  check('вдвоём на телефоне — только опыт за бой',
+    L.battleXp({ hotseat: true, won: true, damage: 500 }).total === L.XP.battle);
+  check('урон даёт опыт, но не больше потолка',
+    L.battleXp({ damage: 10000 }).total === L.XP.battle + L.XP.damageMax);
+  // Кривая: каждый уровень не дешевле прошлого, дальше потолка не дорожает
+  let mono = true;
+  for (let l = 1; l < 80; l++) mono &&= L.levelCost(l + 1) >= L.levelCost(l) && L.levelCost(l) <= L.LEVEL_CAP;
+  check('кривая уровней растёт и упирается в потолок', mono && L.levelCost(60) === L.LEVEL_CAP);
+  // levelOf и xpForLevel согласны на границах
+  let edges = true;
+  for (let l = 1; l < 60; l++) {
+    const at = L.levelOf(L.xpForLevel(l)), before = L.levelOf(L.xpForLevel(l) - 1);
+    edges &&= at.level === l && at.into === 0 && (l === 1 || before.level === l - 1);
+  }
+  check('опыт → уровень: ровно на границе — новый уровень', edges);
+  check('подарок есть на каждом уровне, кроме первого',
+    L.rewardFor(1) === null && Array.from({ length: 98 }, (_, i) => L.rewardFor(i + 2))
+      .every((r) => r && (r.coins > 0 || r.boxes > 0 || r.cos)));
+  // Прыжок через несколько уровней — подарки за каждый, по разу
+  const a = L.addXp(L.emptyLevel(), L.xpForLevel(4) + 5);
+  check('за пропущенные уровни подарки тоже, по порядку',
+    a.levels.join() === '2,3,4' && a.state.rewarded === 4, JSON.stringify(a));
+  check('повтор не выдаёт подарок второй раз', L.addXp(a.state, 1).levels.length === 0);
+  // Облако: опыт — больший, выданное — по большей копии, мусор не ломает
+  const m = L.mergeLevel({ xp: 900, rewarded: 5 }, { xp: 300, rewarded: 7 });
+  check('облачная копия: опыт и выданные подарки — по максимуму',
+    m.xp === 900 && m.rewarded === 7 && L.normalizeLevel('мусор').xp === 0, JSON.stringify(m));
+}
+
+// --- достижения: таблица, открытие один раз, трюки, облачная копия ---
+{
+  const A = await import('../src/core/achievements.js');
+  const { EMOJI } = await import('../src/core/assets.js');
+  const groups = new Set(A.GROUPS.map((g) => g.id));
+  check('достижения: id не повторяются, у каждого группа, значок, порог и награда',
+    new Set(A.ACHIEVEMENTS.map((a) => a.id)).size === A.ACHIEVEMENTS.length
+      && A.ACHIEVEMENTS.every((a) => groups.has(a.group) && EMOJI.includes(a.icon) && a.target >= 1 && a.coins > 0));
+  // Порог взят — открыто один раз; повтор того же события ничего не открывает
+  const t0 = 1_700_000_000_000;
+  const one = A.addStats(A.emptyAch(), { wins: 1, rope_kill: 1 }, { level: 10 }, t0);
+  const two = A.addStats(one.state, { wins: 1, rope_kill: 1 }, { level: 3 }, t0 + 5);
+  check('достижение открывается один раз, «лучшее» не убавляется',
+    one.unlocked.join() === 'rope_kill,wins_1,level_10' && two.unlocked.length === 0
+      && two.state.n.wins === 2 && two.state.n.level === 10 && two.state.got.wins_1 === t0,
+    JSON.stringify({ one: one.unlocked, two: two.state }));
+  // Трюки выстрела: что засчитывается, а что нет
+  const s = A.shotStats({ weapon: 'bat', hang: true, kills: 2, drowns: 1, hits: 2 });
+  check('трюки: на тросе + двое + бита в воду; батут без попадания — не трюк',
+    s.rope_kill === 1 && s.double_kill === 1 && s.homerun === 1 && s.drown === 1 && !s.triple
+      && !A.shotStats({ sprung: true, hits: 0 }).spring_shot && A.shotStats({ sprung: true, hits: 1 }).spring_shot === 1,
+    JSON.stringify(s));
+  // Конец боя: испытание не идёт в победы; «На волоске» — 1–10 здоровья
+  const end = (o) => A.battleEndStats({ won: true, mode: 'tower', myTurns: 6, hurt: true, ...o });
+  check('конец боя: испытание не победа, «На волоске» и «Ни царапины» по правилам',
+    !A.battleEndStats({ won: true, mode: 'challenge', myTurns: 1, hurt: false }).wins
+      && end({ mine: [{ alive: true, health: 7 }, { alive: false, health: 0 }] }).last_stand === 1
+      && !end({ mine: [{ alive: true, health: 11 }] }).last_stand
+      && end({ hurt: false, myTurns: 2, mine: [{ alive: true, health: 100 }] }).flawless === 1
+      && !end({ hurt: false, mine: [{ alive: true, health: 100 }, { alive: false, health: 0 }] }).flawless);
+  // Глава «Подъёма» засчитывается, только когда пройдена вся
+  const { ASCENT } = await import('../src/campaign/ascent.js');
+  const foot = ASCENT.filter((m) => m.chapter === 'foot').map((m) => m.id);
+  check('глава «Подъёма» — только целиком',
+    A.progressStats({ ascent: foot }).ascent === 1 && A.progressStats({ ascent: foot.slice(1) }).ascent === 0);
+  // Облако: открытое — объединение с более ранней датой, счётчики — максимум
+  const m = A.mergeAch({ got: { wins_1: 50, junk: 1 }, n: { wins: 3 } }, { got: { wins_1: 20, promo: 9 }, n: { wins: 1, kills: 4 } });
+  check('облачная копия достижений: объединение, ранняя дата, максимум счётчиков',
+    m.got.wins_1 === 20 && m.got.promo === 9 && !m.got.junk && m.n.wins === 3 && m.n.kills === 4
+      && Object.keys(A.normalizeAch('мусор').got).length === 0, JSON.stringify(m));
+}
+
+// --- «Арсенал боя»: по зерну, одинаковый у обеих сторон и у всех клиентов ---
+{
+  const { battleLoadout, loadoutApplies } = await import('../src/core/loadout.js');
+  const { WEAPONS } = await import('../src/weapons/index.js');
+  const { towerMatch, onlineMatch, challengeMatch, tutorialMatch, dailyMatch, ascentMatch } = await import('../src/core/match.js');
+  const a = battleLoadout(123456, WEAPONS), b = battleLoadout(123456, WEAPONS);
+  const zero = new Set(WEAPONS.filter((w) => w.startAmmo === 0).map((w) => w.id));
+  check('арсенал боя: то же зерно — тот же набор из трёх без стартовых',
+    a.length === 3 && a.join() === b.join() && a.every((id) => zero.has(id)) && new Set(a).size === 3, a.join());
+  const seen = new Set();
+  for (let s = 1; s <= 200; s++) for (const id of battleLoadout(s, WEAPONS)) seen.add(id);
+  check('арсенал боя: разные зёрна — разные гости', seen.size >= 8, String(seen.size));
+  check('арсенал боя: только в боях без своих правил оружия',
+    loadoutApplies(towerMatch('rookie')) && loadoutApplies(dailyMatch('2026-11-20'))
+      && !loadoutApplies(onlineMatch()) && !loadoutApplies(towerMatch(null), { online: true })
+      && !loadoutApplies(challengeMatch('first')) && !loadoutApplies(tutorialMatch())
+      && !loadoutApplies(ascentMatch('up-1')));
+}
+
+// --- «Что дальше»: одна ближайшая цель по порядку важности ---
+{
+  const { nextGoal } = await import('../src/core/nextgoal.js');
+  const level = { level: 5, into: 100, need: 170 };
+  const base = { daily: { tasks: [], coins: 0 }, boxes: 0, level, ach: [] };
+  check('что дальше: выполненное задание — первым',
+    nextGoal({ ...base, boxes: 2, daily: { coins: 0, tasks: [{ id: 'hits6', progress: 6, claimed: false }] } })?.action === 'tasks');
+  check('что дальше: коробка ждёт', nextGoal({ ...base, boxes: 1 })?.action === 'skins');
+  const t = nextGoal({ ...base, daily: { coins: 0, tasks: [
+    { id: 'play3', progress: 1, claimed: false }, { id: 'hits6', progress: 4, claimed: false }] } });
+  check('что дальше: задание ближе всего к концу', t?.text === 'Попади ещё 2 раза — +60 монет', t?.text);
+  const lv = nextGoal({ ...base, level: { level: 5, into: 150, need: 170 } });
+  check('что дальше: уровень в паре боёв', lv?.text === 'ещё 1 бой до ур. 6: +100 монет', lv?.text);
+  check('что дальше: монеты до коробки', nextGoal({ ...base, level: { level: 9, into: 0, need: 290 }, daily: { tasks: [], coins: 460 } })?.text === 'до коробки 140 монет');
+  check('что дальше: всегда есть что сказать', nextGoal(base)?.kind === 'level');
+}
+
+// --- «Башня дня»: серия дней с победой и бонус на 3-й и 7-й ---
+{
+  const D = await import('../src/core/dailytower.js');
+  let st = D.normalizeDT(null);
+  const run = (day, won) => { const r = D.recordDailyRun(st, day, won); st = r.state; return r; };
+  const a = run('2026-11-18', true);
+  const again = run('2026-11-18', true);
+  run('2026-11-19', false);
+  const b = run('2026-11-19', true);
+  const c = run('2026-11-20', true);
+  check('башня дня: монеты за первую победу дня — один раз', a.coins === 60 && again.coins === 0 && again.bonus === 0);
+  check('башня дня: серия растёт по дням, бонус на 3-й', b.streak === 2 && c.streak === 3 && c.bonus === 100 && b.bonus === 0,
+    `${b.streak} ${c.streak} ${c.bonus}`);
+  check('башня дня: пропуск дня — серия с начала', D.streakNow(st, '2026-11-21') === 3 && D.streakNow(st, '2026-11-22') === 0
+    && D.recordDailyRun(st, '2026-11-23', true).streak === 1);
+  check('башня дня: облако — по более поздней победе',
+    D.mergeDT({ lastWin: '2026-11-20', streak: 3 }, { lastWin: '2026-11-19', streak: 9 }).streak === 3);
+}
+
+// --- «Подъём»: звёзды боя и глава целиком ---
+{
+  const { ASCENT, ascentStarsFor, ascentStarTurns, chapterCleared } = await import('../src/campaign/ascent.js');
+  const m = ASCENT[0], n = ascentStarTurns(m);
+  check('подъём: звёзды — победа, ходы, без потерь',
+    ascentStarsFor(m, { won: false, myTurns: 1, lost: false }) === 0
+      && ascentStarsFor(m, { won: true, myTurns: n + 1, lost: false }) === 1
+      && ascentStarsFor(m, { won: true, myTurns: n, lost: true }) === 2
+      && ascentStarsFor(m, { won: true, myTurns: n, lost: false }) === 3);
+  const foot = ASCENT.filter((x) => x.chapter === 'foot').map((x) => x.id);
+  check('подъём: глава пройдена только целиком',
+    chapterCleared('foot', new Set(foot)) && !chapterCleared('foot', new Set(foot.slice(1))));
 }
 
 console.log(failures.length

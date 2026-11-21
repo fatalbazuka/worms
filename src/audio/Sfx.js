@@ -209,6 +209,15 @@ const VOICES = {
     arpeggio(ctx, out, [660, 880, 1320], { t, step: 0.06, dur: 0.14, peak: 0.16 });
   },
 
+  /**
+   * Достижение: звонкое арпеджио вверх через октаву и искра сверху — ярче
+   * ящика, но короче победы: может прозвучать посреди боя.
+   */
+  achievement(ctx, out, t) {
+    arpeggio(ctx, out, [784, 988, 1175, 1568], { t, step: 0.07, dur: 0.16, peak: 0.15 });
+    tone(ctx, out, { type: 'sine', from: 2093, to: 2350, t: t + 0.3, dur: 0.35, peak: 0.08 });
+  },
+
   /** Выбор оружия и нажатия кнопок: сухой короткий клик, чтобы не мешал. */
   select(ctx, out, t) {
     tone(ctx, out, { type: 'square', from: 880, to: 660, t, dur: 0.05, peak: 0.1 });
@@ -282,6 +291,8 @@ class Sfx {
     // Время последнего запуска по имени звука — для ограничения частоты
     this._last = new Map();
     this._armed = false;
+    // Кому сказать, что звук выключили или сменили громкость (музыке)
+    this._watchers = new Set();
     this.arm();
   }
 
@@ -334,10 +345,23 @@ class Sfx {
   /** Состояние контекста — удобно для отладки и тестов: null до первого жеста. */
   get state() { return this.ctx?.state ?? null; }
 
+  /** Подписаться на смену громкости и «звук выкл». Возвращает отписку. */
+  watch(fn) {
+    this._watchers.add(fn);
+    return () => this._watchers.delete(fn);
+  }
+
+  _changed() {
+    for (const fn of this._watchers) {
+      try { fn(); } catch { /* подписчик сломался — звук всё равно переключён */ }
+    }
+  }
+
   setVolume(v) {
     this._volume = clamp(Number(v) || 0, 0, 1);
     if (this.master) this.master.gain.value = this._muted ? 0 : this._volume;
     saveState({ volume: this._volume, muted: this._muted });
+    this._changed();
     return this._volume;
   }
 
@@ -345,6 +369,7 @@ class Sfx {
     this._muted = Boolean(on);
     if (this.master) this.master.gain.value = this._muted ? 0 : this._volume;
     saveState({ volume: this._volume, muted: this._muted });
+    this._changed();
     return this._muted;
   }
 

@@ -15,3 +15,5 @@ __pycache__/
 data/
 backups/
 docs/store/raw/
+tools/sim/report*.json
+tools/sim/ascent-curve.json

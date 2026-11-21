@@ -24,10 +24,10 @@ export const DEFAULT_SKIN = 'classic';
  * dup — сколько монет вернётся, если из коробки выпал уже собранный.
  */
 export const RARITY = {
-  common: { name: 'обычный', odds: 70, price: 800, dup: 160, color: '#c8d2e0' },
-  rare: { name: 'редкий', odds: 24, price: 1800, dup: 400, color: '#6fb7ff' },
-  epic: { name: 'эпический', odds: 5, price: 3600, dup: 900, color: '#c58bff' },
-  legendary: { name: 'легендарный', odds: 1, price: 7000, dup: 1800, color: '#ffb347' },
+  common: { name: 'обычный', odds: 60, price: 800, dup: 160, color: '#c8d2e0' },
+  rare: { name: 'редкий', odds: 27, price: 1800, dup: 400, color: '#6fb7ff' },
+  epic: { name: 'эпический', odds: 10, price: 3600, dup: 900, color: '#c58bff' },
+  legendary: { name: 'легендарный', odds: 3, price: 7000, dup: 1800, color: '#ffb347' },
 };
 export const RARITY_ORDER = ['common', 'rare', 'epic', 'legendary'];
 
@@ -40,22 +40,30 @@ export function skinPrice(id) {
 
 export const SKINS = [
   { id: 'classic', name: 'Смайлик', sheet: 'smiley', rarity: 'common' },
-  { id: 'ice', name: 'Ледышка', sheet: 'skin_ice', rarity: 'common' },
-  { id: 'alien', name: 'Пришелец', sheet: 'skin_alien', rarity: 'rare' },
-  { id: 'toxic', name: 'Токсик', sheet: 'skin_toxic', rarity: 'common' },
+  { id: 'ice', name: 'Ледышка', sheet: 'skin_ice', rarity: 'rare' },
+  { id: 'alien', name: 'Пришелец', sheet: 'skin_alien', rarity: 'common' },
+  { id: 'toxic', name: 'Токсик', sheet: 'skin_toxic', rarity: 'rare' },
   { id: 'pumpkin', name: 'Тыква', sheet: 'skin_pumpkin', rarity: 'common' },
-  { id: 'rage', name: 'Злюка', sheet: 'skin_rage', rarity: 'rare' },
+  { id: 'rage', name: 'Злюка', sheet: 'skin_rage', rarity: 'common' },
   { id: 'devil', name: 'Чертёнок', sheet: 'skin_devil', rarity: 'epic' },
-  { id: 'clown', name: 'Клоун', sheet: 'skin_clown', rarity: 'rare' },
+  { id: 'clown', name: 'Клоун', sheet: 'skin_clown', rarity: 'epic' },
   { id: 'cool', name: 'Крутой', sheet: 'skin_cool', rarity: 'common' },
   { id: 'nerd', name: 'Ботаник', sheet: 'skin_nerd', rarity: 'common' },
   { id: 'sleepy', name: 'Соня', sheet: 'skin_sleepy', rarity: 'common' },
-  { id: 'ninja', name: 'Ниндзя', sheet: 'skin_ninja', rarity: 'rare' },
-  { id: 'pirate', name: 'Пират', sheet: 'skin_pirate', rarity: 'rare' },
-  { id: 'robot', name: 'Робот', sheet: 'skin_robot', rarity: 'rare' },
+  { id: 'ninja', name: 'Ниндзя', sheet: 'skin_ninja', rarity: 'common' },
+  { id: 'pirate', name: 'Пират', sheet: 'skin_pirate', rarity: 'common' },
+  { id: 'robot', name: 'Робот', sheet: 'skin_robot', rarity: 'common' },
   { id: 'astro', name: 'Космонавт', sheet: 'skin_astro', rarity: 'epic' },
-  { id: 'king', name: 'Король', sheet: 'skin_king', rarity: 'epic' },
+  { id: 'king', name: 'Король', sheet: 'skin_king', rarity: 'legendary' },
   { id: 'rainbow', name: 'Радуга', sheet: 'skin_rainbow', rarity: 'legendary' },
+  { id: 'detective', name: 'Детектив', sheet: 'skin_detective', rarity: 'common' },
+  { id: 'chef', name: 'Шеф', sheet: 'skin_chef', rarity: 'rare' },
+  { id: 'bubblegum', name: 'Жвачка', sheet: 'skin_bubblegum', rarity: 'rare' },
+  { id: 'zipper', name: 'Молния', sheet: 'skin_zipper', rarity: 'rare' },
+  { id: 'knight', name: 'Рыцарь', sheet: 'skin_knight', rarity: 'epic' },
+  { id: 'bomb', name: 'Бомба', sheet: 'skin_bomb', rarity: 'epic' },
+  { id: 'beardo', name: 'Бородач', sheet: 'skin_beardo', rarity: 'legendary' },
+  { id: 'poophead', name: 'Какашка', sheet: 'skin_poophead', rarity: 'legendary' },
 ];
 
 /** Что может выпасть из коробки: все, кроме стартового. */

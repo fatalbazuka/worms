@@ -40,10 +40,10 @@ console.log(`игра и API на http://127.0.0.1:${port}\n`);
 
 // Наборы: все (npm test, перед PR), быстрый (npm run test:quick — после
 // каждой правки) или перечисленные: node tests/run.mjs single net
-const ALL = ['match', 'server', 'api', 'weapons', 'smoke', 'desktop', 'single', 'net', 'tower', 'lobby',
-  'supabase', 'telegram', 'tgapp'];
+const ALL = ['match', 'terrain', 'server', 'api', 'weapons', 'smoke', 'desktop', 'single', 'net', 'tower', 'lobby',
+  'supabase', 'telegram', 'tgapp', 'duel'];
 // Быстрые: без браузера или с коротким браузерным прогоном, всё вместе — пара минут
-const QUICK = ['match', 'server', 'api', 'weapons', 'smoke'];
+const QUICK = ['match', 'terrain', 'server', 'api', 'weapons', 'smoke'];
 const args = process.argv.slice(2);
 // quick можно дополнить: node tests/run.mjs quick net
 const suites = args.length === 0 ? ALL

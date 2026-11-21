@@ -3,8 +3,11 @@
  *
  * Telegram присылает обновления на вебхук (/api/bot/webhook) с секретом в
  * заголовке — без него запрос отклоняется. Бот отвечает на команды,
- * принимает оплату звёздами и пишет игрокам о турнирах. «Твой ход» не
- * пишет — так решено.
+ * принимает оплату звёздами и пишет игрокам о турнирах, а о друзьях —
+ * «обогнал» и вызов на бой (server/friends.mjs, с лимитами и /mute).
+ * «Твой ход» пишет только в дуэлях по переписке (server/duels.mjs): там
+ * соперник не в сети, и без сообщения ход простоял бы сутки. В боях по
+ * сети — нет: оба и так в игре.
  *
  * Звёзды (валюта XTR). Счёт создаётся сервером (createInvoiceLink), мини-
  * приложение открывает его родным окном Telegram. Перед списанием Telegram
@@ -74,15 +77,34 @@ export function createBot({ db, api, players, tournaments, analytics = null, adm
   };
   const play = (en) => playButton(en ? '🎮 Play' : '🎮 Играть');
 
-  async function send(chatId, text, markup) {
-    return api.call('sendMessage', { chat_id: chatId, text, ...(markup ? { reply_markup: markup } : {}) });
+  async function send(chatId, text, markup, { silent = false } = {}) {
+    return api.call('sendMessage', {
+      chat_id: chatId, text, ...(markup ? { reply_markup: markup } : {}), ...(silent ? { disable_notification: true } : {}),
+    });
   }
 
-  /** Сообщение игроку по id. tour — кнопка сразу в экран турнира. */
-  async function notify(playerId, text, { tour = null } = {}) {
+  /**
+   * Сообщение игроку по id. tour — кнопка сразу в экран турнира; button и
+   * params — своя кнопка в игру (params — хвост адреса: «?top=friends»).
+   * silent — без звука (ночью).
+   */
+  async function notify(playerId, text, { tour = null, button = null, params = '', silent = false } = {}) {
     const p = players.byId(playerId);
     if (!p?.tg_id) return null;
-    return send(p.tg_id, text, playButton(tour ? '🏆 Открыть турнир' : '🎮 Играть', tour ? `?tour=${tour}` : ''));
+    if (tour) return send(p.tg_id, text, playButton('🏆 Открыть турнир', `?tour=${tour}`), { silent });
+    return send(p.tg_id, text, playButton(button ?? '🎮 Играть', params), { silent });
+  }
+
+  /**
+   * Вызов на бой от друга: кнопка открывает игру сразу в его комнате башни
+   * (?room=, как ссылка-приглашение вне Telegram). Кто, кому и как часто —
+   * решает server/friends.mjs. silent — ночью без звука.
+   */
+  async function inviteDuel(to, from, room, { silent = false } = {}) {
+    if (!to?.tg_id || !publicUrl || !/^ZW[A-Z0-9]{2,10}$/.test(room)) return null;
+    return send(to.tg_id, `⚔️ ${from.name} вызывает тебя на бой в Smiles!\n`
+      + 'Башня, трос и рогатка — комната уже ждёт, жми кнопку.\n\n/mute — не писать о серии и друзьях',
+    playButton('⚔️ Принять вызов', `?room=${room}`), { silent });
   }
 
   async function notifyAdmins(text) {
@@ -266,20 +288,15 @@ export function createBot({ db, api, players, tournaments, analytics = null, adm
   ].join('\n');
 
   /**
-   * /start: ролик с боем, пара строк и кнопка «Играть». Ролик лежит у игры
-   * (assets/promo/welcome.mp4); не отправился — просто текст.
+   * /start: ролик с боем, одна строка и кнопка «Играть». Всё остальное
+   * игрок узнает в игре: длинный текст перед кнопкой никто не читает.
+   * Ролик лежит у игры (assets/promo/welcome.mp4); не отправился — просто текст.
    * Англоязычным — кнопка меню «Play» в их чате (у всех остальных «Играть»).
    */
   async function welcome(chat, me, en, from) {
     const text = en
-      ? `Hi, ${me.name}! This is Smiles — turn-based smiley artillery right in Telegram.\n\n`
-        + 'Tower battles with a grappling rope and a slingshot, 18 weapons, daily tasks, skins, '
-        + 'online duels and tournaments.\n\n'
-        + 'Challenge a friend from any chat: type @' + (username || 'bot') + ' and pick «Challenge to a duel».'
-      : `Привет, ${me.name}! Это Smiles — пошаговая артиллерия со смайликами прямо в Telegram.\n\n`
-        + 'Бои на башне с тросом и рогаткой, 18 видов оружия, задания каждый день, скины, '
-        + 'онлайн-дуэли и турниры.\n\n'
-        + 'Вызвать друга можно из любого чата: напиши @' + (username || 'бот') + ' и выбери «Вызвать на дуэль».';
+      ? `Hi, ${me.name}! Smiles — smiley artillery right in Telegram. Tap «Play» 👇`
+      : `Привет, ${me.name}! Smiles — артиллерия смайликов прямо в Telegram. Жми «Играть» 👇`;
     if (en && publicUrl) {
       await api.call('setChatMenuButton', { chat_id: chat, menu_button: { type: 'web_app', text: 'Play', web_app: { url: appUrl() } } });
     }
@@ -312,9 +329,9 @@ export function createBot({ db, api, players, tournaments, analytics = null, adm
           : `Твой id: ${msg.from.id}. Его спросит админ, чтобы выдать вход на сайт.`);
       case '/help':
         return send(chat, (en
-          ? '/stats — your stats\n/top — top 10\n/tours — tournaments\n/promo CODE — activate a promo code\n/id — your id\n/mute — no streak reminders\n/unmute — remind again'
+          ? '/stats — your stats\n/top — top 10\n/tours — tournaments\n/promo CODE — activate a promo code\n/id — your id\n/mute — no reminders, friend or duel messages\n/unmute — turn them back on'
           : '/stats — статистика\n/top — топ-10\n/tours — турниры\n/promo КОД — активировать промокод\n/id — твой id'
-          + '\n/mute — не напоминать о серии\n/unmute — снова напоминать')
+          + '\n/mute — не писать о серии, друзьях и дуэлях\n/unmute — снова писать')
           + (admin ? `\n\n${ADMIN_HELP}` : ''), play(en));
       case '/promo': {
         if (!promos) break;
@@ -327,12 +344,15 @@ export function createBot({ db, api, players, tournaments, analytics = null, adm
       }
       case '/mute':
         analytics?.setRemind(me.id, false);
-        return send(chat, en ? "OK, no more streak reminders. /unmute — turn them back on."
-          : 'Хорошо, больше не напоминаю о серии. /unmute — вернуть напоминания.');
+        // Один выключатель на всё, что бот пишет сам: серия, «друг обогнал»,
+        // вызовы на бой от друзей (их игра пошлёт карточкой через выбор чата),
+        // «твой ход» в дуэлях по переписке (их видно значком в игре)
+        return send(chat, en ? "OK, no more streak reminders, friend or duel messages. /unmute — turn them back on."
+          : 'Хорошо, больше не пишу сам: ни о серии, ни о друзьях, ни о дуэлях. /unmute — вернуть.');
       case '/unmute':
         analytics?.setRemind(me.id, true);
-        return send(chat, en ? "I'll remind you in the evening if your daily streak is about to burn."
-          : 'Буду напоминать вечером, если серия дней вот-вот сгорит.');
+        return send(chat, en ? "I'll remind you in the evening if your daily streak is about to burn, and tell you when a friend overtakes you."
+          : 'Буду напоминать вечером, если серия дней вот-вот сгорит, и напишу, если друг тебя обгонит.');
       default: break;
     }
     if (!admin) return send(chat, en ? "I don't know that command. /help — what I can do." : 'Не знаю такой команды. /help — что я умею.', play(en));
@@ -586,7 +606,7 @@ Join via this link and you both get a skin box 🎁`,
       { command: 'stats', description: 'Моя статистика' },
       { command: 'top', description: 'Топ-10 по рейтингу' },
       { command: 'tours', description: 'Турниры' },
-      { command: 'mute', description: 'Не напоминать о серии' },
+      { command: 'mute', description: 'Не писать о серии и друзьях' },
     ];
     await api.call('setMyCommands', { commands: base });
     await api.call('setMyCommands', {
@@ -596,7 +616,7 @@ Join via this link and you both get a skin box 🎁`,
         { command: 'stats', description: 'My stats' },
         { command: 'top', description: 'Top 10 by rating' },
         { command: 'tours', description: 'Tournaments' },
-        { command: 'mute', description: 'No streak reminders' },
+        { command: 'mute', description: 'No reminders or friend messages' },
       ],
     });
     // Описание бота: видно до нажатия «Старт» и в каталогах
@@ -650,7 +670,7 @@ Join via this link and you both get a skin box 🎁`,
 
   return {
     handleUpdate, setup, notify, notifyAdmins, refund, donateInvoice, tourInvoice, shopInvoice, remind,
-    prepareChallenge,
+    prepareChallenge, inviteDuel,
     get username() { return username; },
   };
 }

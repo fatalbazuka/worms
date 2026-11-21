@@ -325,8 +325,10 @@ export class Fx {
   turnPlate(worm, title, sub, color = '#ffffff') {
     const s = this.scene;
     sfx.play('turnStart');
-    const W = CFG.VIEW_W, y = Math.round(CFG.VIEW_H * 0.3);
-    const w = Math.min(W - 60, 460), h = 96;
+    const W = CFG.VIEW_W, h = 96;
+    // Под панелью обучения, а не поверх неё (в альбомной они совпадали)
+    const y = Math.max(Math.round(CFG.VIEW_H * 0.3), (s.coach?.panelBottom ?? 0) + h / 2 + 14);
+    const w = Math.min(W - 60, 460);
     const parts = [];
     const add = (o, d = DEPTH.HUD + 5) => { s.rig.ui(o.setScrollFactor(0).setDepth(d)); parts.push(o); return o; };
     const g = add(s.add.graphics());
@@ -356,6 +358,8 @@ export class Fx {
     // Длинная плашка (вводная к башне) не должна вылезать за экран: кегль
     // поменьше и перенос по ширине
     const long = text.length > 28;
+    // Пока висит плашка, строка подсказки под панелью прячется — они на одной высоте
+    this.bannerUntil = s.time.now + duration;
     const t = s.add.text(CFG.VIEW_W / 2, 168, text, font(long ? 27 : 34, 800, color))
       .setOrigin(0.5).setScrollFactor(0).setDepth(DEPTH.HUD + 5)
       .setStroke('#10131a', 5).setWordWrapWidth(CFG.VIEW_W - 56);

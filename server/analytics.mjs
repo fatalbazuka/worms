@@ -5,7 +5,8 @@
  *   open   — открыл игру; в props.streak — серия дней на этот момент;
  *   battle — доиграл бой: режим, победа, ходов;
  *   step   — шаг воронки (STEPS): первый выстрел, первый трос, первая
- *            победа, обучение пройдено, магазин открыт, «купить», «позвать».
+ *            победа, обучение пройдено, магазин открыт, «купить», «позвать»,
+ *            уровни игрока 2, 5, 10 и 20, первое и десятое достижение.
  * Этого хватает, чтобы ответить на главные вопросы: сколько людей заходит,
  * сколько новых, сколько боёв, где новички отваливаются, возвращаются ли
  * через день, три и семь. Отчёт — команда бота /metrics, только админу.
@@ -13,7 +14,9 @@
  * Напоминание. Вечером (REMIND_HOUR по часовому поясу бота) бот пишет тем,
  * кто вчера заходил, а сегодня ещё нет: серия сгорит в полночь. Не чаще
  * раза в день, только с серией и только тем, кто не отписался (/mute).
- * Больше бот сам ничего не пишет: «твой ход» и прочий шум — нет.
+ * Кроме него бот сам пишет только «друг тебя обогнал» (server/friends.mjs,
+ * с теми же /mute и тишиной ночью) и «твой ход» в дуэлях по переписке
+ * (server/duels.mjs); прочий шум — нет.
  *
  * День — строка YYYY-MM-DD в поясе бота: «сегодня» у сервера и в отчёте
  * одно и то же для всех игроков.
@@ -21,13 +24,15 @@
 
 export const REMIND_HOUR = 19;
 const EVENTS_PER_DAY = 300;           // больше от одного игрока за сутки не пишем
-const MODES = new Set(['quick', 'campaign', 'ascent', 'daily', 'challenge', 'online', 'fallback', 'hotseat']);
+const MODES = new Set(['quick', 'campaign', 'ascent', 'daily', 'challenge', 'online', 'duel', 'fallback', 'hotseat']);
 
 /** Шаги воронки и их подписи в отчёте — по порядку, как их проходит новичок. */
 export const STEPS = {
   first_shot: 'выстрелил', first_hook: 'пустил трос', tutorial_done: 'прошёл обучение',
   first_win: 'победил', shop_open: 'открыл магазин', buy_click: 'нажал «купить»',
   invite: 'позвал друга', story: 'выложил сторис', clip: 'сохранил клип',
+  level_2: 'уровень 2', level_5: 'уровень 5', level_10: 'уровень 10', level_20: 'уровень 20',
+  ach_first: 'первое достижение', ach_10: '10 достижений',
 };
 
 export function createAnalytics({ db, now = () => Date.now(), tz = 'Europe/Moscow' }) {
@@ -169,6 +174,9 @@ export function createAnalytics({ db, now = () => Date.now(), tz = 'Europe/Mosco
     return q.due.all(today, shiftDay(today, -1), today);
   }
 
+  /** Час (0–23) в поясе бота: ночью бот сам не пишет. */
+  function hourOf(ms = now()) { return Number(parts(ms).hour); }
+
   function markReminded(playerId) { q.reminded.run(dayOf(), playerId); }
   function setRemind(playerId, on) { q.mute.run(on ? 1 : 0, playerId); }
 
@@ -209,5 +217,5 @@ export function createAnalytics({ db, now = () => Date.now(), tz = 'Europe/Mosco
     };
   }
 
-  return { record, report, stats, remindDue, markReminded, setRemind, dayOf };
+  return { record, report, stats, remindDue, markReminded, setRemind, dayOf, hourOf };
 }

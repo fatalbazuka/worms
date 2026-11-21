@@ -3,14 +3,17 @@ import { CFG } from '../config.js';
 import { MISSIONS, loadProgress, isUnlocked } from '../campaign/missions.js';
 import { objectiveText } from '../campaign/objectives.js';
 import {
-  quickMatch, campaignMatch, onlineMatch, towerMatch, fallbackMatch, challengeMatch, ascentMatch, dailyMatch, QUICK_OPTIONS,
+  quickMatch, campaignMatch, onlineMatch, towerMatch, rookieMatch, tutorialMatch, fallbackMatch, challengeMatch, ascentMatch, dailyMatch, QUICK_OPTIONS,
 } from '../core/match.js';
 import { CHALLENGES, challengeOpen, totalStars, STAR_COINS } from '../campaign/challenges.js';
 import { ASCENT, CHAPTERS, ascentOpen, bossName, chapterOf } from '../campaign/ascent.js';
 import { AFFIXES, DEFAULT_AFFIXES } from '../entities/Affixes.js';
-import { ascentDone } from '../platform/ascent.js';
+import { ascentDone, ascentStars, claimChapterBoxes } from '../platform/ascent.js';
 import { challengeStars } from '../platform/challenges.js';
-import { onboardStage } from '../platform/onboard.js';
+import { onboardStage, isNewbie } from '../platform/onboard.js';
+import { currentGoal } from '../platform/nextgoal.js';
+import { dailyTowerStreak, dailyTowerWon } from '../platform/dailytower.js';
+import { streakBonus } from '../core/dailytower.js';
 import { SHAPES } from '../core/shapes.js';
 import { randomRoom, copyText } from '../net/transport.js';
 import { isCasualRoom, isTowerRoom } from '../net/rooms.js';
@@ -18,8 +21,10 @@ import { Lobby } from '../net/lobby.js';
 import { pendingSession, forgetSession } from '../net/session.js';
 import {
   syncMe, fetchTop, myRank, loggedIn, onAccountChange, track,
-  trackStep, prepareChallenge, fetchDailyTower, redeemPromo,
+  trackStep, prepareChallenge, fetchDailyTower, redeemPromo, fetchFriends, inviteFriend,
+  fetchDuels, fetchDuel, createDuel, joinDuel, resignDuel,
 } from '../net/server.js';
+import { duelMatch, flushPendingTurns } from '../net/duel.js';
 import { openAccountDialog } from '../ui/AccountDialog.js';
 import { openTournaments } from '../ui/Tournaments.js';
 import { askText, closeOverlay } from '../ui/Overlay.js';
@@ -27,15 +32,16 @@ import { makeTransport } from '../net/connect.js';
 import { player } from '../platform/player.js';
 import {
   inviteLink as tgInviteLink, shareRoom, shareMessage, canOfferHomeScreen, addToHomeScreen, onHomeScreenChange,
-  haptic, inTelegram, botLink, refLink, shareLink,
+  haptic, inTelegram, botLink, refLink, shareLink, duelLink, startDuelCode,
 } from '../platform/telegram.js';
 import { leagueOf, nextLeague, leagueProgress, toNextLeague, leagueLabel } from '../platform/league.js';
 import { BOT_LEVELS } from '../ai/Bot.js';
 import { isDesktop, setUiMode, aimScheme, setAimScheme } from '../platform/device.js';
 import { sfx } from '../audio/Sfx.js';
+import { music } from '../audio/Music.js';
 import { SKINS, SKIN_BY_ID, BOX_SKINS, RARITY, RARITY_ORDER, skinPrice, rewardMissions } from '../core/skins.js';
 import {
-  skinState, equippedSkin, equipSkin, openSkinBox, syncCampaignBoxes, buySkin, applyServerOwned,
+  skinState, equippedSkin, equipSkin, openSkinBox, syncCampaignBoxes, buySkin, applyServerOwned, grantBoxes,
 } from '../platform/skins.js';
 import {
   TASK_BY_ID, BOX_PRICE, STREAK_COINS, STREAK_BOX_DAY, streakReady, dayKey, claimStreak,
@@ -44,10 +50,15 @@ import {
 import {
   dailyState, rewardWaiting, claimDailyTask, claimDailyStreak, buyBox, buyStreakFreeze,
 } from '../platform/daily.js';
-import { COSMETICS, KINDS, KIND_NAMES } from '../core/cosmetics.js';
+import { COSMETICS, KINDS, KIND_NAMES, item as cosItem } from '../core/cosmetics.js';
 import { cosState, buyCosmetic, equipCosmetic } from '../platform/cosmetics.js';
 import { fitScale } from '../core/assets.js';
+import { XP, TABLE_END, rewardFor, COS_LABEL } from '../core/levels.js';
+import { levelState } from '../platform/levels.js';
 import { LANG, setLang } from '../i18n/index.js';
+import { GROUPS } from '../core/achievements.js';
+import { achState, checkAchievements, notePromo, onAchievement } from '../platform/achievements.js';
+import { AchToasts } from '../ui/AchToast.js';
 
 /**
  * Меню.
@@ -71,6 +82,24 @@ function plural(n, one, few, many) {
   return many;
 }
 
+/** Когда друг был в игре: «сегодня», «вчера», «3 дн. назад», «давно». */
+function seenText(at) {
+  if (!at) return '';
+  const midnight = new Date();
+  midnight.setHours(0, 0, 0, 0);
+  if (at >= midnight.getTime()) return 'в игре сегодня';
+  const days = Math.ceil((midnight.getTime() - at) / 86400_000);
+  if (days <= 1) return 'в игре вчера';
+  return days > 30 ? 'в игре давно' : `в игре ${days} дн. назад`;
+}
+
+/** Сколько осталось на ход: «23 ч», «40 мин». */
+function leftText(deadline) {
+  const ms = Math.max(0, (deadline ?? 0) - Date.now());
+  if (ms >= 3600_000) return `${Math.floor(ms / 3600_000)} ч`;
+  return `${Math.max(1, Math.round(ms / 60_000))} мин`;
+}
+
 /** Через сколько секунд поиска без соперника предлагается бой с ботом. */
 const FALLBACK_AFTER = 20;
 
@@ -85,6 +114,8 @@ export default class MenuScene extends Phaser.Scene {
     this.buttons = {};
 
     this.cameras.main.setBackgroundColor('#0d1220');
+    // Своя тема у меню: из боя переходим в неё плавно, без обрыва
+    music.play('menu');
     // Вернулись в меню — в лобби мы снова свободны
     this.lobby?.idle();
     const f = CFG.FRAME;
@@ -102,6 +133,14 @@ export default class MenuScene extends Phaser.Scene {
     };
     this.events.on('addedtoscene', assignCamera);
     this.events.once('shutdown', () => this.events.off('addedtoscene', assignCamera));
+    // Открылось достижение (скин из коробки, серия дней, промокод) —
+    // плашкой сверху, поверх любого раздела
+    this.achToasts = new AchToasts(this, {
+      adopt: (o) => o.setDepth(80),
+      place: () => ({ x: this.W / 2, y: 14, center: true }),
+    });
+    const offAch = onAchievement((list) => this.achToasts.push(list));
+    this.events.once('shutdown', offAch);
     this._backdrop();
     this._initScroll();
     // Коробки за миссии, пройденные раньше, чем появились скины
@@ -123,6 +162,17 @@ export default class MenuScene extends Phaser.Scene {
       this.registry.set('returnTo', null);
       this.time.delayedCall(30, () => this.showAscent());
     }
+    if (this.registry.get('returnTo') === 'duels') {
+      this.registry.set('returnTo', null);
+      this.time.delayedCall(30, () => this.showDuels());
+    }
+    // «Что дальше» с экрана итога — в свой раздел
+    const goalTo = { tasks: 'showTasks', skins: 'showSkins', road: 'showRoad', achievements: 'showAchievements' }[this.registry.get('returnTo')];
+    if (goalTo) {
+      this.registry.set('returnTo', null);
+      this.time.delayedCall(30, () => this[goalTo]());
+    }
+    if (this.registry.get('returnTo') === 'root') this.registry.set('returnTo', null);
     const back = this.registry.get('returnTour');
     const params = new URLSearchParams(globalThis.location?.search ?? '');
     const fromLink = params.get('tour');
@@ -132,6 +182,18 @@ export default class MenuScene extends Phaser.Scene {
     } else if (fromLink && !this.registry.get('tourLinkUsed')) {
       this.registry.set('tourLinkUsed', true);
       this.time.delayedCall(300, () => this.openTournaments(/^\d+$/.test(fromLink) ? Number(fromLink) : null));
+    } else if (params.get('top') === 'friends' && !this.registry.get('topLinkUsed')) {
+      // Кнопка из сообщения бота «друг тебя обогнал» — сразу к топу друзей
+      this.registry.set('topLinkUsed', true);
+      this.time.delayedCall(300, () => { this.topFrom = 'tab'; this.showTop('rating', 'friends'); });
+    } else if (/^\d+$/.test(params.get('duel') ?? '') && !this.registry.get('duelLinkUsed')) {
+      // Кнопка «⚔️ Ходить» из сообщения бота — сразу в дуэль
+      this.registry.set('duelLinkUsed', true);
+      this.time.delayedCall(100, () => this.openDuel(Number(params.get('duel'))));
+    } else if (startDuelCode() && !this.registry.get('duelLinkUsed')) {
+      // Ссылка на дуэль от друга: принимаем и сразу в неё
+      this.registry.set('duelLinkUsed', true);
+      this.time.delayedCall(100, () => this.joinDuelByCode(startDuelCode()));
     }
 
     this.input.keyboard?.on('keydown-ESC', () => this.showRoot());
@@ -274,6 +336,9 @@ export default class MenuScene extends Phaser.Scene {
     this.buttons = {};
     this.buttonTexts = {};
     this.copiedLabel = null;
+    // Любой раздел рисуется заново после того, что могло сдвинуть вехи и
+    // коллекцию (коробка, покупка, серия дней): тут их и проверяем
+    checkAchievements();
   }
 
   _title(text, sub = '') {
@@ -408,6 +473,7 @@ export default class MenuScene extends Phaser.Scene {
    */
   _tabs(active) {
     const W = this.W;
+    const n = this.items.length;
     // Логический пиксель на телефоне — около половины экранного, поэтому
     // подписи здесь 19–20: меньше уже не читается
     const h = this.portrait ? 116 : 96;
@@ -417,6 +483,7 @@ export default class MenuScene extends Phaser.Scene {
     const tabs = [
       ['battle', 'Бой', 'battle', () => this.showRoot()],
       ['tasks', 'Задания', 'tasks', () => this.showTasks()],
+      ['shop', 'Магазин', 'shop', () => this.showShop()],
       ['tournaments', 'Турниры', 'trophy', () => this.openTournaments()],
       ['top', 'Топ', 'podium', () => { this.topFrom = 'tab'; this.showTop(); }],
       ['account', 'Профиль', 'profile', () => this.openAccount()],
@@ -432,9 +499,10 @@ export default class MenuScene extends Phaser.Scene {
         .setAlpha(on ? 1 : 0.6);
       if (on) glyph.setTint(0xffc247);
       const text = this.add.text(x, y0 + h * 0.76, label,
-        font(this.portrait ? 18 : 18, 800, on ? UI.accent : UI.textDim)).setOrigin(0.5);
+        font(this.portrait && W < 640 ? 16 : 18, 800, on ? UI.accent : UI.textDim)).setOrigin(0.5);
       // Есть что забрать — красная точка на «Заданиях»
-      if (key === 'tasks' && !on && rewardWaiting()) {
+      // Красные точки — после первой победы: до неё новичку нужна одна «Играть»
+      if (!on && !isNewbie() && ((key === 'tasks' && rewardWaiting()) || (key === 'shop' && skinState().boxes > 0))) {
         this.items.push(this.add.circle(x + size * 0.55, y0 + h * 0.36 - size * 0.45, 9, 0xff4d4d)
           .setStrokeStyle(3, 0x0b1018));
       }
@@ -446,6 +514,8 @@ export default class MenuScene extends Phaser.Scene {
       if (on) this.items.push(this.add.rectangle(x, y0 + 3, 54, 4, 0xffc247).setOrigin(0.5, 0));
       this.buttons[key] = { x, y: y0 + h / 2 + this.oy, w: cell, h, enabled: true };
     });
+    // Как «назад»: не уезжают, когда раздел прокручивается (топ друзей)
+    for (const o of this.items.slice(n)) o.setScrollFactor(0).setY(o.y + this.oy).setDepth(50);
     return h;
   }
 
@@ -470,6 +540,7 @@ export default class MenuScene extends Phaser.Scene {
    */
   showRoot() {
     this.section = this.showRoot;
+    this.fromShop = false;
     this._clear();
     const W = this.W, cx = W / 2;
     const portrait = this.portrait;
@@ -493,10 +564,17 @@ export default class MenuScene extends Phaser.Scene {
     this.items.push(name);
     this._iconButton('sound', W - pad - 30, top + 36, sfx.muted ? 'mute' : 'sound',
       () => { sfx.setMuted(!sfx.muted); this.showRoot(); }, 60);
-    this.items.push(this.add.text(W - pad - 76, top + 18,
+    // Музыка — отдельно от звука: эффекты оставить, мелодию выключить.
+    // Общий «звук выкл» глушит и её, но переключатель помнит своё
+    this._iconButton('music', W - pad - 96, top + 36, music.enabled ? 'music' : 'music-off',
+      () => { music.toggle(); this.showRoot(); }, 60);
+    this.items.push(this.add.text(W - pad - 142, top + 18,
       `${me.rating}${me.rank ? ` · место ${me.rank}` : ''}`, font(28, 800, UI.accent)).setOrigin(1, 0));
     this._leagueBar(cx, top + 84, me.rating, Math.min(W - pad * 2, 760), 18);
-    this._coinBadge(W - pad - 76, top + 156, true);
+    // Монеты — вход в магазин: плашка с «+», как в любой игре. На узком
+    // экране ряд плашек слева её бы накрыл — тогда она строкой ниже
+    const coinY = W < 900 ? top + 222 : top + 156;
+    this._coinShopLink(W - pad, coinY);
 
     // Редкое — мелкими плашками под лигой: иконка на экран Домой (пока
     // Telegram говорит, что её нет) и схема управления (вне Telegram)
@@ -508,15 +586,24 @@ export default class MenuScene extends Phaser.Scene {
     if (canOfferHomeScreen()) pill('home', '⌂ На экран Домой', 250, () => addToHomeScreen());
     const desktop = isDesktop();
     if (!desktop) {
-      const sling = aimScheme() === 'sling';
-      pill('aim-mode', sling ? 'Прицел: рогатка' : 'Прицел: кнопки', 230,
-        () => { setAimScheme(sling ? 'buttons' : 'sling'); this.showRoot(); });
+      // Три схемы прицела — выбор на отдельном экране с пояснениями
+      const aimName = { sling: 'рычаг', anywhere: 'где угодно', buttons: 'классика' }[aimScheme()];
+      pill('aim-mode', `Прицел: ${aimName}`, 230, () => this.showAim());
     }
     // Язык: по умолчанию — из Telegram, здесь можно сменить
     pill('lang', LANG === 'en' ? 'RU' : 'EN', 74, () => setLang(LANG === 'en' ? 'ru' : 'en'));
     if (!inTelegram()) {
       pill('ui-mode', desktop ? 'Управление: ПК' : 'Управление: сенсор', 260,
         () => { setUiMode(desktop ? 'touch' : 'desktop'); this.showRoot(); });
+    }
+    // Уровень — вход в «Дорогу наград». До первого выстрела его нет: новичку
+    // нужна одна «Играть», а опыт он увидит на экране итога обучения.
+    // Встаёт в ряд плашек, если там есть место, иначе — строкой ниже, слева
+    // от магазина (на телефоне)
+    if (onboardStage() !== 'tutorial') {
+      const lw = 270;
+      const inRow = pillX + lw <= W - pad - 316;
+      this._levelBadge(inRow ? pillX : pad, inRow ? top + 156 : top + 222, lw);
     }
 
     // --- «Играть» ---
@@ -528,7 +615,8 @@ export default class MenuScene extends Phaser.Scene {
     this._button('play', cx, playY, 'ИГРАТЬ',
       tutorial ? 'Первый бой · научим стрелять'
         : choice.level ? `Башня · бот «${BOT_LEVELS[choice.level].name}»` : 'Башня · вдвоём на одном телефоне',
-      () => this.start(tutorial ? { ...challengeMatch('first'), tutorial: true } : towerMatch(choice.level)),
+      () => this.start(tutorial ? tutorialMatch()
+        : choice.level === 'rookie' && onboardStage() === 'rookie' ? rookieMatch() : towerMatch(choice.level)),
       { w: Math.min(W - 72, 560), h: playH, variant: 'primary', big: true });
     // Под «Играть»: другие режимы и вызов друга — бок о бок
     const subY = playY + playH / 2 + (portrait ? 48 : 36);
@@ -541,6 +629,8 @@ export default class MenuScene extends Phaser.Scene {
     // Партия оборвалась (Telegram перезапустился, погас экран), а мы
     // открылись без ссылки: предлагаем вернуться, пока соперник ждёт
     let areaBottom = playY - playH / 2 - 22;
+    // «Что дальше» — одна строка над «Играть». Новичку не нужна: ему — «Играть»
+    if (!isNewbie()) areaBottom = this._goalLine(cx, areaBottom - 16, Math.min(W - 72, 560)) - 22;
     const pending = pendingSession();
     if (pending && Date.now() - pending.at < 15 * 60 * 1000) {
       const y = areaBottom - 30;
@@ -552,11 +642,27 @@ export default class MenuScene extends Phaser.Scene {
       areaBottom = y - 44;
     }
 
+    // Дуэли по переписке — только с аккаунтом: они живут на сервере.
+    // Твой ход хоть в одной — красный значок с числом
+    if (loggedIn()) {
+      const y = areaBottom - 30;
+      const n = this.duelsTurn ?? 0;
+      this._button('duels', cx, y, 'Мои дуэли', n ? `по переписке · твой ход: ${n}` : 'по переписке · ходи, когда удобно',
+        () => this.showDuels(), { w: 360, h: 60 });
+      if (n) {
+        this.items.push(this.add.circle(cx + 172, y - 26, 17, 0xff4d4d).setStrokeStyle(3, 0x0b1018));
+        this.items.push(this.add.text(cx + 172, y - 26, String(n), font(18, 900, '#ffffff')).setOrigin(0.5));
+      }
+      areaBottom = y - 44;
+      this._refreshDuelBadge();
+    }
+
     // --- твой боец ---
-    const areaTop = top + 196;
+    const areaTop = coinY + 40;
     const areaH = areaBottom - areaTop;
     // Первый вход за день — бонус серии, одним окном поверх экрана
-    if (streakReady(dailyState(), dayKey()) && !this.streakShown) {
+    // Новичку — никаких окон до первого боя: сначала «Играть», бонус подождёт
+    if (onboardStage() !== 'tutorial' && streakReady(dailyState(), dayKey()) && !this.streakShown) {
       this.streakShown = true;
       this.time.delayedCall(350, () => { if (this.section === this.showRoot) this._streakPopup(); });
     }
@@ -591,6 +697,312 @@ export default class MenuScene extends Phaser.Scene {
         this.items.push(box, badge);
         this.buttons.box = { x: bx, y: by - 20 * k + this.oy, w: 50 * k, h: 46 * k, enabled: true };
       }
+    }
+  }
+
+  /**
+   * Ближайшая цель (core/nextgoal.js) строкой с полоской прогресса. Тап —
+   * в её раздел: задания, коробки, дорога наград, достижения.
+   * @returns {number} верхний край строки
+   */
+  _goalLine(cx, y, w) {
+    const goal = currentGoal();
+    if (!goal) return y + 16;
+    const go = { tasks: () => this.showTasks(), skins: () => this.showSkins(), road: () => this.showRoad(),
+      achievements: () => { this.achFrom = 'root'; this.showAchievements(); } }[goal.action];
+    const t = this.add.text(cx, y - 8, `🎯 ${goal.text}${go ? ' ›' : ''}`, font(20, 800, go ? '#8ef0a0' : '#ffe9c2'))
+      .setOrigin(0.5);
+    if (t.width > w) t.setScale(w / t.width);
+    const bw = Math.min(t.displayWidth, 320);
+    this.items.push(t,
+      this.add.rectangle(cx - bw / 2, y + 12, bw, 5, 0x0b1220, 0.9).setOrigin(0, 0.5),
+      this.add.rectangle(cx - bw / 2, y + 12, Math.max(3, bw * Math.min(1, goal.progress)), 5, 0x8ef0a0).setOrigin(0, 0.5));
+    if (go) {
+      t.setInteractive({ useHandCursor: true });
+      t.on('pointerup', () => { if (!this._dragging) { haptic('tap'); go(); } });
+      this.buttons.goal = { x: cx, y: y - 8 + this.oy, w: t.displayWidth, h: 32, enabled: true };
+    }
+    return y - 24;
+  }
+
+  // ------------------------------------------------------------- уровень
+
+  /**
+   * Плашка уровня на главном: «Ур. 5», тонкая полоса опыта и значок
+   * следующего подарка. Тап — «Дорога наград». x — левый край.
+   */
+  _levelBadge(x, y, w) {
+    const lv = levelState();
+    const h = 58, cx = x + w / 2;
+    const plate = this.add.graphics();
+    plate.fillStyle(0x1c1440, 0.95).fillRoundedRect(x, y - h / 2, w, h, h / 2);
+    plate.lineStyle(3, 0x8fe3ff, 0.75).strokeRoundedRect(x, y - h / 2, w, h, h / 2);
+    this.items.push(plate);
+    const label = this.add.text(x + 22, y, `Ур. ${lv.level}`, font(24, 900, '#ffe27a')).setOrigin(0, 0.5);
+    this.items.push(label);
+    // Полоса — между надписью и значком подарка
+    const bx = x + 34 + label.width, bw = Math.max(40, x + w - 62 - bx);
+    this.items.push(this.add.rectangle(bx, y - 5, bw, 10, 0x0b1220, 0.9).setOrigin(0, 0.5));
+    this.items.push(this.add.rectangle(bx, y - 5, Math.max(4, bw * lv.progress), 10, 0x8fe3ff).setOrigin(0, 0.5));
+    this.items.push(this.add.text(bx, y + 13, `${lv.into}/${lv.need}`, font(15, 700, UI.textDim)).setOrigin(0, 0.5));
+    // Что дадут на следующем — маленьким значком в конце
+    const icon = this._rewardIcon(x + w - 32, y, rewardFor(lv.level + 1), 34);
+    if (icon) this.tweens.add({ targets: icon, scale: icon.scale * 1.15, duration: 700, yoyo: true, repeat: -1, ease: 'Sine.easeInOut' });
+    const zone = this.add.zone(cx, y, w, h).setInteractive({ useHandCursor: true });
+    zone.on('pointerdown', () => { haptic('tap'); label.setScale(0.92); });
+    zone.on('pointerout', () => label.setScale(1));
+    zone.on('pointerup', () => { label.setScale(1); if (!this._dragging) this.showRoad(); });
+    this.items.push(zone);
+    this.buttons.level = { x: cx, y: y + this.oy, w, h, enabled: true };
+  }
+
+  /**
+   * Значок подарка: монета (горка из трёх — если куча), коробка, образец
+   * украшения. @returns {object|null} главный объект значка
+   */
+  _rewardIcon(x, y, r, size, alpha = 1) {
+    if (!r) return null;
+    const push = (o) => { this.items.push(o.setAlpha(alpha)); return o; };
+    if (r.boxes && this.textures.exists('shot_crate_weapon')) {
+      const img = push(this.add.image(x, y, 'shot_crate_weapon').setScale(fitScale(this, 'shot_crate_weapon', size)));
+      if (r.boxes > 1) {
+        push(this.add.text(x + size * 0.45, y - size * 0.4, `×${r.boxes}`, font(Math.round(size * 0.42), 900, '#1a1408'))
+          .setOrigin(0.5).setPadding(4, 0, 4, 0).setBackgroundColor('#ffe27a'));
+      }
+      return img;
+    }
+    if (r.cos) {
+      const it = cosItem(r.cos.kind, r.cos.id);
+      if (it?.emoji && this.textures.exists(`emoji_${it.emoji}`)) {
+        return push(this.add.image(x, y, `emoji_${it.emoji}`).setScale(size / 128));
+      }
+      // Трос и след — образцом цвета: полоска или три точки, радуга — всеми
+      const colors = it?.rainbow ? [0xff5a5a, 0xffd45a, 0x6ee36e, 0x5aa9ff, 0xc58bff] : [it?.color ?? 0xffffff];
+      const g = push(this.add.graphics({ x, y }));
+      if (r.cos.kind === 'trail') {
+        for (let i = 0; i < 3; i++) {
+          g.fillStyle(colors[(i * 2) % colors.length], 1)
+            .fillCircle((i - 1) * size * 0.34, (1 - i) * size * 0.18, size * (0.1 + i * 0.04));
+        }
+      } else {
+        const n = colors.length, seg = size / n;
+        for (let i = 0; i < n; i++) {
+          g.lineStyle(Math.max(4, size * 0.16), colors[i], 1);
+          g.lineBetween(-size / 2 + i * seg, size * 0.3 - i * seg * 0.6, -size / 2 + (i + 1) * seg, size * 0.3 - (i + 1) * seg * 0.6);
+        }
+      }
+      return g;
+    }
+    const key = this._coinTexture();
+    if (r.big) {
+      push(this.add.image(x - size * 0.22, y + size * 0.12, key).setScale(size / 60));
+      push(this.add.image(x + size * 0.22, y + size * 0.12, key).setScale(size / 60));
+      return push(this.add.image(x, y - size * 0.16, key).setScale(size / 56));
+    }
+    return push(this.add.image(x, y, key).setScale(size / 48));
+  }
+
+  /** Подпись подарка: «+100 монет», «Коробка со скином», «Трос «Неоновый»». */
+  _rewardLabel(r) {
+    if (!r) return { title: 'Начало пути', hint: 'опыт — за каждый бой' };
+    if (r.boxes) {
+      return { title: r.boxes > 1 ? `Коробки со скином ×${r.boxes}` : 'Коробка со скином', hint: 'случайный скин' };
+    }
+    if (r.cos) {
+      const name = cosItem(r.cos.kind, r.cos.id)?.name ?? '';
+      const kind = COS_LABEL[r.cos.kind];
+      return { title: `${kind[0].toUpperCase()}${kind.slice(1)} «${name}»`, hint: 'украшение · если уже есть — монетами' };
+    }
+    return { title: `+${r.coins} монет`, hint: r.big ? 'куча монет' : '' };
+  }
+
+  /**
+   * «Дорога наград»: уровни столбиком, на каждом — подарок. Взятые
+   * отмечены галочкой, текущий подсвечен, следующий — с полосой «сколько
+   * ещё». Подарки выдаются сами, как только уровень взят (на экране итога
+   * боя), — здесь их не забирают, а смотрят, что впереди. В горизонтальном
+   * экране слева стоит карточка уровня, справа крутится дорога.
+   */
+  showRoad() {
+    const keep = this.section === this.showRoad ? this.scrollY : null;
+    this.section = this.showRoad;
+    this._clear();
+    const W = this.W;
+    const wide = !this.portrait;
+    const lv = levelState();
+
+    // --- шапка и карточка уровня; в ландшафте — прибиты слева ---
+    const pinFrom = this.items.length;
+    const hx = wide ? Math.round(Math.min(W * 0.27, 380)) : W / 2;
+    this._title('Дорога наград', 'подарок на каждом уровне · опыт — за любой бой');
+    if (wide) for (const o of this.items.slice(pinFrom)) o.setX(hx);
+    const hw = wide ? Math.min(W * 0.42, 560) : Math.min(W - 48, 640);
+    const hTop = wide ? 150 : 146, hh = wide ? 246 : 236;
+    const card = this.add.graphics();
+    card.fillStyle(0x1c1440, 0.92).fillRoundedRect(hx - hw / 2, hTop, hw, hh, 26);
+    card.lineStyle(4, 0xffc247, 0.85).strokeRoundedRect(hx - hw / 2, hTop, hw, hh, 26);
+    this.items.push(card);
+    this.items.push(this.add.text(hx, hTop + 50, `Уровень ${lv.level}`, font(46, 900, '#ffe27a'))
+      .setOrigin(0.5).setStroke('#5a2a08', 7));
+    const bw = hw - 64, bl = hx - bw / 2, by = hTop + 112;
+    this.items.push(this.add.rectangle(bl, by, bw, 20, 0x0b1220, 0.9).setOrigin(0, 0.5));
+    this.items.push(this.add.rectangle(bl, by, Math.max(6, bw * lv.progress), 20, 0x8fe3ff).setOrigin(0, 0.5));
+    this.items.push(this.add.text(bl, by + 20, `${lv.into} из ${lv.need} опыта`, font(19, 800, UI.text)).setOrigin(0, 0));
+    this.items.push(this.add.text(bl + bw, by + 20, `до ур. ${lv.level + 1} ещё ${lv.need - lv.into}`,
+      font(19, 700, UI.textDim)).setOrigin(1, 0));
+    // Откуда берётся опыт — чтобы было понятно, что делать
+    this.items.push(this.add.text(hx, by + 62,
+      `опыт: бой +${XP.battle} · победа +${XP.win} · урон до +${XP.damageMax} · с человеком +${XP.online}`
+        + ` · новые звёзды и миссии — ещё больше`,
+      font(this.fs(14), 700, UI.textDim)).setOrigin(0.5, 0).setAlign('center').setWordWrapWidth(hw - 48));
+    if (wide) {
+      // Дорога крутится справа, а шапка и карточка стоят на месте
+      for (const o of this.items.slice(pinFrom)) o.setScrollFactor(0).setY(o.y + this.oy).setDepth(40);
+    }
+
+    // --- дорога ---
+    const last = Math.max(TABLE_END, lv.level + 10);
+    const rw = wide ? Math.min(W - hx - hw / 2 - 80, 660) : Math.min(W - 48, 640);
+    const lx = wide ? Math.round(hx + hw / 2 + 40 + rw / 2) : W / 2;
+    const rh = this.portrait ? 100 : 86, gap = 14;
+    const y0 = wide ? 40 : hTop + hh + 34;
+    const rowY = (level) => y0 + (level - 1) * (rh + gap) + rh / 2;
+    const x0 = lx - rw / 2;
+    const nodeX = x0 + 46;
+    // Сама дорога: линия через кружки уровней, пройденная часть — золотом
+    this.items.push(this.add.rectangle(nodeX, rowY(1), 8, rowY(last) - rowY(1), 0x2a3350).setOrigin(0.5, 0).setDepth(-1));
+    this.items.push(this.add.rectangle(nodeX, rowY(1), 8, rowY(lv.level) - rowY(1) + rh / 2, 0xffc247)
+      .setOrigin(0.5, 0).setDepth(-1));
+    for (let level = 1; level <= last; level++) {
+      const y = rowY(level);
+      const got = level <= lv.level, now = level === lv.level, next = level === lv.level + 1;
+      const variant = now ? 'active' : 'normal';
+      const key = `menu-road-${rw}x${rh}-${variant}`;
+      ensureButton(this, key, rw, rh, variant);
+      this.items.push(this.add.image(lx, y, key).setAlpha(got && !now ? 0.55 : got || next ? 1 : 0.8));
+      const ink = now ? '#2a1c06' : UI.text;
+      // Кружок с номером уровня
+      this.items.push(this.add.circle(nodeX, y, 28, got ? 0xffc247 : next ? 0x8fe3ff : 0x22293a)
+        .setStrokeStyle(4, now ? 0xffffff : 0x0b1018));
+      // Тёмные буквы на светлом — без тёмной обводки, иначе они мажутся
+      const dark = (t) => t.setStroke('#000000', 0);
+      const num = this.add.text(nodeX, y, `${level}`, font(24, 900, got || next ? '#2a1c06' : UI.textDim)).setOrigin(0.5);
+      if (got || next) dark(num);
+      this.items.push(num);
+      // Подарок: значок и подпись
+      const r = rewardFor(level);
+      const label = this._rewardLabel(r);
+      this._rewardIcon(x0 + 122, y, r, 50, got && !now ? 0.6 : 1);
+      const tx = x0 + (r ? 164 : 100);
+      const hint = now ? 'ты здесь' : next ? `ещё ${lv.need - lv.into} опыта` : label.hint;
+      const head = this.add.text(tx, hint ? y - 13 : y, label.title, font(this.portrait ? 25 : 23, 800, ink)).setOrigin(0, 0.5);
+      this.items.push(now ? dark(head) : head);
+      if (hint) {
+        const sub = this.add.text(tx, y + 17, hint,
+          font(this.fs(14), 700, now ? '#5a3a08' : next ? '#8fe3ff' : UI.textDim)).setOrigin(0, 0.5);
+        this.items.push(now ? dark(sub) : sub);
+      }
+      // Справа: галочка за взятый, полоса — у следующего
+      const rx = x0 + rw - 30;
+      if (got && r) {
+        const tick = this.add.text(rx, y, '✓', font(34, 900, now ? '#2a1c06' : '#8ef0a0')).setOrigin(1, 0.5);
+        this.items.push(now ? dark(tick) : tick);
+      } else if (next) {
+        const pw = Math.min(120, rw * 0.2);
+        this.items.push(this.add.rectangle(rx - pw, y, pw, 12, 0x0b1220, 0.9).setOrigin(0, 0.5));
+        this.items.push(this.add.rectangle(rx - pw, y, Math.max(4, pw * lv.progress), 12, 0x8fe3ff).setOrigin(0, 0.5));
+      }
+    }
+    this.items.push(this.add.text(lx, rowY(last) + rh / 2 + 24, 'дальше — тоже подарки: монеты, а каждый пятый уровень — коробка',
+      font(this.fs(14), 700, UI.textDim)).setOrigin(0.5, 0).setAlign('center').setWordWrapWidth(rw));
+    this._back();
+    this._scrollable(rowY(last) + rh / 2 + 90);
+    // Открыли — свой уровень и следующий на виду: если они ниже экрана,
+    // дорога сама прокручена к ним, а не стоит на втором уровне
+    this._setScroll(keep ?? Math.max(0, rowY(lv.level + 1) + rh - this.bottomY(110)));
+  }
+
+  // --------------------------------------------------------- достижения
+
+  /**
+   * Витрина достижений: группами (трюки, вехи, коллекция), карточки сеткой.
+   * Открытое — в цвете и с датой; закрытое — силуэтом, с условием и
+   * прогрессом «7/10». Награда видна у каждого: ради неё и тянутся.
+   * Забирать нечего — награда выдаётся сама, как только открыл.
+   */
+  showAchievements() {
+    const keep = this.section === this.showAchievements ? this.scrollY : null;
+    this.section = this.showAchievements;
+    this._clear();
+    const W = this.W;
+    const st = achState();
+    this._title('Достижения', `открыто ${st.got} из ${st.total} · награда — сразу, как откроешь`);
+    // На телефоне — два столбца, в ландшафте — сколько влезет, до четырёх
+    const cols = this.portrait ? 2 : Math.max(2, Math.min(4, Math.floor((W - 64) / 330)));
+    const gap = 14;
+    const cw = Math.floor((Math.min(W - 48, cols * 380) - gap * (cols - 1)) / cols);
+    const ch = this.portrait ? 196 : 166;
+    const span = cols * cw + gap * (cols - 1);
+    const x0 = Math.round((W - span) / 2);
+    let y = this.portrait ? 170 : 160;
+    for (const g of GROUPS) {
+      const list = st.list.filter((a) => a.group === g.id);
+      const got = list.filter((a) => a.done).length;
+      this.items.push(this.add.text(x0, y, g.title, font(30, 900, UI.accent)).setOrigin(0, 0.5));
+      this.items.push(this.add.text(x0 + span, y, `${got}/${list.length} · ${g.hint}`,
+        font(this.fs(14), 700, UI.textDim)).setOrigin(1, 0.5));
+      y += 30;
+      list.forEach((a, i) => {
+        this._achCard(a, x0 + (i % cols) * (cw + gap), y + Math.floor(i / cols) * (ch + gap), cw, ch);
+      });
+      y += Math.ceil(list.length / cols) * (ch + gap) + 34;
+    }
+    this._back(this.achFrom === 'tasks' ? () => this.showTasks()
+      : this.achFrom === 'account' ? () => { this.showRoot(); this.openAccount(); } : undefined);
+    this._scrollable(y + 40);
+    this._setScroll(keep ?? 0);
+  }
+
+  /** Карточка достижения: x, y — левый верхний угол. */
+  _achCard(a, x, y, w, h) {
+    const done = a.done;
+    const g = this.add.graphics();
+    g.fillStyle(done ? 0x241a4e : 0x121826, 0.94).fillRoundedRect(x, y, w, h, 18);
+    g.lineStyle(3, done ? 0xffc247 : 0x2a3350, done ? 0.9 : 1).strokeRoundedRect(x, y, w, h, 18);
+    this.items.push(g);
+    // Значок: открытое — цветной эмодзи, закрытое — силуэт
+    const key = `emoji_${a.icon}`;
+    if (this.textures.exists(key)) {
+      const img = this.add.image(x + 46, y + 46, key).setScale(62 / 128);
+      if (!done) img.setTintFill(0x3a4560);
+      this.items.push(img);
+    }
+    this.items.push(this.add.text(x + 88, y + 46, a.title, font(21, 800, done ? '#ffe27a' : UI.text))
+      .setOrigin(0, 0.5).setWordWrapWidth(w - 100));
+    this.items.push(this.add.text(x + 16, y + 86, a.desc, font(this.fs(13), 700, done ? UI.text : UI.textDim))
+      .setOrigin(0, 0).setWordWrapWidth(w - 32));
+    // Низ: когда открыто — или сколько набрано; справа — награда
+    const by = y + h - 24;
+    if (done) {
+      const date = a.at > 1
+        ? new Date(a.at).toLocaleDateString(LANG === 'en' ? 'en-GB' : 'ru-RU', { day: 'numeric', month: 'short' }) : '';
+      this.items.push(this.add.text(x + 16, by, date ? `✓ открыто ${date}` : '✓ открыто', font(this.fs(13), 800, '#8ef0a0'))
+        .setOrigin(0, 0.5));
+    } else if (a.target > 1) {
+      const bw = Math.max(60, w - 190);
+      this.items.push(this.add.rectangle(x + 16, by, bw, 12, 0x0b1220, 0.95).setOrigin(0, 0.5));
+      if (a.n > 0) this.items.push(this.add.rectangle(x + 16, by, Math.max(4, bw * (a.n / a.target)), 12, 0x8fe3ff).setOrigin(0, 0.5));
+      this.items.push(this.add.text(x + 24 + bw, by, `${a.n}/${a.target}`, font(this.fs(13), 800, '#8fe3ff')).setOrigin(0, 0.5));
+    }
+    let rx = x + w - 14;
+    if (a.boxes && this.textures.exists('shot_crate_weapon')) {
+      const box = this.add.image(rx - 14, by, 'shot_crate_weapon').setScale(fitScale(this, 'shot_crate_weapon', 28));
+      this.items.push(box.setAlpha(done ? 1 : 0.7));
+      rx -= 34;
+    }
+    if (a.coins) {
+      const t = this.add.text(rx, by, `${a.coins}`, font(19, 800, done ? '#ffe27a' : '#c9b37a')).setOrigin(1, 0.5);
+      this.items.push(t, this.add.image(rx - t.width - 16, by, this._coinTexture()).setScale(0.55).setAlpha(done ? 1 : 0.7));
     }
   }
 
@@ -707,6 +1119,7 @@ export default class MenuScene extends Phaser.Scene {
    * монеты.
    */
   showTasks() {
+    this.fromShop = false;
     this.section = this.showTasks;
     this._clear();
     const st = dailyState();
@@ -772,18 +1185,172 @@ export default class MenuScene extends Phaser.Scene {
     }
 
     // Позвать друга: новичку и тебе — по коробке
+    this._inviteButton(cx, y + 106, Math.min(cw, 460));
+    // Куда тратить монеты, кроме коробок
+    this._button('cosmetics', cx, y + 212, 'Украшения', 'трос, след, надгробие · заморозка серии',
+      () => this.showCosmetics(), { w: Math.min(cw, 460), h: 90, titleSize: 25, hintSize: 17 });
+    // Достижения — длинные цели рядом с дневными
+    const ach = achState();
+    this._button('achievements', cx, y + 318, '🏅 Достижения', `открыто ${ach.got} из ${ach.total}`,
+      () => { this.achFrom = 'tasks'; this.showAchievements(); }, { w: Math.min(cw, 460), h: 90, titleSize: 25, hintSize: 17 });
+    this._tabs('tasks');
+  }
+
+  /** «Позвать друга» по своей ссылке: новичку и тебе — по коробке (shop.referral). */
+  _inviteButton(x, y, w, h = 90) {
     const link = refLink();
-    this._button('invite', cx, y + 106, 'Позвать друга', link ? 'вам обоим — по коробке со скином' : 'работает в Telegram',
+    return this._button('invite', x, y, 'Позвать друга', link ? 'вам обоим — по коробке со скином' : 'работает в Telegram',
       () => {
         trackStep('invite');
         if (!shareLink(link, 'Залетай в бой на башне! По этой ссылке нам обоим дадут коробку со скином 🎁')) {
           copyText(link);
         }
-      }, { w: Math.min(cw, 460), h: 90, titleSize: 25, hintSize: 17, enabled: Boolean(link), variant: 'primary' });
-    // Куда тратить монеты, кроме коробок
-    this._button('cosmetics', cx, y + 212, 'Украшения', 'трос, след, надгробие · заморозка серии',
-      () => this.showCosmetics(), { w: Math.min(cw, 460), h: 90, titleSize: 25, hintSize: 17 });
-    this._tabs('tasks');
+      }, { w, h, titleSize: 25, hintSize: 17, enabled: Boolean(link), variant: 'primary' });
+  }
+
+  // --------------------------------------------------------------- прицел
+
+  /**
+   * Выбор схемы прицела: три способа стрелять, у каждого — строка о том,
+   * как им пользоваться. Схема читается в начале боя, поэтому выбор — здесь,
+   * а не посреди партии.
+   */
+  showAim() {
+    this.section = this.showAim;
+    this._clear();
+    this._title('Прицел', 'как целиться и стрелять в бою');
+    const W = this.W, cx = W / 2;
+    const cur = aimScheme();
+    const w = Math.min(W - 48, 600), h = this.portrait ? 116 : 100;
+    const list = [
+      ['sling', 'Рычаг', 'жёлтый рычаг у большого пальца: тяни от цели и отпусти'],
+      ['anywhere', 'С любого места', 'тяни пальцем где угодно на поле · камера — двумя пальцами'],
+      ['buttons', 'Классика', 'кнопки ▲▼ — угол, держи «Огонь» — сила, отпустил — выстрел'],
+    ];
+    list.forEach(([id, title, hint], i) => {
+      const on = id === cur;
+      this._button(`aim-${id}`, cx, 212 + i * (h + 18), on ? `✓ ${title}` : title, hint, () => {
+        setAimScheme(id);
+        haptic('select');
+        this.showAim();
+      }, { w, h, titleSize: 28, hintSize: 17, variant: on ? 'active' : 'normal' });
+    });
+    this._back();
+    this._scrollable(212 + list.length * (h + 18) + 60);
+  }
+
+  // -------------------------------------------------------------- магазин
+
+  /** Монеты на главном — кнопка магазина: плашка с монетами и «+». right — правый край. */
+  _coinShopLink(right, y) {
+    // Ширина — по числу монет: трёхзначная сумма наезжала значком на «Магазин»
+    const digits = String(dailyState().coins).length;
+    const w = 262 + digits * 17, h = 58, x = right - w / 2;
+    const plate = this.add.graphics();
+    plate.fillStyle(0x1c1440, 0.95).fillRoundedRect(x - w / 2, y - h / 2, w, h, h / 2);
+    plate.lineStyle(3, 0xffc247, 0.9).strokeRoundedRect(x - w / 2, y - h / 2, w, h, h / 2);
+    this.items.push(plate);
+    const left = right - w;
+    this.items.push(this.add.image(left + 32, y, ensureIcon(this, 'shop', 34)).setTint(0xffc247));
+    this.items.push(this.add.text(left + 56, y, 'Магазин', font(21, 800, '#ffe27a')).setOrigin(0, 0.5));
+    const coin = this._coinBadge(right - 62, y, true);
+    const plus = this.add.circle(right - 28, y, 21, 0xffc247).setStrokeStyle(3, 0x5a2a08);
+    const sign = this.add.text(right - 28, y - 1, '+', font(34, 900, '#2a1c06')).setOrigin(0.5);
+    this.tweens.add({ targets: [plus, sign], scale: 1.12, duration: 600, yoyo: true, repeat: -1, ease: 'Sine.easeInOut' });
+    this.items.push(plus, sign);
+    const zone = this.add.zone(x, y, w, h).setInteractive({ useHandCursor: true });
+    zone.on('pointerdown', () => { haptic('tap'); coin.icon.setScale(0.8); });
+    zone.on('pointerout', () => coin.icon.setScale(0.9));
+    zone.on('pointerup', () => this.showShop());
+    this.items.push(zone);
+    this.buttons['coins-shop'] = { x, y: y + this.oy, w, h, enabled: true };
+  }
+
+  /**
+   * Магазин: всё, на что тратятся монеты, в одном месте. Сверху кошелёк,
+   * главная витрина — коробка-сюрприз (светится и покачивается, рядом шансы),
+   * ниже — скины поштучно, украшения и промокод. Купил коробку — она
+   * открывается сразу, без перехода в другой раздел.
+   */
+  showShop() {
+    this.section = this.showShop;
+    this.fromShop = true;
+    this._clear();
+    trackStep('shop_open');
+    this._fxTextures();
+    const W = this.W;
+    const wide = !this.portrait;
+    const st = skinState();
+    const coins = dailyState().coins;
+    const full = BOX_SKINS.every((s) => st.owned.includes(s.id));
+    this._title('Магазин', 'монеты — за бои, задания дня и серию дней');
+
+    // Кошелёк
+    const wy = 160;
+    const n = this.add.text(W / 2 + 26, wy, `${coins}`, font(46, 900, '#ffe27a')).setOrigin(0.5).setStroke('#5a2a08', 6);
+    const ic = this.add.image(n.x - n.width / 2 - 30, wy, this._coinTexture()).setScale(1.3);
+    this.items.push(n, ic);
+
+    // Витрина: коробка-сюрприз
+    const cardW = Math.min(W - 40, 560);
+    const cx = wide ? Math.max(cardW / 2 + 30, W * 0.3) : W / 2;
+    const cardTop = wide ? 212 : 216;
+    const cardH = 400;
+    const card = this.add.graphics();
+    card.fillStyle(0x1c1440, 0.92).fillRoundedRect(cx - cardW / 2, cardTop, cardW, cardH, 28);
+    card.lineStyle(4, 0xffc247, 0.85).strokeRoundedRect(cx - cardW / 2, cardTop, cardW, cardH, 28);
+    this.items.push(card);
+    const by = cardTop + 130;
+    const rays = this.add.image(cx, by, 'fx-rays').setTint(0xffc247).setAlpha(0.32).setScale(0.85);
+    this.tweens.add({ targets: rays, angle: 360, duration: 12000, repeat: -1 });
+    const glow = this.add.circle(cx, by, 80, 0xffc247, 0.22);
+    this.tweens.add({ targets: glow, scale: 1.2, alpha: 0.1, duration: 900, yoyo: true, repeat: -1, ease: 'Sine.easeInOut' });
+    this.items.push(rays, glow);
+    if (this.textures.exists('shot_crate_weapon')) {
+      const box = this.add.image(cx, by, 'shot_crate_weapon').setScale(fitScale(this, 'shot_crate_weapon', 150));
+      this.tweens.add({ targets: box, y: by - 10, angle: { from: -4, to: 4 }, duration: 1100, yoyo: true, repeat: -1, ease: 'Sine.easeInOut' });
+      box.setInteractive({ useHandCursor: true }).on('pointerup', () => {
+        if (this._dragging) return;
+        if (st.boxes > 0) this._openBox(() => this.showShop()); else this._buyBox();
+      });
+      this.items.push(box);
+      if (st.boxes > 0) {
+        this.items.push(this.add.text(cx + 70, by - 70, `×${st.boxes}`, font(28, 900, '#1a1408'))
+          .setOrigin(0.5).setPadding(10, 2, 10, 2).setBackgroundColor('#ffe27a'));
+      }
+    }
+    this.items.push(this.add.text(cx, cardTop + 240, 'Коробка-сюрприз', font(32, 900, '#ffffff'))
+      .setOrigin(0.5).setStroke('#140a20', 6));
+    // Шансы — цветом редкости, в строку
+    const parts = RARITY_ORDER.map((k) => this.add.text(0, 0, `${RARITY[k].name} ${RARITY[k].odds}%`, font(17, 800, RARITY[k].color)));
+    const gap = 14;
+    const total = parts.reduce((a, t) => a + t.width, 0) + gap * (parts.length - 1);
+    let px = cx - total / 2;
+    for (const t of parts) { t.setPosition(px, cardTop + 280).setOrigin(0, 0.5); px += t.width + gap; this.items.push(t); }
+    const bw = cardW - 60;
+    if (st.boxes > 0) {
+      this._button('shop-open', cx, cardTop + 342, `Открыть коробку${st.boxes > 1 ? ` · ×${st.boxes}` : ''}`, '',
+        () => this._openBox(() => this.showShop()), { w: bw, h: 76, variant: 'primary', titleSize: 27 });
+    } else {
+      const can = coins >= BOX_PRICE && !full;
+      this._button('shop-box', cx, cardTop + 342, `Купить · ${BOX_PRICE} 🪙`,
+        full ? 'все скины уже собраны' : can ? 'повтор — монеты назад' : `не хватает ${BOX_PRICE - coins}`,
+        () => this._buyBox(), { w: bw, h: 76, variant: 'primary', titleSize: 27, hintSize: 15, enabled: can });
+    }
+
+    // Остальное: скины поштучно, украшения, промокод
+    const lx = wide ? Math.min(W - 250, W * 0.72) : W / 2;
+    const lw = wide ? Math.min(420, W - cx - cardW / 2 - 60) : cardW;
+    let y = wide ? 250 : cardTop + cardH + 66;
+    const row = (key, title, hint, onTap, variant) => {
+      this._button(key, lx, y, title, hint, onTap, { w: lw, h: 90, titleSize: 25, hintSize: 16, variant });
+      y += 106;
+    };
+    row('shop-skins', 'Скины', `собрано ${st.owned.length} из ${SKINS.length} · любой — поштучно`, () => this.showSkins());
+    row('shop-cosmetics', 'Украшения', 'трос, след, надгробие · заморозка серии', () => this.showCosmetics());
+    row('shop-promo', '🎟 Промокод', 'подарок от друга или из канала', () => this._askPromo());
+    this._tabs('shop');
+    this._scrollable(y + 20);
   }
 
   // ------------------------------------------------------------ украшения
@@ -844,22 +1411,23 @@ export default class MenuScene extends Phaser.Scene {
         if (buyStreakFreeze()) { haptic('win'); sfx.play('pickup'); this.showCosmetics(); toast('заморозка в запасе', '#8fe3ff'); return; }
         haptic('warn'); toast(full ? 'запас полон' : 'не хватает монет');
       }, { w: Math.min(W - 48, 620), h: 84, titleSize: 24, hintSize: 14, enabled: !full && d.coins >= FREEZE_PRICE });
-    this._back(() => this.showTasks());
+    this._back(() => (this.fromShop ? this.showShop() : this.showTasks()));
   }
 
-  /** Купить коробку и сразу перейти к скинам, где её можно открыть. */
+  /** Купить коробку и сразу открыть; назад — в раздел, откуда покупали. */
   _buyBox() {
+    const from = this.section ?? this.showSkins;
+    const back = () => from.call(this);
     const res = buyBox();
     if (res === 'ok') {
       haptic('win');
       sfx.play('pickup');
-      this.showSkins();
+      this._openBox(back);
       return;
     }
     haptic('warn');
-    this.showTasks();
-    const msg = res === 'full' ? 'все скины уже собраны' : 'не хватает монет';
-    const t = this.add.text(this.W / 2, 150, msg, font(22, 800, '#ff9a9a')).setOrigin(0.5);
+    const t = this.add.text(this.W / 2, 150, res === 'full' ? 'все скины уже собраны' : 'не хватает монет',
+      font(24, 800, '#ff9a9a')).setOrigin(0.5).setDepth(60).setStroke('#140a20', 6);
     this.items.push(t);
     this.tweens.add({ targets: t, alpha: 0, delay: 1400, duration: 400 });
   }
@@ -950,7 +1518,7 @@ export default class MenuScene extends Phaser.Scene {
       'монеты — за бои, задания дня, серию дней и первое прохождение кампании',
       font(16, 700, UI.textDim)).setOrigin(0.5, 0).setAlign('center').setWordWrapWidth(W - 48));
     // Ниже экрана на телефоне — крутится пальцем
-    this._back();
+    this._back(this.fromShop ? () => this.showShop() : undefined);
     this._scrollable(sy + 210);
     this._setScroll(keep);
   }
@@ -969,8 +1537,9 @@ export default class MenuScene extends Phaser.Scene {
     }).then(() => {
       if (!got) return;
       if (got.owned) applyServerOwned(got.owned);
+      notePromo();
       haptic('win');
-      this.showSkins();
+      (this.section === this.showShop ? this.showShop : this.showSkins).call(this);
       const parts = [got.boxes && `коробок: ${got.boxes}`, got.coins && `монет: ${got.coins}`].filter(Boolean).join(' · ');
       const t = this.add.text(this.W / 2, 120, `🎁 ${parts}`, font(30, 800, UI.accent)).setOrigin(0.5).setScale(0.4);
       this.items.push(t);
@@ -1022,70 +1591,191 @@ export default class MenuScene extends Phaser.Scene {
    * Открытие коробки: она трясётся, лопается, из неё выскакивает скин.
    * Что выпадет, решается сразу; анимация только показывает.
    */
-  _openBox() {
+  /**
+   * Открытие коробки — маленькое шоу. Коробка трясётся всё сильнее и
+   * светится, перебирая цвета редкостей, пока не остановится на выпавшей:
+   * чем реже скин, тем дольше перебор. Потом вспышка цвета редкости,
+   * вращающиеся лучи, конфетти, скин выпрыгивает с прыжком, крупная
+   * надпись редкости. Легендарный — золотой дождь и тряска экрана;
+   * повтор — россыпь монет.
+   */
+  _openBox(back = () => this.showSkins()) {
     const res = openSkinBox();
-    if (!res.skin) { this.showSkins(); return; }
+    if (!res.skin) { back(); return; }
     const skin = SKIN_BY_ID[res.skin];
     this.scrollMax = 0;          // окно поверх — раздел под ним не крутится
     const W = this.W, H = this.H, cx = W / 2;
-    const cy = this.topY(H * 0.42);
+    // В альбомной экран низкий: всё окно чуть плотнее
+    const k = Math.min(1, (H - 120) / 680);
+    const cy = this.topY(H * (this.portrait ? 0.42 : 0.47));
     const layer = [];
-    const add = (o) => { o.setDepth(50); layer.push(o); this.items.push(o); return o; };
+    const add = (o, d = 50) => { o.setDepth(d); layer.push(o); this.items.push(o); return o; };
+    const hex = (c) => parseInt(String(c).slice(1), 16);
+    const rank = Math.max(0, RARITY_ORDER.indexOf(skin.rarity));
+    const rar = RARITY[skin.rarity] ?? RARITY.common;
+    const color = hex(rar.color);
+    this._fxTextures();
 
     // Затемнение ловит касания: под ним ничего нажать нельзя
-    const shade = add(this.add.rectangle(0, this.topY(0), W, H, 0x05070c, 0.82).setOrigin(0, 0));
+    const shade = add(this.add.rectangle(0, this.topY(0), W, H, 0x05070c, 0.86).setOrigin(0, 0));
     shade.setInteractive();
-    const box = add(this.add.image(cx, cy, 'shot_crate_weapon')
-      .setScale(fitScale(this, 'shot_crate_weapon', 190)));
+    // Лучи за коробкой: медленно вращаются, пока белые
+    const rays = add(this.add.image(cx, cy, 'fx-rays').setAlpha(0.18).setScale(1.6));
+    this.tweens.add({ targets: rays, angle: 360, duration: 9000, repeat: -1 });
+    // Свечение — перебирает цвета редкостей
+    const glow = add(this.add.circle(cx, cy, 120, hex(RARITY.common.color), 0.35));
+    this.tweens.add({ targets: glow, scale: 1.25, alpha: 0.15, duration: 260, yoyo: true, repeat: -1 });
+    const box = add(this.add.image(cx, cy, 'shot_crate_weapon').setScale(fitScale(this, 'shot_crate_weapon', 190)));
+    const base = box.scale;
     haptic('tap');
     sfx.play('crateDrop');
-    this.tweens.add({ targets: box, angle: { from: -9, to: 9 }, duration: 90, yoyo: true, repeat: 7 });
-    this.tweens.add({ targets: box, scale: box.scale * 1.18, duration: 1300, ease: 'Quad.easeIn' });
 
-    this.time.delayedCall(1350, () => {
+    // Нарастание: тряска сильнее, коробка разбухает, цвет ступенькой вверх
+    const steps = 3 + rank * 2;
+    const stepMs = 260;
+    // Тап по экрану — сразу к раскрытию: на медленном телефоне нарастание
+    // тянется дольше, а ждать его никто не обязан
+    const timers = [];
+    shade.on('pointerup', () => { if (box.active) reveal(); });
+    for (let k = 0; k < steps; k++) {
+      timers.push(this.time.delayedCall(k * stepMs, () => {
+        if (!box.active) return;
+        const lvl = Math.min(rank, Math.floor((k / (steps - 1)) * (rank + 0.999)));
+        const c = hex(RARITY[RARITY_ORDER[lvl]].color);
+        glow.setFillStyle(c, 0.4);
+        rays.setTint(c);
+        const amp = 5 + k * 2.2;
+        this.tweens.add({ targets: box, angle: { from: -amp, to: amp }, duration: 60, yoyo: true, repeat: 1 });
+        box.setScale(base * (1 + k * 0.035));
+        haptic('select');
+        if (k === steps - 1) sfx.play('tick');
+      }));
+    }
+
+    const reveal = () => {
       if (!box.active) return;
+      for (const t of timers) t.remove(false);
       box.destroy();
       haptic('win');
       sfx.play('pickup');
-      sfx.play('explosion', { radius: 30 });
-      // Вспышка, лучи и конфетти
-      const flash = add(this.add.circle(cx, cy, 40, 0xffffff, 0.95));
-      this.tweens.add({ targets: flash, radius: 420, alpha: 0, duration: 500, ease: 'Cubic.easeOut' });
-      if (!this.textures.exists('fx-dot')) {
-        const tex = this.textures.createCanvas('fx-dot', 12, 12);
-        const c = tex.getContext();
-        c.fillStyle = '#ffffff';
-        c.beginPath(); c.arc(6, 6, 5.5, 0, Math.PI * 2); c.fill();
-        tex.refresh();
-      }
-      const em = add(this.add.particles(cx, cy, 'fx-dot', {
-        speed: { min: 160, max: 520 }, angle: { min: 0, max: 360 }, gravityY: 520,
-        lifespan: { min: 900, max: 1700 }, scale: { start: 1.3, end: 0.4 },
-        tint: [0xff5a5a, 0x5aa9ff, 0x6ee36e, 0xffd45a, 0xff8ad4, 0xffffff], emitting: false,
-      }));
-      em.explode(70);
+      sfx.play('explosion', { radius: 24 + rank * 14 });
+      this.uiCam.shake(180 + rank * 120, 0.004 + rank * 0.003);
+      glow.setFillStyle(color, 0.45);
+      rays.setTint(color);
+      this.tweens.add({ targets: rays, alpha: 0.3 + rank * 0.1, scale: 2.4, duration: 400, ease: 'Cubic.easeOut' });
 
+      // Вспышка цвета редкости и белая середина
+      const flash = add(this.add.circle(cx, cy, 40, color, 0.9));
+      this.tweens.add({ targets: flash, radius: 520, alpha: 0, duration: 600, ease: 'Cubic.easeOut' });
+      const core = add(this.add.circle(cx, cy, 30, 0xffffff, 1));
+      this.tweens.add({ targets: core, radius: 220, alpha: 0, duration: 380, ease: 'Cubic.easeOut' });
+      const ring = add(this.add.circle(cx, cy, 60).setStrokeStyle(10, color, 1));
+      this.tweens.add({ targets: ring, scale: 6, alpha: 0, duration: 700, ease: 'Cubic.easeOut' });
+
+      // Конфетти: цвет редкости, белый и золото — и звёздочки
+      const palette = [color, 0xffffff, 0xffd166, color, 0xff8ad4, 0x8ef0a0];
+      const em = add(this.add.particles(cx, cy, 'fx-dot', {
+        speed: { min: 200, max: 640 }, angle: { min: 0, max: 360 }, gravityY: 560,
+        lifespan: { min: 1000, max: 1900 }, scale: { start: 1.5, end: 0.3 }, rotate: { min: 0, max: 360 },
+        tint: palette, emitting: false,
+      }), 52);
+      em.explode(70 + rank * 40);
+      const stars = add(this.add.particles(cx, cy, 'fx-star', {
+        speed: { min: 80, max: 300 }, angle: { min: 0, max: 360 }, lifespan: { min: 700, max: 1300 },
+        scale: { start: 1.1, end: 0 }, rotate: { start: 0, end: 360 }, tint: [color, 0xffffff], emitting: false,
+      }), 52);
+      stars.explode(18 + rank * 10);
+      // Легендарный — золотой дождь сверху ещё полторы секунды
+      if (rank >= 3) {
+        const rain = add(this.add.particles(0, this.topY(-20), 'fx-star', {
+          x: { min: 0, max: W }, speedY: { min: 220, max: 420 }, speedX: { min: -40, max: 40 },
+          lifespan: 2400, scale: { start: 0.9, end: 0.4 }, rotate: { start: 0, end: 540 },
+          tint: [0xffd166, 0xffb347, 0xffffff], frequency: 30, quantity: 2,
+        }), 52);
+        this.time.delayedCall(1600, () => rain.active && rain.stop());
+      }
+
+      // Скин выпрыгивает и подпрыгивает
       const sheet = this.textures.exists(skin.sheet) ? skin.sheet : 'smiley';
-      const hero = add(this.add.sprite(cx, cy + 70, sheet, 0).setOrigin(0.5, 0.92).setScale(0.2).setFlipX(true));
+      const hero = add(this.add.sprite(cx, cy + 70 * k, sheet, 0).setOrigin(0.5, 0.92).setScale(0.2).setFlipX(true), 53);
       hero.play(`${sheet}_win`);
-      this.tweens.add({ targets: hero, scale: 3, duration: 520, ease: 'Back.easeOut' });
-      const rar = RARITY[skin.rarity] ?? RARITY.common;
-      add(this.add.text(cx, cy - 200, res.dup ? `Повтор · ${rar.name} · +${res.refund} монет` : `Новый скин · ${rar.name}!`,
-        font(26, 800, rar.color)).setOrigin(0.5));
-      const name = add(this.add.text(cx, cy + 120, skin.name, font(48, 800, UI.accent)).setOrigin(0.5).setScale(0.3));
+      this.tweens.add({ targets: hero, scale: 3 * k, duration: 560, ease: 'Back.easeOut' });
+      this.tweens.add({ targets: hero, y: cy + 50 * k, duration: 360, delay: 600, yoyo: true, repeat: -1, ease: 'Sine.easeInOut' });
+
+      // Редкость — крупно, с ударом; ниже имя
+      const tag = res.dup ? 'ПОВТОР' : `${rar.name.toUpperCase()}!`;
+      const head = add(this.add.text(cx, cy - 280 * k, tag, font(rank >= 2 ? 54 : 46, 900, rar.color))
+        .setOrigin(0.5).setStroke('#140a20', 10).setShadow(0, 6, '#000000', 12, true, true).setScale(2.4).setAlpha(0), 54);
+      this.tweens.add({ targets: head, scale: 1, alpha: 1, duration: 360, ease: 'Back.easeOut' });
+      this.tweens.add({ targets: head, scale: 1.08, duration: 520, delay: 400, yoyo: true, repeat: -1, ease: 'Sine.easeInOut' });
+      const name = add(this.add.text(cx, cy + 130 * k, skin.name, font(50, 900, '#ffffff'))
+        .setOrigin(0.5).setStroke('#140a20', 8).setScale(0.3), 54);
       this.tweens.add({ targets: name, scale: 1, duration: 420, delay: 180, ease: 'Back.easeOut' });
+      add(this.add.text(cx, cy + 180 * k, res.dup ? `уже есть — +${res.refund} монет назад` : 'новый скин в коллекции',
+        font(22, 800, res.dup ? '#ffe27a' : '#cfe8ff')).setOrigin(0.5).setStroke('#140a20', 6), 54);
+
+      // Повтор — монеты сыплются вверх
+      if (res.dup) {
+        const coins = add(this.add.particles(cx, cy + 40, this._coinTexture(), {
+          speed: { min: 260, max: 520 }, angle: { min: 230, max: 310 }, gravityY: 700,
+          lifespan: 1400, scale: { start: 0.8, end: 0.5 }, emitting: false,
+        }), 52);
+        coins.explode(18);
+        sfx.play('pickup');
+      }
 
       const btn = (key, dx, label, variant, onTap) => {
         const before = this.items.length;
-        this._button(key, cx + dx, cy + 230, label, '', onTap, { w: 250, h: 78, variant, titleSize: 26 });
-        for (const o of this.items.slice(before)) o.setDepth(51);
+        this._button(key, cx + dx, cy + 260 * k, label, '', onTap, { w: 250, h: 78, variant, titleSize: 26 });
+        for (const o of this.items.slice(before)) o.setDepth(56);
       };
-      this.time.delayedCall(600, () => {
-        if (this.section !== this.showSkins) return;
-        btn('skin-wear', -140, 'Надеть', 'primary', () => { equipSkin(skin.id); this.showSkins(); });
-        btn('skin-later', 140, 'Потом', 'normal', () => this.showSkins());
+      this.time.delayedCall(450, () => {
+        if (!shade.active) return;
+        if (res.dup) btn('skin-later', 0, 'Дальше', 'primary', back);
+        else {
+          btn('skin-wear', -140, 'Надеть', 'primary', () => { equipSkin(skin.id); back(); });
+          btn('skin-later', 140, 'Потом', 'normal', back);
+        }
       });
-    });
+    };
+    timers.push(this.time.delayedCall(steps * stepMs + 120, reveal));
+  }
+
+  /** Текстуры эффектов меню: точка конфетти, звёздочка, лучи. */
+  _fxTextures() {
+    if (!this.textures.exists('fx-dot')) {
+      const tex = this.textures.createCanvas('fx-dot', 12, 12);
+      const c = tex.getContext();
+      c.fillStyle = '#ffffff';
+      c.beginPath(); c.arc(6, 6, 5.5, 0, Math.PI * 2); c.fill();
+      tex.refresh();
+    }
+    if (!this.textures.exists('fx-star')) {
+      const tex = this.textures.createCanvas('fx-star', 28, 28);
+      const c = tex.getContext();
+      c.fillStyle = '#ffffff';
+      c.beginPath();
+      for (let k = 0; k < 10; k++) {
+        const r = k % 2 ? 5 : 13, a = -Math.PI / 2 + (k * Math.PI) / 5;
+        c.lineTo(14 + Math.cos(a) * r, 14 + Math.sin(a) * r);
+      }
+      c.closePath(); c.fill();
+      tex.refresh();
+    }
+    if (!this.textures.exists('fx-rays')) {
+      const S = 512, tex = this.textures.createCanvas('fx-rays', S, S);
+      const c = tex.getContext();
+      const g = c.createRadialGradient(S / 2, S / 2, 10, S / 2, S / 2, S / 2);
+      g.addColorStop(0, 'rgba(255,255,255,1)'); g.addColorStop(1, 'rgba(255,255,255,0)');
+      c.fillStyle = g;
+      for (let k = 0; k < 14; k++) {
+        const a = (k / 14) * Math.PI * 2, w = Math.PI / 22;
+        c.beginPath(); c.moveTo(S / 2, S / 2);
+        c.arc(S / 2, S / 2, S / 2, a - w, a + w);
+        c.closePath(); c.fill();
+      }
+      tex.refresh();
+    }
   }
 
   // -------------------------------------------------------------- режимы
@@ -1104,10 +1794,11 @@ export default class MenuScene extends Phaser.Scene {
       ['tower', 'Башня', 'высокая арена и трос · выбрать соперника', () => this.showTower()],
       ['challenges', 'Испытания', `задачи на три звезды · ★ ${stars} из ${CHALLENGES.length * 3}`, () => this.showChallenges()],
       ['online', 'Онлайн', 'бой с человеком на башне · рейтинг', () => this.showOnline()],
+      ['duels', 'Дуэли по переписке', 'с другом, ход — когда удобно · 24 часа на ход', () => this.showDuels()],
       ['campaign', 'Классика', 'старые миссии на широких картах', () => this.showCampaign()],
       ['quick', 'Свои правила', 'обычная карта, бот или вдвоём', () => this.showQuick()],
     ];
-    // В портрете — столбиком, в ландшафте — в две колонки: семь не влезают
+    // В портрете — столбиком, в ландшафте — в две колонки: восемь не влезают
     const cols = this.portrait ? 1 : 2;
     const w = this.portrait ? Math.min(this.W - 64, 620) : Math.min(420, (this.W - 96) / 2);
     const h = this.portrait ? 92 : 72, step = this.portrait ? 104 : 84;
@@ -1144,7 +1835,15 @@ export default class MenuScene extends Phaser.Scene {
     if (res) {
       const head = res.players ? `сегодня сыграли: ${res.players}` : 'сегодня ещё никто не играл — будь первым';
       this.items.push(this.add.text(cx, y, head, font(this.fs(14), 700, UI.textDim)).setOrigin(0.5, 0));
-      y += 40;
+      y += 34;
+      // Планка дня — чтобы было что побить ещё до боя
+      const best = res.top[0];
+      if (best?.won) {
+        this.items.push(this.add.text(cx, y, `лучший сегодня: ${best.turns} ${best.turns < 5 ? 'хода' : 'ходов'} — ${best.name}`,
+          font(this.fs(16), 800, '#ffe27a')).setOrigin(0.5, 0));
+        y += 36;
+      }
+      y += 6;
       res.top.slice(0, this.portrait ? 10 : 5).forEach((r, i) => {
         const what = r.won ? `${r.turns} ${r.turns < 5 ? 'хода' : 'ходов'} · ${r.hp} hp` : 'не взял';
         this.items.push(this.add.text(cx - w / 2, y, `${i + 1}. ${r.name}`, font(this.fs(15), 800, i < 3 ? UI.accent : UI.text)).setOrigin(0, 0));
@@ -1161,7 +1860,19 @@ export default class MenuScene extends Phaser.Scene {
       this.items.push(this.add.text(cx, y, 'таблица дня — в Telegram', font(this.fs(14), 700, UI.textDim)).setOrigin(0.5, 0));
       y += 40;
     }
-    this._button('daily-go', cx, Math.max(y + 70, this.portrait ? 640 : 0), 'В бой', 'первая победа дня — +60 монет',
+    // Своя серия «Башни дня»: дни подряд с победой, бонус на 3-й и 7-й
+    const streak = dailyTowerStreak(day);
+    let next = streak + 1;
+    while (!streakBonus(next)) next++;
+    const left = next - streak;
+    const streakLine = streak
+      ? `серия башни: ${streak} ${plural(streak, 'день', 'дня', 'дней')} · ещё ${left} ${plural(left, 'день', 'дня', 'дней')} — +${streakBonus(next)} монет`
+      : `бери башню каждый день: на 3-й день подряд +${streakBonus(3)} монет`;
+    this.items.push(this.add.text(cx, y + 6, streakLine, font(this.fs(15), 800, streak ? '#8fe3ff' : UI.textDim)).setOrigin(0.5, 0));
+    y += 40;
+    const won = dailyTowerWon(day);
+    this._button('daily-go', cx, Math.max(y + 70, this.portrait ? 640 : 0), won ? 'Ещё попытка' : 'В бой',
+      won ? 'в таблице — лучшая попытка дня' : 'первая победа дня — +60 монет',
       () => this.start(dailyMatch(day)),
       this.portrait ? { variant: 'primary', w: 360, h: 96, titleSize: 30 } : { variant: 'primary', w: 320, h: 74 });
     this._back(() => this.showModes());
@@ -1169,54 +1880,146 @@ export default class MenuScene extends Phaser.Scene {
 
   // ------------------------------------------------------ кампания «Подъём»
 
-  /** Три главы: прогресс в каждой; закрытая — пока не пройдена предыдущая. */
+  /**
+   * Карта «Подъёма»: тропа снизу вверх — двадцать боёв узлами, четыре главы
+   * со своим видом (цвет и значок места), у босса узел крупнее и с его
+   * портретом. У узла — звёзды; текущий бой подсвечен, и карта открывается
+   * прокрученной к нему. Тап по узлу — описание боя.
+   * Плоский список не звал переигрывать; тропа со звёздами — зовёт.
+   */
   showAscent() {
+    const keep = this.section === this.showAscent ? this.scrollY : null;
     this.section = this.showAscent;
     this._clear();
     const done = ascentDone();
-    this._title('Подъём', `пройдено ${done.size} из ${ASCENT.length} · коробки со скинами по пути`);
-    const cx0 = this.W / 2;
-    // Четыре главы: в портрете столбиком, в ландшафте — два на два
-    const cols = this.portrait ? 1 : 2;
-    const w = this.portrait ? Math.min(this.W - 64, 620) : Math.min(420, (this.W - 96) / 2);
-    const h = this.portrait ? 120 : 96;
-    const step = h + 18;
-    CHAPTERS.forEach((ch, idx) => {
-      const i = Math.floor(idx / cols);
-      const cx = cols === 1 ? cx0 : cx0 + (idx % 2 ? 1 : -1) * (w / 2 + 12);
-      const list = ASCENT.filter((m) => m.chapter === ch.id);
-      const first = ASCENT.indexOf(list[0]);
-      const open = ascentOpen(first, done);
-      const n = list.filter((m) => done.has(m.id)).length;
-      this._button(`chapter-${ch.id}`, cx, 196 + h / 2 + i * step, `${idx + 1}. ${ch.title}`,
-        open ? `${n} из ${list.length}${n === list.length ? ' · пройдено' : ''}` : 'откроется после предыдущей главы',
-        () => this.showAscentChapter(ch), {
-          w, h, enabled: open, variant: open && n < list.length ? 'primary' : 'normal', titleSize: 30, hintSize: 20,
-        });
-    });
-    this._back(() => this.showModes());
-  }
+    const stars = ascentStars();
+    const total = ASCENT.reduce((a, m) => a + (stars[m.id] ?? 0), 0);
+    this._title('Подъём', `пройдено ${done.size} из ${ASCENT.length} · ★ ${total} из ${ASCENT.length * 3}`);
+    // Главы, пройденные раньше, чем за них стали давать коробку, — задним числом
+    const fresh = claimChapterBoxes();
+    if (fresh.length) {
+      grantBoxes(fresh.length);
+      haptic('win');
+      sfx.play('pickup');
+      // Плашка поверх карты — не крутится вместе с ней
+      const note = this.add.text(this.W / 2, 150 + this.oy, fresh.length > 1
+        ? `🎁 Главы пройдены — коробки со скином ×${fresh.length}` : '🎁 Глава пройдена — коробка со скином!',
+      font(22, 900, '#1a1408')).setOrigin(0.5).setPadding(16, 8, 16, 8).setBackgroundColor('#8ef0a0')
+        .setScrollFactor(0).setDepth(50);
+      this.items.push(note);
+      this.tweens.add({ targets: note, alpha: 0, delay: 3200, duration: 500 });
+    }
 
-  showAscentChapter(ch) {
-    this.section = () => this.showAscentChapter(ch);
-    this._clear();
-    const done = ascentDone();
-    const list = ASCENT.filter((m) => m.chapter === ch.id);
-    this._title(ch.title, `${list.filter((m) => done.has(m.id)).length} из ${list.length}`);
-    const cx = this.W / 2;
-    const w = Math.min(this.W - 64, 620), h = this.portrait ? 96 : 76, gap = 12;
-    list.forEach((m, k) => {
-      const i = ASCENT.indexOf(m);
-      const open = ascentOpen(i, done);
-      const won = done.has(m.id);
-      const tag = m.boss && m.title !== bossName(m) && !m.title.includes(bossName(m)) ? ` · ${bossName(m)}` : '';
-      this._button(`up-${m.id}`, cx, 186 + h / 2 + k * (h + gap), `${i + 1}. ${m.title}${tag}`,
-        won ? '✓ пройдено' : open ? 'открыто' : 'откроется после предыдущего боя',
-        () => this.showAscentBrief(m), {
-          w, h, enabled: open, variant: open && !won ? 'primary' : 'normal', titleSize: 26, hintSize: 17,
-        });
-    });
-    this._back(() => this.showAscent());
+    const W = this.W, cx = W / 2;
+    const step = this.portrait ? 132 : 112;
+    const head = this.portrait ? 120 : 100;
+    const amp = Math.min(W * 0.2, 190);
+    const look = {
+      foot: { color: 0x4f9a46, icon: 'mountain' }, glacier: { color: 0x6fc3e8, icon: 'snowflake' },
+      crater: { color: 0xe0642c, icon: 'volcano' }, space: { color: 0x8a6cf0, icon: 'planet' },
+    };
+    // Сверху вниз: последняя глава — наверху, первый бой — в самом низу
+    const rows = [];
+    let y = 190;
+    for (const ch of [...CHAPTERS].reverse()) {
+      rows.push({ kind: 'chapter', ch, y: y + head / 2 });
+      y += head;
+      const list = ASCENT.filter((m) => m.chapter === ch.id).reverse();
+      for (const m of list) {
+        const i = ASCENT.indexOf(m);
+        rows.push({ kind: 'node', m, i, y: y + step / 2, x: cx + Math.sin(i * 1.15) * amp });
+        y += step;
+      }
+    }
+    const bottom = y;
+    const nodes = rows.filter((r) => r.kind === 'node');
+    const current = nodes.find((r) => ascentOpen(r.i, done) && !done.has(r.m.id))
+      ?? nodes.find((r) => r.i === ASCENT.length - 1);
+
+    // Тропа: отрезки между соседними боями, пройденные — золотом
+    const path = this.add.graphics().setDepth(-1);
+    for (const r of nodes) {
+      const prev = nodes.find((o) => o.i === r.i - 1);
+      if (!prev) continue;
+      const gone = done.has(prev.m.id);
+      path.lineStyle(gone ? 10 : 8, gone ? 0xffc247 : 0x2a3350, 1).lineBetween(prev.x, prev.y, r.x, r.y);
+    }
+    this.items.push(path);
+
+    for (const r of rows) {
+      if (r.kind === 'chapter') {
+        const lk = look[r.ch.id];
+        const n = ASCENT.filter((m) => m.chapter === r.ch.id);
+        const got = n.filter((m) => done.has(m.id)).length;
+        const open = ascentOpen(ASCENT.indexOf(n[0]), done);
+        const bw = Math.min(W - 48, 620), bh = head - 28;
+        const g = this.add.graphics();
+        g.fillStyle(lk.color, open ? 0.28 : 0.12).fillRoundedRect(cx - bw / 2, r.y - bh / 2, bw, bh, 22);
+        g.lineStyle(3, lk.color, open ? 0.9 : 0.4).strokeRoundedRect(cx - bw / 2, r.y - bh / 2, bw, bh, 22);
+        this.items.push(g);
+        const ix = cx - bw / 2 + 44;
+        if (this.textures.exists(`emoji_${lk.icon}`)) {
+          this.items.push(this.add.image(ix, r.y, `emoji_${lk.icon}`).setScale(52 / 128).setAlpha(open ? 1 : 0.5));
+        }
+        const idx = CHAPTERS.indexOf(r.ch) + 1;
+        this.items.push(this.add.text(ix + 40, r.y - 12, `Глава ${idx} · ${r.ch.title}`, font(this.portrait ? 26 : 23, 800, open ? UI.text : UI.textDim))
+          .setOrigin(0, 0.5));
+        const sub = !open ? 'откроется после предыдущей главы'
+          : got === n.length ? '✓ пройдена · коробка со скином получена' : `${got} из ${n.length} · вся глава — коробка со скином`;
+        this.items.push(this.add.text(ix + 40, r.y + 18, sub, font(this.fs(14), 700, got === n.length ? '#8ef0a0' : UI.textDim))
+          .setOrigin(0, 0.5));
+        continue;
+      }
+      const { m, i } = r;
+      const open = ascentOpen(i, done), won = done.has(m.id), now = r === current;
+      const rad = m.boss ? 54 : 38;
+      if (now) {
+        const ring = this.add.circle(r.x, r.y, rad + 12).setStrokeStyle(5, 0x8fe3ff, 0.9);
+        this.tweens.add({ targets: ring, scale: 1.12, alpha: 0.4, duration: 800, yoyo: true, repeat: -1, ease: 'Sine.easeInOut' });
+        this.items.push(ring);
+      }
+      const fill = won ? 0xffc247 : open ? 0x8fe3ff : 0x22293a;
+      const node = this.add.circle(r.x, r.y, rad, fill).setStrokeStyle(5, now ? 0xffffff : 0x0b1018);
+      this.items.push(node);
+      const bossKey = m.boss ? { true: 'mon_boss', yeti: 'mon_yeti', golem: 'mon_golem', slimeking: 'mon_slime' }[m.boss] : null;
+      if (bossKey && this.textures.exists(bossKey)) {
+        const img = this.add.image(r.x, r.y + 4, bossKey);
+        img.setScale(Math.min((rad * 1.8) / img.width, (rad * 1.8) / img.height)).setAlpha(open ? 1 : 0.45);
+        if (!open) img.setTint(0x555a66);
+        this.items.push(img);
+      } else {
+        const num = this.add.text(r.x, r.y, `${i + 1}`, font(30, 900, open ? '#2a1c06' : UI.textDim)).setOrigin(0.5);
+        if (open) num.setStroke('#000000', 0);
+        this.items.push(num);
+      }
+      // Звёзды — под узлом
+      const st = stars[m.id] ?? 0;
+      for (let k = 0; k < 3; k++) {
+        this.items.push(this.add.text(r.x + (k - 1) * 26, r.y + rad + 16, '★',
+          font(24, 900, k < st ? '#ffd23f' : won ? '#5a5f70' : '#2c3242')).setOrigin(0.5));
+      }
+      // Название — сбоку, со стороны центра экрана
+      const right = r.x <= cx;
+      const tx = r.x + (right ? 1 : -1) * (rad + 18);
+      const title = this.add.text(tx, r.y - 10, m.title, font(this.portrait ? 22 : 20, 800, open ? UI.text : UI.textDim))
+        .setOrigin(right ? 0 : 1, 0.5);
+      this.items.push(title);
+      const hint = now ? (won ? 'ещё звёзды?' : 'ты здесь') : !open ? '' : st < 3 ? `★ ${st} из 3` : 'все звёзды';
+      if (hint) {
+        this.items.push(this.add.text(tx, r.y + 18, m.boss ? `босс · ${hint}` : hint,
+          font(this.fs(13), 700, now ? '#8fe3ff' : UI.textDim)).setOrigin(right ? 0 : 1, 0.5));
+      }
+      if (open) {
+        node.setInteractive({ useHandCursor: true });
+        node.on('pointerup', () => { if (!this._dragging) { haptic('tap'); this.showAscentBrief(m); } });
+      }
+      this.buttons[`up-${m.id}`] = { x: r.x, y: r.y + this.oy, w: rad * 2, h: rad * 2, enabled: open };
+    }
+    this._back(() => this.showModes());
+    this._scrollable(bottom + 40);
+    // Открыли — текущий бой на виду, посередине экрана
+    const mid = (this.bottomY(96) + 160) / 2;
+    this._setScroll(keep ?? (current ? current.y - mid : 0));
   }
 
   showAscentBrief(m) {
@@ -1241,7 +2044,7 @@ export default class MenuScene extends Phaser.Scene {
     this.items.push(t);
     this._button('start', cx, 176 + t.height + 90, 'В бой', '', () => this.start(ascentMatch(m.id)),
       this.portrait ? { variant: 'primary', w: 360, h: 88, titleSize: 30 } : { variant: 'primary', w: 300, h: 66 });
-    this._back(() => this.showAscentChapter(CHAPTERS.find((c) => c.id === m.chapter)));
+    this._back(() => this.showAscent());
   }
 
   // ----------------------------------------------------------- испытания
@@ -1509,32 +2312,154 @@ export default class MenuScene extends Phaser.Scene {
   /**
    * Таблица лидеров с сервера. Видна всем, попасть в неё — сыграть бой по
    * сети с аккаунтом против соперника с аккаунтом.
+   *
+   * Сверху два переключателя в один ряд: «Все / Друзья» и, для всех,
+   * «Рейтинг / Турниры». Друзья — свой список с местом и «Вызвать».
    */
-  showTop(kind = this.topKind ?? 'rating') {
+  showTop(kind = this.topKind ?? 'rating', scope = this.topScope ?? 'all') {
     this.section = this.showTop;
     this.topKind = kind;
+    this.topScope = scope;
     this._clear();
-    this._title('Топ игроков', kind === 'tourney' ? 'по победам в турнирах' : 'рейтинг по подтверждённым боям');
+    const friends = scope === 'friends';
+    this._title(friends ? 'Друзья' : 'Топ игроков', friends ? 'кого ты позвал, кто позвал тебя и с кем ты сыграл на рейтинг'
+      : kind === 'tourney' ? 'по победам в турнирах' : 'рейтинг по подтверждённым боям');
     const cx = this.W / 2;
-    const tab = (key, label, k) => this._button(key, cx + (k === 'tourney' ? 106 : -106), 160, label, '',
-      () => this.showTop(k), { w: 208, h: 40, variant: kind === k ? 'active' : 'normal' });
-    tab('top-rating', 'Рейтинг', 'rating');
-    tab('top-tourney', 'Турниры', 'tourney');
+    // Ряд: [Все][Друзья]  [Рейтинг][Турниры] — 652 в ширину, влезает и в портрет 720
+    const bw = 150, x0 = cx - 326;
+    const seg = (key, label, x, on, onTap) => this._button(key, x, 160, label, '', onTap,
+      { w: bw, h: 40, variant: on ? 'active' : 'normal' });
+    seg('top-all', 'Все', x0 + 75, !friends, () => this.showTop(kind, 'all'));
+    seg('top-friends', 'Друзья', x0 + 233, friends, () => this.showTop(kind, 'friends'));
+    if (!friends) {
+      seg('top-rating', 'Рейтинг', x0 + 419, kind === 'rating', () => this.showTop('rating', 'all'));
+      seg('top-tourney', 'Турниры', x0 + 577, kind === 'tourney', () => this.showTop('tourney', 'all'));
+    }
     const note = this.add.text(cx, 204, 'загружаю…', font(this.fs(14), 700, UI.textDim)).setOrigin(0.5, 0);
     this.items.push(note);
     // Пришли со вкладки — внизу вкладки; из лобби — кнопка «назад» в лобби
     if (this.topFrom === 'tab') this._tabs('top');
     else this._back(() => this.showOnline());
+    const still = () => this.section === this.showTop && this.topKind === kind && this.topScope === scope;
+
+    if (friends) {
+      // Сводка — на месте второго переключателя
+      this.friendsHead = this.add.text(x0 + 498, 160, '', font(this.fs(13), 800, UI.accent)).setOrigin(0.5);
+      this.items.push(this.friendsHead);
+      if (!loggedIn()) {
+        note.destroy();
+        this._renderFriends(null);
+        return;
+      }
+      fetchFriends().then((data) => {
+        if (!still()) return;
+        this.friendRows = data.friends;
+        note.destroy();
+        this._renderFriends(data);
+      }).catch((e) => {
+        if (still()) note.setText(`сервер недоступен: ${e.message}`);
+      });
+      return;
+    }
 
     fetchTop(10, kind).then((rows) => {
-      if (this.section !== this.showTop || this.topKind !== kind) return;
+      if (!still()) return;
       this.topRows = rows;
       note.destroy();
       this._renderTop(rows, kind);
     }).catch((e) => {
-      if (this.section !== this.showTop) return;
+      if (!still()) return;
       note.setText(`сервер недоступен: ${e.message}`);
     });
+  }
+
+  /** Лист модельки по скину; нет такого — обычный смайлик. */
+  _skinSheet(skin) {
+    const sheet = SKIN_BY_ID[skin]?.sheet;
+    return sheet && this.textures.exists(sheet) ? sheet : 'smiley';
+  }
+
+  /**
+   * Топ друзей списком: место, моделька в надетом скине, ник, лига, когда
+   * был в игре, рейтинг и «Вызвать». Ты — в списке со своим местом и
+   * подсвечен. Длинный список крутится пальцем, вкладки стоят на месте.
+   * Друзей нет (или нет входа) — пара строк о том, кто здесь появится, и
+   * «Позвать друга».
+   */
+  _renderFriends(data) {
+    const W = this.W, cx = W / 2;
+    const add = (o) => { this.items.push(o); return o; };
+    const short = (name, n) => (name.length > n ? `${name.slice(0, n - 1)}…` : name);
+    const rows = data?.friends ?? [];
+    const others = rows.filter((r) => !r.me);
+    const tabs = this.topFrom === 'tab';
+    const listTop = 200;
+
+    if (!others.length) {
+      this.friendsHead?.setText('');
+      const lines = data
+        ? ['Здесь пока только ты.',
+          'Позови друга по своей ссылке — он появится здесь, а вам обоим дадут по коробке со скином.',
+          'Сюда же попадает каждый, с кем ты доиграл бой по сети на рейтинг.']
+        : ['Друзья видны в Telegram.', 'Открой игру в Telegram — и здесь появятся те, кого ты позвал и с кем сыграл.'];
+      // В ландшафте по высоте тесно: плотнее строки и кнопки
+      const p = this.portrait;
+      const t = add(this.add.text(cx, listTop + (p ? 40 : 14), lines, font(this.fs(15), 700, UI.text))
+        .setOrigin(0.5, 0).setAlign('center').setLineSpacing(p ? 10 : 3).setWordWrapWidth(Math.min(W - 80, 640)));
+      const y = t.y + t.height + (p ? 70 : 52);
+      const w = Math.min(W - 64, 460);
+      this._inviteButton(cx, y, w, p ? 90 : 80);
+      this._button('friends-duel', cx, y + (p ? 104 : 88), 'Вызвать на бой', 'карточкой в любой чат · без рейтинга',
+        () => this.challengeFriend(), { w, h: p ? 80 : 70, titleSize: 23, hintSize: 16 });
+      this._scrollable(y + 140 + (tabs ? 40 : 0));
+      return;
+    }
+
+    this.friendsHead?.setText(data.place ? `ты ${data.place}-й из ${data.total}` : `друзей: ${others.length}`);
+    const roomy = this.portrait;
+    const rowH = roomy ? 100 : 76;
+    const lw = Math.min(W - 48, 980);
+    const lx0 = cx - lw / 2, lx1 = cx + lw / 2;
+    const g = add(this.add.graphics());
+    rows.forEach((r, i) => {
+      const y = listTop + i * rowH;
+      const h = rowH - 10;
+      const mine = Boolean(r.me);
+      g.fillStyle(mine ? 0x2a2a1a : 0x161d2e, 1).fillRoundedRect(lx0, y, lw, h, 12);
+      g.lineStyle(mine ? 3 : 2, mine ? 0xffd166 : 0xffffff, mine ? 1 : 0.08).strokeRoundedRect(lx0, y, lw, h, 12);
+      const placeColor = r.place <= 3 ? ['#ffc93c', '#c9d4e6', '#d98c4a'][r.place - 1] : UI.textDim;
+      add(this.add.text(lx0 + 34, y + h / 2, `${r.place}`, font(this.fs(16), 800, placeColor)).setOrigin(0.5));
+      const sheet = this._skinSheet(r.skin);
+      add(this.add.sprite(lx0 + 92, y + h - 2, sheet, 0).setOrigin(0.5, 0.92).setScale((h * 0.95) / 100).setFlipX(true))
+        .play(`${sheet}_idle`);
+      const nx = lx0 + 140;
+      add(this.add.text(nx, y + h / 2 - 2, short(r.name, roomy ? 14 : 20), font(this.fs(15), 800, mine ? UI.accent : UI.text))
+        .setOrigin(0, 1));
+      const sub = [leagueOf(r.rating).name, `побед ${r.wins}`, mine ? '' : seenText(r.seenAt)].filter(Boolean).join(' · ');
+      add(this.add.text(nx, y + h / 2 + 4, sub, font(this.fs(11), 700, leagueOf(r.rating).text)).setOrigin(0, 0));
+      const bx = lx1 - 86;
+      // В ландшафте левее: рядом с «Вызвать» стоит «По переписке»
+      add(this.add.text(bx - (roomy ? 92 : 272), y + h / 2, `${r.rating}`, font(this.fs(16), 800, UI.text)).setOrigin(1, 0.5));
+      if (mine) {
+        add(this.add.text(bx, y + h / 2, 'это ты', font(this.fs(13), 800, UI.accent)).setOrigin(0.5));
+      } else if (roomy) {
+        // В портрете — две кнопки столбиком: сейчас и по переписке
+        this._button(`duel-${r.id}`, bx, y + h / 2 - 21, 'Вызвать', '', () => this.challengeFriend(r),
+          { w: 148, h: 38, titleSize: 19, variant: 'primary' });
+        this._button(`mail-${r.id}`, bx, y + h / 2 + 21, 'По переписке', '', () => this.startDuel(r),
+          { w: 148, h: 38, titleSize: 16 });
+      } else {
+        this._button(`duel-${r.id}`, bx, y + h / 2, 'Вызвать', '', () => this.challengeFriend(r),
+          { w: 148, h: Math.min(56, h - 18), titleSize: 19, variant: 'primary' });
+        this._button(`mail-${r.id}`, bx - 172, y + h / 2, 'По переписке', '', () => this.startDuel(r),
+          { w: 180, h: Math.min(56, h - 18), titleSize: 17 });
+      }
+    });
+    // Под списком — позвать ещё кого-нибудь
+    const endY = listTop + rows.length * rowH + 56;
+    this._inviteButton(cx, endY, Math.min(lw, 460), 84);
+    // Низ раздела — над вкладками (или «назад»), чтобы последняя строка не пряталась
+    this._scrollable(endY + 42 + (tabs ? (this.portrait ? 116 : 96) - 96 + 24 : 0));
   }
 
   /**
@@ -1554,10 +2479,7 @@ export default class MenuScene extends Phaser.Scene {
       return;
     }
     const score = (r) => (kind === 'tourney' ? `🏆 ${r.tourney_wins}` : `${r.rating}`);
-    const sheetOf = (r) => {
-      const sheet = SKIN_BY_ID[r.skin]?.sheet;
-      return sheet && this.textures.exists(sheet) ? sheet : 'smiley';
-    };
+    const sheetOf = (r) => this._skinSheet(r.skin);
     const short = (name, n) => (name.length > n ? `${name.slice(0, n - 1)}…` : name);
     const add = (o) => { this.items.push(o); return o; };
 
@@ -1631,6 +2553,7 @@ export default class MenuScene extends Phaser.Scene {
     openAccountDialog({
       onTop: () => { this.topFrom = 'tab'; this.showTop(); },
       onTours: () => this.openTournaments(),
+      onAch: () => { this.achFrom = 'account'; this.showAchievements(); },
     });
   }
 
@@ -1865,6 +2788,10 @@ export default class MenuScene extends Phaser.Scene {
 
     const code = this.add.text(cx, 176, room, font(72, 800, UI.accent)).setOrigin(0.5, 0);
     this.items.push(code);
+    // Вызов другу через бота — что с ним (challengeFriend)
+    this.roomNoteText = this.add.text(cx, 142, this.roomNote?.room === room ? this.roomNote.text : '',
+      font(this.fs(14), 800, '#8ef0a0')).setOrigin(0.5, 0);
+    this.items.push(this.roomNoteText);
     this.items.push(this.add.text(cx, 268, 'код для друга', font(this.fs(12), 700, UI.textDim)).setOrigin(0.5, 0));
 
     const link = this.inviteLink(room);
@@ -1899,11 +2826,228 @@ export default class MenuScene extends Phaser.Scene {
     return tgInviteLink(room);
   }
 
-  /** Вызов с главного экрана: комната башни и сразу выбор чата для карточки. */
-  challengeFriend() {
+  /**
+   * Вызов с главного экрана: комната башни и сразу выбор чата для карточки.
+   * friend — «Вызвать» из топа друзей: сначала бот пишет этому другу с
+   * кнопкой прямо в комнату; не вышло (лимит, друг отписался от бота, нет
+   * сети) — тот же выбор чата с карточкой, что и без друга.
+   */
+  challengeFriend(friend = null) {
     const room = randomRoom(true, true);
+    this.roomNote = null;
     this.showRoom(room);
-    if (inTelegram()) this.time.delayedCall(250, () => this.buttonHandlers?.copy?.());
+    const share = () => { if (inTelegram()) this.buttonHandlers?.copy?.(); };
+    if (!friend || !loggedIn()) {
+      this.time.delayedCall(250, share);
+      return;
+    }
+    this._setRoomNote(room, `отправляю вызов: ${friend.name}…`);
+    inviteFriend(friend.id, room).then((sent) => {
+      if (this.hosting !== room) return;
+      if (sent) {
+        trackStep('invite');
+        haptic('win');
+        this._setRoomNote(room, `Вызов ушёл в Telegram: ${friend.name}. Ждём здесь`);
+      } else {
+        this._setRoomNote(room, null);
+        share();
+      }
+    });
+  }
+
+  /** Строка над кодом комнаты: что с вызовом другу. Живёт и после поворота экрана. */
+  _setRoomNote(room, text) {
+    this.roomNote = text ? { room, text } : null;
+    if (this.roomNoteText?.active) this.roomNoteText.setText(text ?? '');
+  }
+
+  // ----------------------------------------------------- дуэли по переписке
+
+  /** Вход в Telegram идёт сам и не сразу: ждём его, прежде чем звать сервер. */
+  _whenLoggedIn(timeout = 10000) {
+    if (loggedIn()) return Promise.resolve(true);
+    return new Promise((resolve) => {
+      const off = onAccountChange(() => { if (loggedIn()) { off(); resolve(true); } });
+      this.time.delayedCall(timeout, () => { off(); resolve(loggedIn()); });
+    });
+  }
+
+  /** Сколько дуэлей ждут моего хода — для значка на главном. Не чаще раза в 15 секунд. */
+  _refreshDuelBadge() {
+    if (Date.now() - (this.duelsAt ?? 0) < 15_000) return;
+    this.duelsAt = Date.now();
+    fetchDuels().then((r) => {
+      if (!r || r.myTurn === (this.duelsTurn ?? 0)) return;
+      this.duelsTurn = r.myTurn;
+      if (this.section === this.showRoot) this.showRoot();
+    });
+  }
+
+  /**
+   * «Мои дуэли»: с кем, чей ход, сколько осталось, «Ходить» или «Смотреть».
+   * Внизу — новая дуэль: с другом (из топа друзей) или ссылкой в любой чат.
+   */
+  showDuels() {
+    this.section = this.showDuels;
+    this._clear();
+    this._title('Дуэли по переписке', 'ходи, когда удобно · на ход 24 часа · без рейтинга');
+    const cx = this.W / 2;
+    const note = this.add.text(cx, 150, 'загружаю…', font(this.fs(14), 700, UI.textDim)).setOrigin(0.5, 0);
+    this.items.push(note);
+    this._back();
+    if (!loggedIn()) {
+      note.setText('Дуэли по переписке живут на сервере — открой игру в Telegram.');
+      return;
+    }
+    const still = () => this.section === this.showDuels;
+    // Ход, который не дошёл до сервера, — сначала дослать: иначе список соврёт
+    flushPendingTurns().then(() => fetchDuels()).then((r) => {
+      if (!still()) return;
+      if (!r) { note.setText('сервер недоступен — попробуй позже'); return; }
+      this.duelsTurn = r.myTurn;
+      this.duelsAt = Date.now();
+      note.destroy();
+      this._renderDuels(r);
+    });
+  }
+
+  _renderDuels({ items, max }) {
+    const W = this.W, cx = W / 2;
+    const add = (o) => { this.items.push(o); return o; };
+    const short = (name, n) => (name.length > n ? `${name.slice(0, n - 1)}…` : name);
+    const roomy = this.portrait;
+    const listTop = 150;
+    const rowH = roomy ? 112 : 84;
+    const lw = Math.min(W - 48, 980);
+    const lx0 = cx - lw / 2, lx1 = cx + lw / 2;
+    const live = items.filter((d) => d.status === 'open' || d.status === 'active');
+    if (!items.length) {
+      add(this.add.text(cx, listTop + 10, ['Дуэлей пока нет.',
+        'Вызови друга по переписке: ты ходишь сейчас, он — когда удобно,',
+        'бот напишет ему «твой ход». На ход — сутки.'], font(this.fs(15), 700, UI.text))
+        .setOrigin(0.5, 0).setAlign('center').setLineSpacing(8).setWordWrapWidth(Math.min(W - 60, 680)));
+    }
+    const g = add(this.add.graphics());
+    items.forEach((d, i) => {
+      const y = listTop + i * rowH;
+      const h = rowH - 10;
+      const going = d.status === 'open' || d.status === 'active';
+      g.fillStyle(d.myTurn ? 0x1f2a1a : 0x161d2e, 1).fillRoundedRect(lx0, y, lw, h, 12);
+      g.lineStyle(d.myTurn ? 3 : 2, d.myTurn ? 0x8ef0a0 : 0xffffff, d.myTurn ? 0.9 : 0.08).strokeRoundedRect(lx0, y, lw, h, 12);
+      const sheet = this._skinSheet(d.opponent?.skin);
+      add(this.add.sprite(lx0 + 52, y + h - 2, sheet, 0).setOrigin(0.5, 0.92).setScale((h * 0.9) / 100).setFlipX(true))
+        .play(`${sheet}_idle`);
+      const nx = lx0 + 104;
+      add(this.add.text(nx, y + h / 2 - 2, d.opponent ? short(d.opponent.name, roomy ? 13 : 20) : 'по ссылке',
+        font(this.fs(15), 800, UI.text)).setOrigin(0, 1));
+      let line, color = UI.textDim;
+      if (d.status === 'open' && !d.myTurn) line = 'ждём, кто примет ссылку';
+      else if (d.myTurn) { line = `твой ход ${d.turn} · осталось ${leftText(d.deadline)}`; color = '#8ef0a0'; }
+      else if (d.status === 'active') line = `ход соперника · у него ${leftText(d.deadline)}`;
+      else if (d.status === 'cancelled') line = 'отменена';
+      else {
+        const won = d.winner === d.me;
+        line = d.winner === null ? 'ничья'
+          : won ? ({ resign: 'победа · соперник сдался', timeout: 'победа · соперник пропустил ходы' }[d.reason] ?? 'победа')
+            : ({ resign: 'поражение · ты сдался', timeout: 'поражение · пропущено 3 хода' }[d.reason] ?? 'поражение');
+        if (won) color = '#ffd166';
+      }
+      add(this.add.text(nx, y + h / 2 + 4, line, font(this.fs(12), 700, color)).setOrigin(0, 0));
+      const bx = lx1 - 90;
+      const label = d.myTurn ? 'Ходить' : going ? 'Ждём' : 'Итог';
+      const by = roomy && going ? y + h / 2 - 20 : y + h / 2;
+      this._button(`duel-open-${d.id}`, bx, by, label, '', () => this.openDuel(d.id),
+        { w: 156, h: roomy && going ? 44 : 52, titleSize: 21, variant: d.myTurn ? 'primary' : 'normal' });
+      if (going) {
+        // Сдаться — двумя нажатиями: первое спрашивает «точно?»
+        const rx = roomy ? bx : bx - 172, ry = roomy ? y + h / 2 + 26 : y + h / 2;
+        const key = `duel-resign-${d.id}`;
+        this._button(key, rx, ry, d.opponent ? 'сдаться' : 'отменить', '', () => {
+          const t = this.buttonTexts[key]?.title;
+          if (this.resignAsk !== d.id) { this.resignAsk = d.id; t?.setText('точно?'); return; }
+          this.resignAsk = null;
+          resignDuel(d.id).then(() => this.showDuels()).catch(() => this.showDuels());
+        }, { w: roomy ? 156 : 140, h: roomy ? 36 : 44, titleSize: 16 });
+      }
+    });
+    // Новая дуэль — если ещё можно
+    const endY = listTop + Math.max(items.length, items.length ? 0 : 1.4) * rowH + 54;
+    const can = live.length < (max ?? 5);
+    const bw = Math.min(300, (Math.min(lw, 640) - 16) / 2);
+    this._button('duel-new-friend', cx - bw / 2 - 8, endY, 'С другом', 'из списка друзей',
+      () => { this.topFrom = 'tab'; this.showTop('rating', 'friends'); }, { w: bw, h: 72, enabled: can, variant: 'primary' });
+    this._button('duel-new-link', cx + bw / 2 + 8, endY, 'По ссылке', 'в любой чат',
+      () => this.linkDuel(), { w: bw, h: 72, enabled: can });
+    if (!can) {
+      add(this.add.text(cx, endY + 46, `идёт ${live.length} из ${max} — доиграй одну, чтобы начать новую`,
+        font(this.fs(12), 700, UI.textDim)).setOrigin(0.5, 0));
+    }
+    this._scrollable(endY + 80);
+  }
+
+  /** Строка-подсказка под заголовком раздела (ошибка, «создаю…»). */
+  _duelNote(text) {
+    this.duelNoteText?.destroy();
+    this.duelNoteText = this.add.text(this.W / 2, this.topY(18), text, font(this.fs(14), 800, '#ffd166'))
+      .setOrigin(0.5, 0).setDepth(60).setPadding(10, 4, 10, 4).setBackgroundColor('#10131a');
+    this.items.push(this.duelNoteText);
+    this.time.delayedCall(3500, () => this.duelNoteText?.destroy());
+  }
+
+  /** Открыть дуэль: вся история с сервера, сцена соберёт партию сама. */
+  async openDuel(id) {
+    this._duelNote('открываю дуэль…');
+    if (!(await this._whenLoggedIn())) { this._duelNote('дуэли — после входа через Telegram'); return; }
+    await flushPendingTurns();
+    try {
+      const d = await fetchDuel(id);
+      this.registry.set('duel', d);
+      this.start(duelMatch(d));
+    } catch (e) {
+      this._duelNote(`не открылась: ${e.message}`);
+    }
+  }
+
+  /** «По переписке» у друга: новая дуэль, и сразу свой первый ход. */
+  async startDuel(friend) {
+    this._duelNote(`дуэль с ${friend.name}…`);
+    try {
+      const d = await createDuel({ opponent: friend.id });
+      trackStep('invite');
+      this.registry.set('duel', { ...d, turns: [] });
+      this.start(duelMatch(d));
+    } catch (e) {
+      this._duelNote(e.message);
+    }
+  }
+
+  /** Дуэль ссылкой: кто первым примет, тот и соперник. Свой ход — сразу. */
+  async linkDuel() {
+    try {
+      const d = await createDuel({ link: true });
+      const link = duelLink(d.code);
+      const text = 'Дуэль по переписке в Smiles ⚔️ Я уже хожу — принимай, ответишь, когда удобно';
+      if (!shareLink(link, text)) {
+        copyText(link);
+        this._duelNote('ссылка на дуэль скопирована');
+      }
+      this.registry.set('duel', { ...d, turns: [] });
+      this.time.delayedCall(400, () => this.start(duelMatch(d)));
+    } catch (e) {
+      this._duelNote(e.message);
+    }
+  }
+
+  /** Открыли игру по ссылке на дуэль: принять и сразу в неё. */
+  async joinDuelByCode(code) {
+    this._duelNote('принимаю дуэль…');
+    if (!(await this._whenLoggedIn())) { this._duelNote('дуэли — после входа через Telegram'); return; }
+    try {
+      const d = await joinDuel(code);
+      this.openDuel(d.id);
+    } catch (e) {
+      this._duelNote(e.message);
+    }
   }
 
   // ---------------------------------------------------------------- старт

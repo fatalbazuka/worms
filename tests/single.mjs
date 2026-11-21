@@ -113,6 +113,9 @@ const info = () => page.evaluate(() => {
 
 // --- меню ---
 await menuReady();
+// Бонус серии всплывает после первого боя и перехватил бы тапы по меню —
+// его проверяет свой тест ниже
+await page.evaluate(() => { window.__WORMS__.scene.getScene('Menu').streakShown = true; });
 const rootButtons = await page.evaluate(
   () => Object.keys(window.__WORMS__.scene.getScene('Menu').buttons));
 check('на главном экране «Играть», режимы и вкладки',
@@ -217,9 +220,20 @@ check('выстрел бота меняет мир', after.solid < botDamage.sol
 check('ход вернулся игроку', (await info()).team === 0);
 
 // --- победа в миссии засчитывается ---
-await page.evaluate(() => {
+// Добиваем, как будто выстрелил, вися на тросе: трюк «Человек-паук» должен
+// открыться в конце хода и принести свою награду ровно один раз
+const coinsNow = () => page.evaluate(() => JSON.parse(localStorage.getItem('worms.daily.v1') ?? '{}').coins ?? 0);
+const trick = await page.evaluate(() => {
   const s = window.__WORMS__.scene.getScene('Game');
+  const coins = () => JSON.parse(localStorage.getItem('worms.daily.v1') ?? '{}').coins ?? 0;
+  const me = s.turn.activeWorm;
+  const c0 = coins();
+  me.hang = 'ceil';
+  s._trickShot(me);
+  me.hang = null;
   s.worms.filter((w) => w.team === 1).forEach((w) => w.damage(999));
+  s._finishTrick();
+  return { delta: coins() - c0, got: s.achGot.map((a) => a.id) };
 });
 await page.waitForFunction(
   () => window.__WORMS__.scene.getScene('Game').turn.state === 'over',
@@ -227,6 +241,21 @@ await page.waitForFunction(
 );
 const progress = await page.evaluate(() => localStorage.getItem('worms.campaign.v1'));
 check('пройденная миссия записана', (progress ?? '').includes('range'), progress ?? 'пусто');
+// Достижения: трюк в бою открыт с наградой, победа — «Первая победа»;
+// повтор того же трюка ничего не открывает и монет не даёт
+const c1 = await coinsNow();
+const again = await page.evaluate(async () => {
+  const { bumpAch } = await import('/src/platform/achievements.js');
+  return bumpAch({ rope_kill: 1 }).map((a) => a.id);
+});
+const ach = await page.evaluate(() => ({
+  saved: Object.keys(JSON.parse(localStorage.getItem('worms.ach.v1') ?? '{}').got ?? {}),
+  over: window.__WORMS__.scene.getScene('Game').achGot.map((a) => a.id),
+}));
+check('добил, вися на тросе, — «Человек-паук» и +200 монет один раз; победа открыла «Первую победу»',
+  trick.got.join() === 'rope_kill' && trick.delta === 200 && again.length === 0 && await coinsNow() === c1
+    && ach.saved.includes('rope_kill') && ach.over.includes('wins_1'),
+  JSON.stringify({ trick, again, ach }));
 
 await page.waitForTimeout(1200);
 await tapToMenu();
@@ -447,6 +476,14 @@ check('испытание за один ход без потерь — три з
   ch.stars === 3 && ch.coins - coins0 >= 120, `звёзд ${ch.stars}, монет +${ch.coins - coins0}`);
 const nextBtn = await page.evaluate(() => Boolean(window.__WORMS__.scene.getScene('Game').overButtons?.next));
 check('после пройденного испытания на итоге есть «Дальше»', nextBtn);
+// Опыт: за бой, победу и новые звёзды — сохранён, второй уровень взят, подарок выдан
+const lv = await page.evaluate(() => ({
+  saved: JSON.parse(localStorage.getItem('worms.level.v1') ?? '{}'),
+  gain: window.__WORMS__.scene.getScene('Game').xpGain,
+}));
+check('бой приносит опыт, уровень и подарок за него сохранены',
+  lv.gain?.xp >= 70 && lv.saved.xp >= lv.gain.xp && lv.saved.rewarded >= 2 && lv.gain.after.level >= 2,
+  JSON.stringify(lv));
 
 // Голоса: фразы подгрузились после первого касания, итог боя сказан вслух
 const vo = await page.evaluate(async () => {
@@ -600,12 +637,12 @@ const struck = await page.evaluate(() => {
 });
 check('гроза: молния бьёт в самую высокую точку и выбивает кусок',
   storm.turn > 0 && struck.after > struck.before + 10, JSON.stringify({ turn: storm.turn, ...struck }));
-// Скачок гравитации: на ход тяжесть слабее, потом возвращается
+// Скачок гравитации: на ход тяжесть слабее, потом возвращается (up-18: у up-17 его сняли по кривой сложности)
 const grav = await page.evaluate(async () => {
   const { ascentMatch } = await import('/src/core/match.js');
   const g = window.__WORMS__.scene.getScene('Game');
-  g.registry.set('match', ascentMatch('up-17'));
-  g.registry.set('seed', ascentMatch('up-17').seed);
+  g.registry.set('match', ascentMatch('up-18'));
+  g.registry.set('seed', ascentMatch('up-18').seed);
   g.scene.restart();
 });
 await gameReady();
@@ -732,16 +769,26 @@ check('прицел «кнопки»: на башне ▲▼ и «Огонь», 
   check('новичок: первая «Играть» — обучение «Первый выстрел»',
     tut.mode === 'challenge' && tut.id === 'first' && tut.tutorial, JSON.stringify(tut));
   await p2.waitForFunction(() => window.__WORMS__.scene.getScene('Game').canPlayerAct(), null, { timeout: 40000 });
-  // Тренировка: шаги по порядку, рычаг заперт до последнего, ход не сгорает
+  // Тренировка: сначала выстрел гранатой (она уже в руке), потом ходьба,
+  // прыжок, трос — рычаг на них заперт — и «добей»; ход не сгорает
   const coach = await p2.evaluate(async () => {
-    const { WEAPONS } = await import('/src/weapons/index.js');
     const s = window.__WORMS__.scene.getScene('Game');
     const c = s.coach;
     if (!c) return { coach: false };
-    const seen = [c.current.id];
-    const locked = c.lockShot && !s.hud.slingPad ? null : c.lockShot;
     const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+    const seen = [c.current.id];
+    const lockedFirst = c.lockShot;
+    await wait(400);
+    const weapon = s.turn.weapon.id;
+    const me = s.turn.activeWorm;
+    const foe = s.worms.find((w) => w.team !== me.team);
+    const t0 = s.turn.turnNumber;
+    s.fireActiveWorm(Math.sign(foe.x - me.x) * 160, -260);
+    seen.push(c.current?.id);
+    for (let i = 0; i < 600 && !(s.turn.turnNumber > t0 + 1 && s.canPlayerAct()); i++) await wait(50);
+    const lockedWalk = c.lockShot;
     // Ход: идти к флажку
+    await wait(500);
     const dir = Math.sign(c.flag?.x - s.turn.activeWorm.x) || 1;
     for (let i = 0; i < 80 && c.current?.id === 'walk'; i++) { s.moveInput[dir > 0 ? 'right' : 'left'] = true; await wait(50); }
     s.moveInput.left = s.moveInput.right = false;
@@ -757,15 +804,12 @@ check('прицел «кнопки»: на башне ▲▼ и «Огонь», 
       await wait(100);
     }
     seen.push(c.current?.id);
-    await wait(400);
-    s.turn.setWeaponIndex(WEAPONS.findIndex((w) => w.id === 'grenade'));
-    for (let i = 0; i < 20 && c.current?.id === 'weapon'; i++) await wait(50);
-    seen.push(c.current?.id);
-    return { coach: true, seen, lockedBefore: locked, lockedAfter: c.lockShot, time: s.turn.timeLeft };
+    return { coach: true, seen, weapon, lockedFirst, lockedWalk, lockedAfter: c.lockShot, time: s.turn.timeLeft };
   });
-  check('тренировка новичка: ходьба → прыжок → трос → граната → выстрел, рычаг заперт до выстрела',
-    coach.coach && coach.seen.join() === 'walk,jump,hook,weapon,shoot' && coach.lockedBefore === true && coach.lockedAfter === false
-      && coach.time > 5, JSON.stringify(coach));
+  check('тренировка новичка: выстрел базукой → ходьба → прыжок → трос → добей, рычаг заперт только на середине',
+    coach.coach && coach.seen.join() === 'shoot,walk,jump,hook,finish' && coach.weapon === 'bazooka'
+      && coach.lockedFirst === false && coach.lockedWalk === true && coach.lockedAfter === false && coach.time > 5,
+    JSON.stringify(coach));
   await p2.evaluate(() => {
     const s = window.__WORMS__.scene.getScene('Game');
     s.hud.setHelp(false);

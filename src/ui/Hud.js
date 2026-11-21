@@ -1,7 +1,7 @@
 import { CFG, DEPTH, TEAM_COLORS, TEAM_NAMES } from '../config.js';
 import { WEAPONS, WEAPON_RARITY } from '../weapons/index.js';
 import { has as hasAsset, weaponIcon, fitScale } from '../core/assets.js';
-import { UI, font, ensureButton, ensureRoundButton, ensureIcon } from './theme.js';
+import { UI, font, ensureButton, ensureRoundButton, ensureIcon, setTextColor } from './theme.js';
 import { Inventory } from './Inventory.js';
 import { isDesktop } from '../platform/device.js';
 import { sfx } from '../audio/Sfx.js';
@@ -178,7 +178,7 @@ export class Hud {
 
     // Подсказка новичку под панелью: гаснет сама после трёх тросов
     this.hintText = this.fix(s.add.text(Math.round(W / 2), TOP_H + (this.compact ? 96 : 14),
-      'коснись светящейся точки — трос подтянет туда', font(15, 800, '#1a1408'))
+      'коснись светящейся точки — трос подтянет туда', font(this.compact ? 22 : 17, 800, '#1a1408'))
       .setOrigin(0.5, 0).setPadding(12, 6, 12, 6).setBackgroundColor('#ffe27a'), DEPTH.HUD + 1)
       .setVisible(false);
   }
@@ -430,11 +430,20 @@ export class Hud {
     const p = this.slingPad;
     if (!p) return false;
     const px = pointer.x - CFG.FRAME.left, py = pointer.y - CFG.FRAME.top;
-    return Math.hypot(px - p.x, py - p.y) <= p.r + CFG.SLING_PAD_SLOP;
+    // Пока подсказка тянет «палец» от рычага, хватать можно и там, где он
+    // нарисован: новичок берётся за то, что видит
+    if (Math.hypot(px - p.x, py - p.y) <= p.r + CFG.SLING_PAD_SLOP) return true;
+    const h = this.scene.slingHint && this.scene.aim?.padHintDir;
+    if (!h) return false;
+    // Отрезок от рычага туда, куда уезжает «палец» подсказки, — и 36 px вокруг
+    const ux = h.dx, uy = h.dy, L = CFG.SLING_PAD_MAX * 0.72;
+    const t = Math.max(0, Math.min(L, (px - p.x) * ux + (py - p.y) * uy));
+    return Math.hypot(px - (p.x + ux * t), py - (p.y + uy * t)) <= 36;
   }
 
   _drawSlingPad(scene) {
-    const g = this.padGfx, p = this.slingPad;
+    // «С любого места»: пока тянут по полю, рычаг нарисован под пальцем
+    const g = this.padGfx, p = this.padFloat ? { ...this.padFloat, r: this.slingPad.r } : this.slingPad;
     g.clear();
     const w = scene.turn.activeWorm;
     const ready = scene.canPlayerAct() && w && !w.zip && !scene.turn.retreating && !scene.coach?.lockShot;
@@ -675,7 +684,8 @@ export class Hud {
     const team = turn.currentTeam;
     const has = (i) => (turn.ammoOf ? turn.ammoOf(i) : 1) > 0;
     const out = [];
-    for (const i of [turn.weaponIndex, ...(st.recent[team] ?? [])]) {
+    // Арсенал боя — сразу на ленте: ради него он и выдан
+    for (const i of [turn.weaponIndex, ...(st.recent[team] ?? []), ...(this.scene.loadoutIdx ?? [])]) {
       if (has(i) && !out.includes(i)) out.push(i);
     }
     for (let i = 0; i < WEAPONS.length && out.length < st.n; i++) if (has(i) && !out.includes(i)) out.push(i);
@@ -713,6 +723,11 @@ export class Hud {
         const pop = Math.max(0, (c.popUntil ?? 0) - scene.time.now) / 260;
         c.icon.setScale(k * (1 + Math.sin(pop * Math.PI) * 0.35)).setVisible(true);
       } else c.icon.setVisible(false);
+      // Арсенал боя — золотая точка сверху слева
+      if (scene.loadoutIdx?.includes(idx)) {
+        g.fillStyle(0xffd23f, 1).fillCircle(c.cx - st.r * 0.7, st.y - st.r * 0.7, 7);
+        g.lineStyle(2, 0x10131a, 1).strokeCircle(c.cx - st.r * 0.7, st.y - st.r * 0.7, 7);
+      }
       const n = turn.ammoOf ? turn.ammoOf(idx) : Infinity;
       c.badge.setText(Number.isFinite(n) ? String(n) : '∞').setVisible(true);
     });
@@ -855,10 +870,10 @@ export class Hud {
     ] : this.compact ? [
       'жёлтый рычаг справа: тяни ОТ цели и отпусти — выстрел',
       'чем дальше тянешь, тем сильнее; вернул в центр — отмена',
-      'можно тянуть и прямо с бойца',
+      s.aimAnywhere ? 'тянуть можно с любого места поля — рычаг вырастет под пальцем' : 'можно тянуть и прямо с бойца',
       'коснись стены или потолка — крюк подтянет бойца туда',
       'стрелки — шаг, круглая кнопка — прыжок или отцепиться',
-      'тяни фон — камера, два пальца — масштаб',
+      s.aimAnywhere ? 'камера: два пальца — двигать и масштаб; в чужой ход — один палец' : 'тяни фон — камера, два пальца — масштаб',
     ] : this.desktop && s.sling ? [
       'мышь — прицел · ЛКМ держать — сила, отпустить — выстрел',
       'ПКМ по стене или потолку — крюк подтянет бойца туда',
@@ -1038,7 +1053,7 @@ export class Hud {
     if (this.turnText) {
       this.teamChip.fillColor = TEAM_COLORS[team];
       this.turnText.setText(worm ? `Боец ${worm.name}` : TEAM_NAMES[team]);
-      this.turnText.setColor(hex(TEAM_COLORS[team]));
+      setTextColor(this.turnText, hex(TEAM_COLORS[team]));
       const shape = scene.shape && scene.shape.id !== 'island' ? ` · ${scene.shape.name}` : '';
       const hooks = scene.hookPerTurn > 0 ? ` · крюков ${scene.hooksLeft}` : '';
       this.subText.setText(`${TEAM_NAMES[team]} · ${scene.terrain.biome.name}${shape} · ${turn.weapon.name}${hooks}`);
@@ -1062,7 +1077,7 @@ export class Hud {
     const color = urgent ? 0xff6b6b : left <= 12 ? 0xffd166 : 0x6ee36e;
 
     this.timerText.setText(Math.ceil(left).toString());
-    this.timerText.setColor(urgent ? '#ff9a9a' : UI.text);
+    setTextColor(this.timerText, urgent ? '#ff9a9a' : UI.text);
     // Под конец хода цифра пульсирует: одного цвета мало, его не замечают
     this.timerText.setScale(urgent ? 1 + Math.sin(this.scene.time.now / 90) * 0.09 : 1);
 
@@ -1116,13 +1131,14 @@ export class Hud {
       // На тренировке своя панель с шагами — строка подсказки не нужна
       const splitting = !scene.replaying && !scene.isBotTurn?.() && scene.isLocalTeam?.(scene.turn.currentTeam)
         && scene.projectiles?.some((p) => p.alive && p.weapon.projectile.split);
-      const show = splitting || (!this.helpVisible && scene.canPlayerAct() && !scene.coach
+      const bannerUp = (scene.fx?.bannerUntil ?? 0) > scene.time.now;
+      const show = splitting || (!this.helpVisible && !bannerUp && scene.canPlayerAct() && !scene.coach
         && (spring || sling || (scene.hookHint && scene.hooksLeft > 0)));
       if (show) {
         this.hintText.setText(splitting ? 'тапни по экрану — ракета разделится на три' : spring
           ? 'батут: тяни рычаг — полетишь сам по дуге, пружина останется'
           : sling
-            ? 'тяни жёлтый рычаг от цели и отпусти'
+            ? (scene.aimAnywhere ? 'тяни пальцем где угодно ОТ цели и отпусти' : 'тяни жёлтый рычаг от цели и отпусти')
             : 'коснись светящейся точки — трос подтянет туда');
       }
       this.hintText.setVisible(!!show);

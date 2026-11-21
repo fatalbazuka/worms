@@ -45,6 +45,17 @@ export function font(size, weight = 800, color = UI.text) {
   };
 }
 
+/**
+ * Цвет текста — только если он другой. В Phaser setColor всегда заново
+ * рисует надпись на её холсте и перезаливает текстуру, даже с тем же
+ * цветом: в HUD это делалось каждый кадр (таймер, «чей ход», метки бойцов
+ * за краем экрана) и на слабом телефоне съедало заметную часть кадра.
+ */
+export function setTextColor(text, color) {
+  if (text.style.color !== color) text.setColor(color);
+  return text;
+}
+
 function roundRect(ctx, x, y, w, h, r) {
   ctx.beginPath();
   ctx.moveTo(x + r, y);
@@ -245,6 +256,18 @@ const ICONS = {
     ctx.fillRect(s * 0.18, s * 0.42, s * 0.2, s * 0.36);
     ctx.fillRect(s * 0.62, s * 0.52, s * 0.2, s * 0.26);
   },
+  // Сумка с ручкой: магазин
+  shop: (ctx, s) => {
+    stroke(ctx, s);
+    ctx.beginPath();
+    ctx.moveTo(s * 0.22, s * 0.38); ctx.lineTo(s * 0.78, s * 0.38);
+    ctx.lineTo(s * 0.72, s * 0.82); ctx.lineTo(s * 0.28, s * 0.82); ctx.closePath();
+    ctx.moveTo(s * 0.37, s * 0.38); ctx.lineTo(s * 0.37, s * 0.3);
+    ctx.quadraticCurveTo(s * 0.37, s * 0.16, s * 0.5, s * 0.16);
+    ctx.quadraticCurveTo(s * 0.63, s * 0.16, s * 0.63, s * 0.3);
+    ctx.lineTo(s * 0.63, s * 0.38);
+    ctx.stroke();
+  },
   // Голова и плечи: профиль
   profile: (ctx, s) => {
     stroke(ctx, s);
@@ -281,6 +304,8 @@ const ICONS = {
   },
   sound: (ctx, s) => speaker(ctx, s, false),
   mute: (ctx, s) => speaker(ctx, s, true),
+  music: (ctx, s) => note(ctx, s, false),
+  'music-off': (ctx, s) => note(ctx, s, true),
   help: (ctx, s) => {
     stroke(ctx, s);
     ctx.lineCap = 'round';
@@ -319,6 +344,31 @@ function speaker(ctx, s, muted) {
     ctx.arc(s * 0.5, c, s * 0.27, -Math.PI / 4, Math.PI / 4);
   }
   ctx.stroke();
+}
+
+/** Две восьмые под ребром — значок музыки; off — перечёркнут. */
+function note(ctx, s, off) {
+  stroke(ctx, s);
+  ctx.fillStyle = UI.text;
+  const r = s * 0.1;
+  const heads = [[s * 0.32, s * 0.7], [s * 0.7, s * 0.62]];
+  for (const [x, y] of heads) {
+    ctx.beginPath();
+    ctx.ellipse(x, y, r * 1.25, r, -0.35, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.beginPath();
+  ctx.moveTo(heads[0][0] + r * 1.1, heads[0][1]);
+  ctx.lineTo(heads[0][0] + r * 1.1, s * 0.26);
+  ctx.lineTo(heads[1][0] + r * 1.1, s * 0.18);
+  ctx.lineTo(heads[1][0] + r * 1.1, heads[1][1]);
+  ctx.stroke();
+  if (off) {
+    ctx.beginPath();
+    ctx.moveTo(s * 0.18, s * 0.18);
+    ctx.lineTo(s * 0.82, s * 0.82);
+    ctx.stroke();
+  }
 }
 
 function stroke(ctx, s) {

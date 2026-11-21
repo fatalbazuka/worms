@@ -277,6 +277,58 @@ export async function fetchTop(limit = 20, kind = 'rating') {
   return Array.isArray(data.players) ? data.players : [];
 }
 
+/**
+ * Топ друзей: кого позвал, кто позвал тебя, с кем доиграл бой на рейтинг —
+ * и ты сам с местом среди них. Без входа друзей нет.
+ * @returns {Promise<{friends: object[], place: number|null, total: number}>}
+ */
+export async function fetchFriends() {
+  if (!token) return { friends: [], place: null, total: 0 };
+  const data = await call('GET', '/friends');
+  return { friends: Array.isArray(data.friends) ? data.friends : [], place: data.place ?? null, total: data.total ?? 0 };
+}
+
+/**
+ * Вызвать друга через бота: ему придёт сообщение с кнопкой в комнату.
+ * false — не вышло (лимит, друг отписался, нет сети): зовём карточкой.
+ */
+export async function inviteFriend(id, room) {
+  if (!token) return false;
+  try { return (await call('POST', '/friends/challenge', { id, room })).sent === true; } catch { return false; }
+}
+
+// ------------------------------------------------- дуэли по переписке
+
+/** Мои дуэли: {items, myTurn, max}. null — без входа или сервер молчит. */
+export async function fetchDuels() {
+  if (!token) return null;
+  try { return await call('GET', '/duels'); } catch { return null; }
+}
+
+/** Дуэль целиком, с историей ходов. */
+export async function fetchDuel(id) {
+  return (await call('GET', `/duels/${Number(id)}`)).duel;
+}
+
+/** Новая дуэль: {opponent: id} — с другом, {link: true} — ссылкой с кодом. */
+export async function createDuel(body) {
+  return (await call('POST', '/duels', body)).duel;
+}
+
+/** Принять дуэль по коду из ссылки. */
+export async function joinDuel(code) {
+  return (await call('POST', '/duels/join', { code })).duel;
+}
+
+/** Свой ход: приказы и снимок итога. Повтор того же хода сервер примет как есть. */
+export async function sendDuelTurn(id, payload) {
+  return call('POST', `/duels/${Number(id)}/turn`, payload);
+}
+
+export async function resignDuel(id) {
+  return (await call('POST', `/duels/${Number(id)}/resign`, {})).duel;
+}
+
 /** История боёв для кабинета: дуэли на рейтинг и матчи турниров. */
 export async function fetchHistory() {
   const data = await call('GET', '/me/history');

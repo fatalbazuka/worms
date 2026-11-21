@@ -21,6 +21,8 @@ export const SKIN_NAMES = {
   rage: 'Злюка', devil: 'Чертёнок', clown: 'Клоун',
   cool: 'Крутой', nerd: 'Ботаник', sleepy: 'Соня', ninja: 'Ниндзя', pirate: 'Пират',
   robot: 'Робот', astro: 'Космонавт', king: 'Король', rainbow: 'Радуга',
+  detective: 'Детектив', chef: 'Шеф', bubblegum: 'Жвачка', zipper: 'Молния',
+  knight: 'Рыцарь', bomb: 'Бомба', beardo: 'Бородач', poophead: 'Какашка',
 };
 export const SKIN_IDS = Object.keys(SKIN_NAMES);
 
@@ -60,7 +62,8 @@ export function createShop({ db, now = () => Date.now() }) {
 
   /**
    * Что положено игроку: всего коробок (куплено + подарено), монет в
-   * подарок от админа и скины (купленные и подаренные). Всё — итогами:
+   * подарок от админа, скины (купленные и подаренные) и сколько друзей
+   * он привёл. Всё — итогами:
    * игра сама помнит, сколько уже положила, и добавляет только разницу.
    */
   function owned(playerId) {
@@ -73,7 +76,8 @@ export function createShop({ db, now = () => Date.now() }) {
       if (it?.kind === 'boxes') boxes += it.boxes;
       if (it?.kind === 'skin') skins.add(it.skin);
     }
-    return { boxes, coins, skins: [...skins] };
+    // invited — сколько друзей пришло по ссылке игрока: игре для достижения
+    return { boxes, coins, skins: [...skins], invited: q.refCount.get(playerId).n };
   }
 
   /**

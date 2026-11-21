@@ -127,6 +127,15 @@ export class AimController {
         this.wasOut = false;
       } else {
         this._beginPan(pointer);
+        // «С любого места»: в свой ход касание поля — возможное натяжение.
+        // Не сдвинул палец — это по-прежнему тап (трос); сдвинул — рогатка
+        // вырастает под пальцем. Камера в свой ход — двумя пальцами
+        this.anyStart = Boolean(this.scene.aimAnywhere && canAim && !locked && !w.zip
+          && !this.scene.turn.retreating);
+        if (this.anyStart && !this.tap) {
+          this.scene.rig.panEnd();
+          this.tap = { x: pointer.x, y: pointer.y, moved: false, at: performance.now() };
+        }
       }
       return;
     }
@@ -166,6 +175,7 @@ export class AimController {
       if (this.tap && !this.tap.moved) {
         if (Math.hypot(pointer.x - this.tap.x, pointer.y - this.tap.y) < CFG.TAP_MOVE) return;
         this.tap.moved = true;
+        if (this.anyStart) { this._beginAnywhere(); return; }
         this.scene.rig.panStart(pointer);
       }
       this.scene.rig.panMove(pointer);
@@ -213,8 +223,29 @@ export class AimController {
     this.dragY = p.y - this.startY;
   }
 
+  /**
+   * Протяжка по полю стала натяжением: дальше она ведёт себя как рычаг,
+   * только рычаг нарисован там, где палец коснулся экрана.
+   */
+  _beginAnywhere() {
+    const t = this.tap;
+    this.anyStart = false;
+    this.tap = null;
+    this.mode = 'aim';
+    this.pad = true;
+    this._lastStep = 0;
+    this.startX = t.x; this.startY = t.y;
+    this.dragX = 0; this.dragY = 0;
+    this.armed = true;
+    this.downAt = performance.now() - CFG.SLING_MIN_HOLD;
+    this.wasOut = false;
+    this.scene.hud.padFloat = { x: t.x - CFG.FRAME.left, y: t.y - CFG.FRAME.top };
+    this.scene.haptic?.('tap');
+  }
+
   onUp() {
     this.scene.rig.panEnd();
+    this.anyStart = false;
     // Палец не двигался и не задержался — это тап: трос в сторону точки.
     // Подержал и отпустил — передумал, ничего не делаем
     if (this.mode === 'pan' && this.tap && !this.tap.moved
@@ -225,7 +256,7 @@ export class AimController {
     this.tap = null;
     if (this.mode === 'charge') this.scene.mouseFire = false;
     const cancelled = this.pad && this.scene.hud.padCancelOn;
-    if (this.pad) { this.pad = false; this.scene.hud.padPull = null; this.scene.hud.padCancelOn = false; }
+    if (this.pad) { this.pad = false; this.scene.hud.padPull = null; this.scene.hud.padCancelOn = false; this.scene.hud.padFloat = null; }
     if (this.mode === 'aim' && cancelled) {
       this.mode = null;
       this.dragX = 0; this.dragY = 0;
@@ -298,8 +329,9 @@ export class AimController {
 
   cancel() {
     if (this.mode === 'charge') this.scene.mouseFire = false;
-    if (this.pad) { this.pad = false; this.scene.hud.padPull = null; this.scene.hud.padCancelOn = false; }
+    if (this.pad) { this.pad = false; this.scene.hud.padPull = null; this.scene.hud.padCancelOn = false; this.scene.hud.padFloat = null; }
     this.tap = null;
+    this.anyStart = false;
     this.mode = null;
     this.dragX = 0; this.dragY = 0;
     this.gfx.clear();
@@ -381,19 +413,25 @@ export class AimController {
     let dx = foe.x - w.x, dy = foe.centerY - w.centerY - 90;
     const d = Math.hypot(dx, dy) || 1;
     dx /= d; dy /= d;
+    // Обучение после промаха: не жест вообще, а тот, что попадёт
+    const sol = scene.coach?.aimSolution;
+    const full = sol ? sol.frac : 0.72;
+    if (sol) { dx = sol.dx; dy = sol.dy; }
     const t = (scene.time.now % 2000) / 2000;
     const pull = t < 0.15 ? 0 : t < 0.7 ? (t - 0.15) / 0.55 : t < 0.85 ? 1 : 0;
     const k = pull * pull * (3 - 2 * pull);
-    const reach = (CFG.SLING_MAX * 0.72 * k) / scene.rig.zoom;
+    const reach = (CFG.SLING_MAX * full * k) / scene.rig.zoom;
     const o = this.origin();
     const fx = o.x - dx * reach, fy = o.y - dy * reach;
     // Рычаг на экране тянется так же — видно, за что браться
-    const padReach = CFG.SLING_PAD_MAX * 0.72 * k;
+    const padReach = CFG.SLING_PAD_MAX * full * k;
     this.padHint = { dx: -dx * padReach, dy: -dy * padReach };
+    // Куда «палец» уезжает целиком — рычаг ловит касание и на этом пути
+    this.padHintDir = { dx: -dx, dy: -dy };
     const g = this.gfx;
     if (k > 0.02) {
       g.lineStyle(3, 0xffffff, 0.35).lineBetween(o.x, o.y, fx, fy);
-      this._drawPower(o, { x: dx, y: dy }, k * 0.72);
+      this._drawPower(o, { x: dx, y: dy }, k * full);
     }
     // «Палец»: кружок с ободком; в момент отпускания вспыхивает
     const released = t >= 0.85;
