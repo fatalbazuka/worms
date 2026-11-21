@@ -193,9 +193,17 @@ export class CameraRig {
       this.scene.aim.cancel();   // второй палец отменяет начатое прицеливание
       this.manual = true;
       this.idle = 0;
+      this.pinchMid = { x: mid, y: midY };
       return;
     }
     if (this.pinchDist > 12) this.setZoom(this.pinchZoom * (dist / this.pinchDist), mid, midY);
+    // Два пальца ещё и двигают кадр: в схеме «с любого места» один палец
+    // в свой ход занят рогаткой, камере нужен свой жест
+    if (this.pinchMid) {
+      this.setViewLeft(this.viewLeft - (mid - this.pinchMid.x) / this.zoom);
+      this.setViewTop(this.clampTop(this.viewTop - (midY - this.pinchMid.y) / this.zoom));
+    }
+    this.pinchMid = { x: mid, y: midY };
     this.idle = 0;
   }
 

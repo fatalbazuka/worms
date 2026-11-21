@@ -129,7 +129,9 @@ export default class GameScene extends Phaser.Scene {
     this.sling = this.hookPerTurn > 0;
     // Схема прицела на башне — выбор игрока: рогатка (по умолчанию) или
     // прежние кнопки угла и «Огонь». Раскладка экрана от неё не зависит
-    this.slingAim = this.sling && aimScheme() === 'sling';
+    this.slingAim = this.sling && aimScheme() !== 'buttons';
+    // Рогатка с любого места: протяжка пальцем по полю — натяжение, а не камера
+    this.aimAnywhere = this.slingAim && aimScheme() === 'anywhere';
     this.explosionLog = [];
     // Все воронки с начала партии — для соперника, вернувшегося после
     // обрыва: у него земля чистая, журнал одного хода ему не поможет

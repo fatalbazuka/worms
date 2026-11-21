@@ -586,9 +586,9 @@ export default class MenuScene extends Phaser.Scene {
     if (canOfferHomeScreen()) pill('home', '⌂ На экран Домой', 250, () => addToHomeScreen());
     const desktop = isDesktop();
     if (!desktop) {
-      const sling = aimScheme() === 'sling';
-      pill('aim-mode', sling ? 'Прицел: рогатка' : 'Прицел: кнопки', 230,
-        () => { setAimScheme(sling ? 'buttons' : 'sling'); this.showRoot(); });
+      // Три схемы прицела — выбор на отдельном экране с пояснениями
+      const aimName = { sling: 'рычаг', anywhere: 'где угодно', buttons: 'классика' }[aimScheme()];
+      pill('aim-mode', `Прицел: ${aimName}`, 230, () => this.showAim());
     }
     // Язык: по умолчанию — из Telegram, здесь можно сменить
     pill('lang', LANG === 'en' ? 'RU' : 'EN', 74, () => setLang(LANG === 'en' ? 'ru' : 'en'));
@@ -1206,6 +1206,37 @@ export default class MenuScene extends Phaser.Scene {
           copyText(link);
         }
       }, { w, h, titleSize: 25, hintSize: 17, enabled: Boolean(link), variant: 'primary' });
+  }
+
+  // --------------------------------------------------------------- прицел
+
+  /**
+   * Выбор схемы прицела: три способа стрелять, у каждого — строка о том,
+   * как им пользоваться. Схема читается в начале боя, поэтому выбор — здесь,
+   * а не посреди партии.
+   */
+  showAim() {
+    this.section = this.showAim;
+    this._clear();
+    this._title('Прицел', 'как целиться и стрелять в бою');
+    const W = this.W, cx = W / 2;
+    const cur = aimScheme();
+    const w = Math.min(W - 48, 600), h = this.portrait ? 116 : 100;
+    const list = [
+      ['sling', 'Рычаг', 'жёлтый рычаг у большого пальца: тяни от цели и отпусти'],
+      ['anywhere', 'С любого места', 'тяни пальцем где угодно на поле · камера — двумя пальцами'],
+      ['buttons', 'Классика', 'кнопки ▲▼ — угол, держи «Огонь» — сила, отпустил — выстрел'],
+    ];
+    list.forEach(([id, title, hint], i) => {
+      const on = id === cur;
+      this._button(`aim-${id}`, cx, 212 + i * (h + 18), on ? `✓ ${title}` : title, hint, () => {
+        setAimScheme(id);
+        haptic('select');
+        this.showAim();
+      }, { w, h, titleSize: 28, hintSize: 17, variant: on ? 'active' : 'normal' });
+    });
+    this._back();
+    this._scrollable(212 + list.length * (h + 18) + 60);
   }
 
   // -------------------------------------------------------------- магазин
