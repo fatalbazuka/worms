@@ -20,7 +20,13 @@ export default class BootScene extends Phaser.Scene {
       fontStyle: '800', color: '#93a4bd',
     }).setOrigin(0.5);
 
-    this.load.on('loaderror', (file) => missing.add(file.key));
+    this.load.on('loaderror', (file) => {
+      missing.add(file.key);
+      // Что именно и почему: статус ответа виден в диагностике на экране
+      const st = file.xhrLoader?.status;
+      this.failInfo = this.failInfo ?? {};
+      this.failInfo[file.key] = st ? `HTTP ${st}` : 'сеть';
+    });
     this.load.on('progress', (p) => label.setText(`Загрузка… ${Math.round(p * 100)}%`));
     this.label = label;
 
@@ -85,6 +91,27 @@ export default class BootScene extends Phaser.Scene {
     }
 
     const total = Object.keys(IMAGES).length + Object.keys(SHEETS).length;
+    // Не загрузились даже со второго раза бойцы — не молчим: на экране
+    // строка, что и почему, и кнопка «Повторить». Так видно причину на
+    // телефоне, где у нас нет консоли
+    const fighters = [...missing].filter((k) => k === 'smiley' || k.startsWith('skin_'));
+    if (fighters.length && !this.shownFail) {
+      this.shownFail = true;
+      const why = fighters.slice(0, 4).map((k) => `${k} (${this.failInfo?.[k] ?? '?'})`).join(', ');
+      const W = this.scale.width, H = this.scale.height;
+      this.label?.setText(`Не загрузились картинки бойцов: ${fighters.length}\n${why}`).setFontSize(20).setAlign('center')
+        .setWordWrapWidth(W - 40);
+      const btn = this.add.text(W / 2, H / 2 + 90, 'Повторить', {
+        fontFamily: '"Worms UI", system-ui, sans-serif', fontSize: '24px', fontStyle: '800', color: '#1a1408',
+        backgroundColor: '#ffd166', padding: { x: 22, y: 12 },
+      }).setOrigin(0.5).setInteractive();
+      btn.on('pointerup', () => location.reload());
+      const go = this.add.text(W / 2, H / 2 + 160, 'играть без них', {
+        fontFamily: '"Worms UI", system-ui, sans-serif', fontSize: '18px', color: '#93a4bd',
+      }).setOrigin(0.5).setInteractive();
+      go.on('pointerup', () => this.create());
+      return;
+    }
     if (missing.size) {
       console.info(
         `[assets] загружено ${total - missing.size}/${total}. ` +
