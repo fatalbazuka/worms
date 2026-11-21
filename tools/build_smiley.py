@@ -100,7 +100,11 @@ def build(src, out_path):
         frame = Image.new('RGBA', (CELL, CELL), (0, 0, 0, 0))
         frame.paste(art, (x, max(0, y)), art)
         out.paste(frame.transpose(Image.FLIP_LEFT_RIGHT), (i * CELL, 0))
-    out.save(out_path)
+    # Палитра на 256 цветов без дизеринга: глазом не отличить, а файл в
+    # пять раз легче — 25 скинов грузятся при запуске, на мобильном
+    # интернете тяжёлые листы обрывались и бойцы становились заглушками
+    out = out.quantize(colors=256, method=Image.Quantize.FASTOCTREE, dither=Image.Dither.NONE)
+    out.save(out_path, optimize=True)
     print(f'{Path(out_path).name}: {len(cells)} кадров {CELL}x{CELL}')
 
 
