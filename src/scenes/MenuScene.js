@@ -479,6 +479,16 @@ export default class MenuScene extends Phaser.Scene {
     const h = this.portrait ? 116 : 96;
     const y0 = this.bottomY(h);
     this.items.push(this.add.rectangle(0, y0, W, h + 600, 0x0b1018, 0.94).setOrigin(0, 0));
+    // Под полосой — безопасная зона iPhone (полоска «домой»): её рисует не
+    // uiCam, а камера фона, и там оставалась пустая тёмная щель под вкладками
+    const f = CFG.FRAME;
+    if (f.bottom > 0) {
+      this._addingBackdrop = true;
+      const fill = this.add.rectangle(0, f.top + this.H - h, this.scale.width, h + f.bottom + 4, 0x0b1018, 0.94)
+        .setOrigin(0, 0).setDepth(5);
+      this._addingBackdrop = false;
+      this.items.push(fill);
+    }
     this.items.push(this.add.rectangle(0, y0, W, 2, 0xffffff, 0.09).setOrigin(0, 0));
     const tabs = [
       ['battle', 'Бой', 'battle', () => this.showRoot()],
