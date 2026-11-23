@@ -273,6 +273,21 @@ const real = await pages[0].evaluate(() => {
   return { hp: s.worms.map((w) => w.health), craters: s.explosionHistory.length };
 });
 check('партия не пустая: воронки есть, здоровье убавилось', real.craters > 0 && real.hp.some((h) => h < 100), JSON.stringify(real));
+// --- «Пересмотреть ход»: последний ход заново, партия та же ---
+const rw = pages[0];
+const before = await rw.evaluate(() => {
+  const s = window.__WORMS__.scene.getScene('Game');
+  return { can: s.net.canRewatch, last: s.net.checks.at(-1)?.mine ?? null };
+});
+await rw.evaluate(() => window.__WORMS__.scene.getScene('Game').rewatchDuel());
+await rw.waitForFunction(() => window.__WORMS__.scene.getScene('Game')?.net?.phase === 'replay', null, { timeout: 30000 }).catch(() => {});
+const sawReplay = await rw.evaluate(() => window.__WORMS__.scene.getScene('Game').net.forceShow === true);
+await waitPhase(rw, ['play', 'wait', 'over']);
+const after = await rw.evaluate(() => window.__WORMS__.scene.getScene('Game').net.checks.at(-1)?.mine ?? null);
+const lastTurn = serverTurns.at(-1);
+check('«Пересмотреть ход»: последний ход показан заново, итог тот же',
+  before.can && sawReplay && (lastTurn.kind !== 'move' || after === lastTurn.hash),
+  JSON.stringify({ ...before, sawReplay, after, server: lastTurn.hash }));
 check('ни расхождений, ни ошибок в консоли', diverged.length === 0 && errors.length === 0, [...diverged, ...errors].slice(0, 5).join(' | '));
 console.log(`  ходов в дуэли: ${turns}`);
 
