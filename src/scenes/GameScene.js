@@ -37,7 +37,7 @@ import {
 } from '../platform/telegram.js';
 import { canStory, snapshot as frameShot, fighterFrame, drawStory, shareStory } from '../platform/story.js';
 import { ClipRecorder, canClip, saveClip, clipToStory } from '../platform/clip.js';
-import { HOTSEAT, towerMatch, rookieMatch, challengeMatch, ascentMatch } from '../core/match.js';
+import { HOTSEAT, towerMatch, rookieMatch, challengeMatch, ascentMatch, fallbackMatch } from '../core/match.js';
 import { ASCENT } from '../campaign/ascent.js';
 import { markAscentDone, saveAscentStars, claimChapterBoxes } from '../platform/ascent.js';
 import { markWon, claimTutorialBox } from '../platform/onboard.js';
@@ -79,6 +79,9 @@ const BASE_GRAVITY = CFG.GRAVITY;
 const BASE_HOOK_RANGE = CFG.HOOK_RANGE;
 
 export default class GameScene extends Phaser.Scene {
+  /** Через сколько секунд ожидания соперника предложить выход. */
+  static WAIT_HINT = 20;
+
   constructor() { super('Game'); }
 
   create() {
@@ -769,11 +772,18 @@ export default class GameScene extends Phaser.Scene {
    * локальный хотсит, никакой сети и никаких подключений.
    */
   _setupNet() {
+    // Сцена переживает рестарт: комната прошлой партии здесь не нужна
+    this.room = null;
+    this.netLocal = false;
     const duel = this.match.mode === 'duel' ? this.registry.get('duel') : null;
     if (duel) { this._setupDuel(duel); return; }
     const room = startRoom();
     if (!room) return;
     this.room = room;
+    // До встречи с соперником партии нет: раньше здесь шёл обычный бой за
+    // обе команды, и друг, открывший ссылку через несколько часов, играл
+    // сам с собой. Теперь — пауза и плашка ожидания (_updateWaitPanel)
+    this._waitSince = Date.now();
 
     // Сессия одна на всю вкладку: рестарт сцены её не рвёт
     this.net = this.registry.get('net');
@@ -804,6 +814,7 @@ export default class GameScene extends Phaser.Scene {
       console.warn('[net] не удалось подключиться', e);
       this.fx.banner('сеть недоступна, играем локально', '#ff9a9a', 2600);
       this._netStatus('нет связи — локальная игра', '#ff9a9a');
+      this.netLocal = true;
       // Сессию гасим целиком: иначе клиент Realtime продолжит ломиться
       // в сокет до конца партии, которую мы уже играем локально
       this.net?.destroy();
@@ -841,6 +852,74 @@ export default class GameScene extends Phaser.Scene {
     if (!this.net?.isDuel || !this.net.canRewatch) return;
     this.haptic?.('tap');
     this.registry.set('duel', { ...this.net.duel, replayLast: true });
+    this.scene.restart();
+  }
+
+  /**
+   * Ждём второго игрока: сеть поднята, но никто ещё не пришёл. Партия на
+   * паузе — ни ходить, ни тикать часам. Нет сети вовсе — играем локально.
+   */
+  get waitingPeer() {
+    return Boolean(this.room) && !this.net?.isDuel && !this.netLocal && !this.net?.paired;
+  }
+
+  /**
+   * Плашка «Ждём соперника». Первые секунды молчит (по быстрому бою встреча
+   * — дело мгновения), потом говорит, что ждём, а через WAIT_HINT секунд
+   * предлагает выход: друга, похоже, сейчас нет в игре.
+   */
+  _updateWaitPanel() {
+    const waiting = this.waitingPeer && this.turn.state !== STATE.OVER;
+    if (!waiting) {
+      if (this.waitUi) { for (const o of this.waitUi) o.destroy(); this.waitUi = null; }
+      return;
+    }
+    const sec = (Date.now() - this._waitSince) / 1000;
+    if (sec < 1.5) return;
+    const stage = sec >= GameScene.WAIT_HINT ? 'long' : 'short';
+    if (this.waitUi && this.waitStage === stage) return;
+    for (const o of this.waitUi ?? []) o.destroy();
+    this.waitStage = stage;
+    const ui = [];
+    const cx = CFG.VIEW_W / 2, cy = CFG.VIEW_H / 2;
+    const tour = isTournamentRoom(this.room);
+    ui.push(this.rig.ui(this.add.rectangle(0, 0, CFG.VIEW_W, CFG.VIEW_H, 0x070b14, 0.62)
+      .setOrigin(0, 0).setScrollFactor(0).setDepth(DEPTH.HUD + 10).setInteractive()));
+    const long = stage === 'long';
+    const title = long ? 'Соперника пока нет' : 'Ждём соперника…';
+    const sub = long
+      ? (tour ? 'Он ещё не открыл бой. Можно подождать здесь или вернуться позже'
+        : 'Похоже, его сейчас нет в игре. Позови ещё раз — или сыграй иначе')
+      : 'Бой начнётся, как только он зайдёт';
+    ui.push(this.rig.ui(this.add.text(cx, cy - 96, title, font(40, 800, '#ffd166'))
+      .setOrigin(0.5).setScrollFactor(0).setDepth(DEPTH.HUD + 11)));
+    ui.push(this.rig.ui(this.add.text(cx, cy - 46, sub, font(18, 700, UI.textDim))
+      .setOrigin(0.5).setScrollFactor(0).setDepth(DEPTH.HUD + 11).setAlign('center')
+      .setWordWrapWidth(Math.min(CFG.VIEW_W - 60, 640))));
+    ui.push(this.rig.ui(this.add.text(cx, cy - 10, `комната ${this.room}`, font(16, 700, UI.textDim))
+      .setOrigin(0.5).setScrollFactor(0).setDepth(DEPTH.HUD + 11)));
+    if (!tour) ui.push(this._overButton(-140, 'Позвать', () => this.shareInvite(), 'wait-invite', -60));
+    ui.push(this._overButton(tour ? 0 : 140, 'В меню', () => this.toMenu('root'), 'wait-menu', -60));
+    if (long && !tour) {
+      ui.push(this._overButton(-140, 'С ботом', () => this.leaveRoomForBot(), 'wait-bot', 24));
+      ui.push(this._overButton(140, 'По переписке', () => this.toMenu('duels'), 'wait-duel', 24));
+    }
+    this.waitUi = ui;
+  }
+
+  /** Друга нет — бой с ботом вместо комнаты, без рейтинга. */
+  leaveRoomForBot() {
+    this.net?.forget();
+    this.net?.destroy();
+    this.net = null;
+    this.registry.set('net', null);
+    this.registry.set('seed', null);
+    this.registry.get('lobby')?.unhost?.();
+    forgetStartRoom();
+    const url = new URL(location.href);
+    url.searchParams.delete('room');
+    history.replaceState(null, '', url);
+    this.registry.set('match', fallbackMatch());
     this.scene.restart();
   }
 
@@ -1422,12 +1501,14 @@ export default class GameScene extends Phaser.Scene {
    * задыхающемся устройстве ход тянулся бы минутами.
    */
   _turnClock(realDt, physDt) {
+    if (this.waitingPeer) return 0;
     if (this.net || this.room) return realDt;
     return Math.min(realDt, Math.max(physDt, realDt / CFG.TURN_CLOCK_STRETCH));
   }
 
   /** Строка «чей ход» в сетевой партии. Переписывается только при смене. */
   _updateNetStatus() {
+    this._updateWaitPanel();
     if (!this.net?.connected || this.turn.state === STATE.OVER) return;
     if (this.net.isDuel) {
       const [text, color] = this._duelStatus();
@@ -1765,6 +1846,7 @@ export default class GameScene extends Phaser.Scene {
     if (this.turn.state !== STATE.AIM) return false;
     if (this.replaying) return false;         // идёт показ чужого хода
     if (this.net?.isDuel && !this.net.ready) return false;   // дуэль: история ещё восстанавливается
+    if (this.waitingPeer) return false;        // соперник ещё не пришёл
     if (this.landing()) return false;          // десант ещё в воздухе
     if (this.turn.activeWorm?.skipping) return false;  // замёрз — ход пропускает
     // В сетевой партии ходит только тот, чья команда сейчас на очереди
@@ -2951,6 +3033,8 @@ export default class GameScene extends Phaser.Scene {
     // Сессия дуэли живёт одну сцену: перезапуск собирает её заново
     if (this.net?.isDuel) { this.net.destroy(); this.net = null; }
     this.duelUi = null;
+    this.waitUi = null;
+    this.waitStage = null;
     this.clip?.destroy();
     this.clip = null;
     this.game.events.off('worms-resize', this.relayout, this);

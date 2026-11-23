@@ -104,10 +104,12 @@ check('после отказа нет шторма переподключени�
 const state = await page.evaluate(() => {
   const s = window.__WORMS__.scene.getScene('Game');
   return { canAct: s.canPlayerAct(), connected: !!s.net?.connected, status: s.netStatusText,
-    state: s.turn.state };
+    state: s.turn.state, waitExit: Boolean(s.waitUi?.length && s.overButtons?.['wait-menu']) };
 });
-check('игра играбельна при любом исходе подключения',
-  state.canAct || state.connected, JSON.stringify(state));
+// Связь есть, а соперника нет — партия на паузе, но не тупик: на экране
+// плашка ожидания с выходом (в меню, с ботом)
+check('игра не застревает при любом исходе подключения',
+  state.canAct || state.connected || state.waitExit, JSON.stringify(state));
 
 const chan = await page.evaluate(async () => {
   const { supabaseConfig, loadCreateClient } = await import('/src/net/supabase.js');
