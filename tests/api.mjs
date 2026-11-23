@@ -661,6 +661,19 @@ check('«твой ход» бот не пишет', !calls('sendMessage').some((
   const stranger = await call('POST', '/api/friends/challenge', { id: far.player.id, room: 'ZWFR14' }, host.token);
   check('«Вызвать»: повтор сразу — нет (игра позовёт карточкой), не другу — отказ',
     again.data?.sent === false && again.data.reason === 'limit' && stranger.status === 403, `${JSON.stringify(again.data)} ${stranger.status}`);
+
+  // Друг открыл вызов, когда позвавшего уже нет: бот пишет позвавшему «заходи»
+  const knock = await call('POST', '/api/room/knock', { room: 'ZWFR12' }, guest.token);
+  const kn = calls('sendMessage').at(-1)?.params;
+  check('друг ждёт в комнате вызова — позвавшему сообщение с кнопкой в ту же комнату',
+    knock.data?.sent === true && knock.data.owner === 'Хозяин' && kn?.chat_id === 6001
+      && kn.reply_markup.inline_keyboard[0][0].web_app.url.endsWith('?room=ZWFR12'), JSON.stringify(knock.data));
+  const knock2 = await call('POST', '/api/room/knock', { room: 'ZWFR12' }, guest.token);
+  const own = await call('POST', '/api/room/knock', { room: 'ZWFR12' }, host.token);
+  const unknown = await call('POST', '/api/room/knock', { room: 'ZWNOPE' }, guest.token);
+  check('«заходи»: не чаще раза в 10 минут, себе не пишем, чужую комнату не знаем',
+    knock2.data?.sent === false && knock2.data.reason === 'limit' && own.data?.reason === 'own'
+      && unknown.data?.reason === 'unknown', `${JSON.stringify(knock2.data)} ${JSON.stringify(own.data)} ${JSON.stringify(unknown.data)}`);
   clock = realNow;
   fsrv.close();
   fdb.close();

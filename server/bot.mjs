@@ -64,6 +64,12 @@ export function createBot({ db, api, players, tournaments, analytics = null, adm
     pay: db.prepare('select * from payment where charge_id = ?'),
     payRefunded: db.prepare('update payment set refunded_at = ? where charge_id = ?'),
     payTotal: db.prepare("select coalesce(sum(amount), 0) as s, count(*) as n from payment where refunded_at is null"),
+    ownerSet: db.prepare(`insert into room_owner (room, tg_id, name, created_at) values (?, ?, ?, ?)
+                          on conflict (room) do update set tg_id = excluded.tg_id, name = excluded.name,
+                          created_at = excluded.created_at, knocked_at = null`),
+    owner: db.prepare('select * from room_owner where room = ?'),
+    ownerKnocked: db.prepare('update room_owner set knocked_at = ? where room = ?'),
+    ownerPrune: db.prepare('delete from room_owner where created_at < ?'),
   };
   let username = '';
   const appUrl = (params = '') => (publicUrl ? `${publicUrl.replace(/\/+$/, '')}/${params}` : '');
@@ -102,9 +108,41 @@ export function createBot({ db, api, players, tournaments, analytics = null, adm
    */
   async function inviteDuel(to, from, room, { silent = false } = {}) {
     if (!to?.tg_id || !publicUrl || !/^ZW[A-Z0-9]{2,10}$/.test(room)) return null;
+    rememberRoom(room, from.tg_id, from.name);
     return send(to.tg_id, `⚔️ ${from.name} вызывает тебя на бой в Smiles!\n`
       + 'Башня, трос и рогатка — комната уже ждёт, жми кнопку.\n\n/mute — не писать о серии и друзьях',
     playButton('⚔️ Принять вызов', `?room=${room}`), { silent });
+  }
+
+  // ------------------------------------------- «друг зашёл — заходи»
+
+  const ROOM_TTL = 7 * 24 * 3600_000;   // сколько помним, чья комната
+  const KNOCK_GAP = 10 * 60_000;        // не чаще раза в 10 минут на комнату
+
+  /** Запомнить, кто позвал в комнату. */
+  function rememberRoom(room, tgId, name) {
+    if (!tgId || !/^ZW[A-Z0-9]{2,10}$/.test(room)) return;
+    const t = now();
+    q.ownerSet.run(room, Number(tgId), String(name ?? '').slice(0, 40) || 'Друг', t);
+    q.ownerPrune.run(t - ROOM_TTL);
+  }
+
+  /**
+   * Друг сидит в комнате вызова, а позвавшего нет: пишем позвавшему с
+   * кнопкой в ту же комнату. Раньше друг, пришедший через час, играл сам с
+   * собой и уходил — позвавший так и не узнавал, что вызов приняли.
+   * @returns {Promise<{sent: boolean, reason?: string, owner?: string}>}
+   */
+  async function knockRoom(me, room) {
+    const o = q.owner.get(room);
+    if (!o || now() - o.created_at > ROOM_TTL) return { sent: false, reason: 'unknown' };
+    if (String(o.tg_id) === String(me.tg_id ?? '')) return { sent: false, reason: 'own', owner: o.name };
+    if (o.knocked_at && now() - o.knocked_at < KNOCK_GAP) return { sent: false, reason: 'limit', owner: o.name };
+    q.ownerKnocked.run(now(), room);
+    const ok = publicUrl && await send(o.tg_id, `⚔️ ${me.name} принял твой вызов и ждёт в бою!\n`
+      + 'Жми кнопку — и сразу в бой.', playButton('⚔️ В бой', `?room=${room}`)).catch(() => null);
+    if (!ok) { q.ownerKnocked.run(null, room); return { sent: false, reason: 'failed', owner: o.name }; }
+    return { sent: true, owner: o.name };
   }
 
   async function notifyAdmins(text) {
@@ -499,6 +537,7 @@ export function createBot({ db, api, players, tournaments, analytics = null, adm
     const duel = startLink(room);
     const ref = startLink(`ref_${iq.from?.id}`);
     if (!duel) return api.call('answerInlineQuery', { inline_query_id: iq.id, results: [], cache_time: 0 });
+    rememberRoom(room, iq.from?.id, name);
     const t = en ? {
       duelTitle: '⚔️ Challenge to a duel', duelDesc: 'A tower duel — tap to fight',
       duelText: `⚔️ ${name} challenges you to a duel in Smiles!
@@ -649,6 +688,7 @@ Join via this link and you both get a skin box 🎁`,
    */
   async function prepareChallenge(player, room, link) {
     if (!player?.tg_id) return null;
+    rememberRoom(room, player.tg_id, player.name);
     const res = await api.call('savePreparedInlineMessage', {
       user_id: Number(player.tg_id),
       result: {
@@ -670,7 +710,7 @@ Join via this link and you both get a skin box 🎁`,
 
   return {
     handleUpdate, setup, notify, notifyAdmins, refund, donateInvoice, tourInvoice, shopInvoice, remind,
-    prepareChallenge, inviteDuel,
+    prepareChallenge, inviteDuel, knockRoom,
     get username() { return username; },
   };
 }

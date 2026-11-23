@@ -341,6 +341,13 @@ export function createApp({
         if (r.error) throw new HttpError(403, r.error);
         return r;
       }
+      case 'POST /api/room/knock': {
+        const me = auth(req);
+        if (!limits.duel.hit(me.id)) throw new HttpError(429, 'слишком часто');
+        const code = String((await readJson(req)).room ?? '').toUpperCase();
+        if (!/^ZW[A-Z0-9]{2,10}$/.test(code)) throw new HttpError(400, 'не та комната');
+        return bot.knockRoom(me, code);
+      }
       case 'GET /api/duels': return duels.list(auth(req).id);
       case 'POST /api/duels':
       case 'POST /api/duels/join': {

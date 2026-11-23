@@ -46,7 +46,7 @@ import { markDone, MISSION_BY_ID, loadProgress } from '../campaign/missions.js';
 import { ASCENT_BY_ID, ascentStarsFor, ascentStarTurns } from '../campaign/ascent.js';
 import { checkObjective, snapshot, objectiveText } from '../campaign/objectives.js';
 import { player, eloDelta, recordResult } from '../platform/player.js';
-import { reportResult, serverAvailable, track, trackStep, submitDailyTower, createDuel } from '../net/server.js';
+import { reportResult, serverAvailable, track, trackStep, submitDailyTower, createDuel, knockRoom } from '../net/server.js';
 import { leagueOf, nextLeague, toNextLeague } from '../platform/league.js';
 import { OffscreenMarkers } from '../ui/OffscreenMarkers.js';
 import { SKIN_BY_ID, rivalSkin } from '../core/skins.js';
@@ -784,6 +784,8 @@ export default class GameScene extends Phaser.Scene {
     // обе команды, и друг, открывший ссылку через несколько часов, играл
     // сам с собой. Теперь — пауза и плашка ожидания (_updateWaitPanel)
     this._waitSince = Date.now();
+    this._knocked = false;
+    this.knock = null;
 
     // Сессия одна на всю вкладку: рестарт сцены её не рвёт
     this.net = this.registry.get('net');
@@ -876,6 +878,15 @@ export default class GameScene extends Phaser.Scene {
     }
     const sec = (Date.now() - this._waitSince) / 1000;
     if (sec < 1.5) return;
+    // Позвавшего нет — пусть бот напишет ему «заходи» (один раз за заход)
+    if (sec >= 6 && !this._knocked && /^ZW/.test(this.room)) {
+      this._knocked = true;
+      knockRoom(this.room).then((r) => {
+        if (!r || !this.scene.isActive()) return;
+        this.knock = r;
+        this.waitStage = null;   // перерисовать плашку с новой строкой
+      });
+    }
     const stage = sec >= GameScene.WAIT_HINT ? 'long' : 'short';
     if (this.waitUi && this.waitStage === stage) return;
     for (const o of this.waitUi ?? []) o.destroy();
@@ -887,10 +898,13 @@ export default class GameScene extends Phaser.Scene {
       .setOrigin(0, 0).setScrollFactor(0).setDepth(DEPTH.HUD + 10).setInteractive()));
     const long = stage === 'long';
     const title = long ? 'Соперника пока нет' : 'Ждём соперника…';
-    const sub = long
-      ? (tour ? 'Он ещё не открыл бой. Можно подождать здесь или вернуться позже'
-        : 'Похоже, его сейчас нет в игре. Позови ещё раз — или сыграй иначе')
-      : 'Бой начнётся, как только он зайдёт';
+    const knocked = this.knock?.sent || this.knock?.reason === 'limit';
+    const sub = knocked
+      ? `${this.knock.owner} получил сообщение в Telegram — как зайдёт, бой начнётся`
+      : long
+        ? (tour ? 'Он ещё не открыл бой. Можно подождать здесь или вернуться позже'
+          : 'Похоже, его сейчас нет в игре. Позови ещё раз — или сыграй иначе')
+        : 'Бой начнётся, как только он зайдёт';
     ui.push(this.rig.ui(this.add.text(cx, cy - 96, title, font(40, 800, '#ffd166'))
       .setOrigin(0.5).setScrollFactor(0).setDepth(DEPTH.HUD + 11)));
     ui.push(this.rig.ui(this.add.text(cx, cy - 46, sub, font(18, 700, UI.textDim))
