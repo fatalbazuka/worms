@@ -239,7 +239,7 @@ const shop = await A.evaluate(async () => {
 check('магазин за монеты: без звёзд, скин покупается монетами по цене редкости и сразу надет',
   !shop.starBtn && shop.boxBtn && shop.owned && shop.worn && shop.paid === shop.price, JSON.stringify(shop));
 
-// --- вызов друга с главного экрана: карточка с кнопкой в комнату башни ---
+// --- вызов друга с главного экрана: дуэль-вызов, карточка с кнопкой в неё ---
 await A.evaluate(() => {
   globalThis.WORMS_TG = { bot: 'worms_test_bot', app: 'game' };
   window.__WORMS__.scene.getScene('Menu').showRoot();
@@ -249,9 +249,16 @@ await A.evaluate(() => window.__WORMS__.scene.getScene('Menu').challengeFriend()
 const shared = await A.waitForFunction(() => globalThis.__shared?.length && globalThis.__shared, null, { timeout: 8000 })
   .then((h) => h.jsonValue()).catch(() => null);
 const prep = tgCalls.filter((c) => c.method === 'savePreparedInlineMessage').at(-1)?.params;
-check('«вызвать друга»: комната башни, карточка с кнопкой ушла в окно «поделиться»',
-  Boolean(shared?.length) && /startapp=ZW/.test(prep?.result?.reply_markup?.inline_keyboard?.[0]?.[0]?.url ?? ''),
-  JSON.stringify({ shared, url: prep?.result?.reply_markup?.inline_keyboard?.[0]?.[0]?.url }));
+const invite = db.prepare("select * from duel where status = 'open' order by id desc").get();
+check('«вызвать друга»: дуэль-вызов (первым ходит принявший), карточка с кнопкой ушла в окно «поделиться»',
+  Boolean(shared?.length) && invite && invite.deadline === null
+    && (prep?.result?.reply_markup?.inline_keyboard?.[0]?.[0]?.url ?? '').endsWith(`startapp=duel_${invite.code}`),
+  JSON.stringify({ shared, url: prep?.result?.reply_markup?.inline_keyboard?.[0]?.[0]?.url, invite: invite?.code }));
+// Тот же вызов вторым нажатием — та же дуэль, а не новая
+await A.evaluate(() => window.__WORMS__.scene.getScene('Menu').challengeFriend());
+await A.waitForTimeout(1500);
+check('«вызвать друга» ещё раз — тот же незанятый вызов',
+  db.prepare("select count(*) as n from duel where status = 'open'").get().n === 1);
 
 // --- башня дня: итог попытки уходит в таблицу, экран показывает место ---
 const dailyBoard = await A.evaluate(async () => {

@@ -231,6 +231,12 @@ export async function prepareChallenge(room, link) {
   try { return (await call('POST', '/challenge', { room, link })).id ?? null; } catch { return null; }
 }
 
+/** То же для дуэли-вызова по переписке: карточка с кнопкой на startapp=duel_КОД. */
+export async function prepareDuelChallenge(code, link) {
+  if (!token) return null;
+  try { return (await call('POST', '/challenge', { duel: code, link })).id ?? null; } catch { return null; }
+}
+
 export async function buyShopItem(item) {
   const r = await call('POST', '/shop/buy', { item });
   return r.invoice;

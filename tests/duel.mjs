@@ -158,7 +158,7 @@ await pages[0].waitForFunction(() => JSON.parse(localStorage.getItem('worms.play
   await fetch(`${base}/api/telegram`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ initData }) });
 }
 
-// --- Аня вызывает Борю «по переписке» из топа друзей и ходит первой ---
+// --- Аня вызывает Борю из топа друзей: позвала и ушла, первым ходит Боря ---
 const A = pages[0];
 await A.waitForFunction(() => window.__WORMS__?.scene.isActive('Menu'), null, { timeout: 30000 });
 await A.evaluate(() => {
@@ -166,32 +166,43 @@ await A.evaluate(() => {
   m.topFrom = 'tab';
   m.showTop('rating', 'friends');
 });
-await A.waitForFunction(() => Boolean(window.__WORMS__.scene.getScene('Menu').buttonHandlers?.['mail-tg812']), null, { timeout: 15000 });
-await A.evaluate(() => window.__WORMS__.scene.getScene('Menu').buttonHandlers['mail-tg812']());
-await waitPhase(A, ['play']);
-const duelId = await A.evaluate(() => window.__WORMS__.scene.getScene('Game').net.duel.id);
-check('«По переписке» у друга: дуэль создана, первый ход — сразу', Number.isInteger(duelId), String(duelId));
-await playTurn(A, 1);
-const pinged = tgCalls.filter((c) => c.method === 'sendMessage' && c.params.chat_id === 812);
-check('сопернику бот пишет «твой ход» с кнопкой в дуэль', pinged.length === 1
-  && /Твой ход против Аня/.test(pinged[0].params.text)
+await A.waitForFunction(() => Boolean(window.__WORMS__.scene.getScene('Menu').buttonHandlers?.['duel-tg812']), null, { timeout: 15000 });
+await A.evaluate(() => window.__WORMS__.scene.getScene('Menu').buttonHandlers['duel-tg812']());
+await A.waitForFunction(() => window.__WORMS__.scene.getScene('Menu').section === window.__WORMS__.scene.getScene('Menu').showDuels
+  && /ходит первым/.test(window.__WORMS__.scene.getScene('Menu').duelNoteText?.text ?? ''), null, { timeout: 15000 });
+const duelId = db.prepare("select id from duel where p1 = 'tg812' and p2 = 'tg811' order by id desc").get()?.id;
+check('«Вызвать» у друга: дуэль создана, Боря ходит первым, Аня никого не ждёт (список дуэлей)', Number.isInteger(duelId), String(duelId));
+const called = tgCalls.filter((c) => c.method === 'sendMessage' && c.params.chat_id === 812 && /дуэл/.test(c.params.text));
+check('Боре бот пишет «Аня вызывает на дуэль — твой ход первый» с кнопкой в дуэль', called.length === 1
+  && /Аня вызывает тебя на дуэль/.test(called[0].params.text)
+  && called[0].params.reply_markup.inline_keyboard[0][0].web_app.url.endsWith(`?duel=${duelId}`), called[0]?.params.text);
+await A.close();
+pages[0] = null;
+
+// --- Боря открыл по кнопке бота и сходил; Ане бот пишет «твой ход» ---
+pages[1] = await open(1, `?duel=${duelId}`);
+await waitPhase(pages[1], ['play']);
+await playTurn(pages[1], 1);
+const pinged = tgCalls.filter((c) => c.method === 'sendMessage' && c.params.chat_id === 811 && /ход/.test(c.params.text));
+check('Ане бот пишет «твой ход против Боря» с кнопкой в дуэль', pinged.length === 1
+  && /Твой ход против Боря/.test(pinged[0].params.text)
   && pinged[0].params.reply_markup.inline_keyboard[0][0].web_app.url.endsWith(`?duel=${duelId}`), pinged[0]?.params.text);
-await A.waitForTimeout(500);
+await pages[1].waitForTimeout(500);
 check('ход ушёл — плашка «Ход отправлен», ходить больше нельзя',
-  await A.evaluate(() => {
+  await pages[1].evaluate(() => {
     const s = window.__WORMS__.scene.getScene('Game');
     return s.net.phase === 'sent' && !s.canPlayerAct() && Boolean(s.duelUi?.length);
   }));
-await A.close();
-pages[0] = null;
+await pages[1].close();
+pages[1] = null;
 
 // --- по очереди: открыл по кнопке бота → повтор хода соперника → свой ход ---
 let turns = 1;
 const replayChecks = [];
 for (let k = 2; k <= 7; k++) {
-  const i = (k - 1) % 2;            // чётные — Боря, нечётные — Аня
+  const i = k % 2 === 0 ? 0 : 1;    // чётные — Аня, нечётные — Боря (он ходил первым)
   if (k === 5) {
-    // Аня не успела: срок хода вышел — ход пропущен, очередь у Бори
+    // Боря не успел: срок хода вышел — ход пропущен, очередь у Ани
     db.prepare('update duel set deadline = ? where id = ?').run(Date.now() - 1000, duelId);
     const t = await app.duels.tick();
     check('срок хода вышел — ход пропущен', t.skipped === 1, JSON.stringify(t));
@@ -226,7 +237,7 @@ check('каждый ход, восстановленный другим брау
 {
   const st = await app.duels.byId(duelId);
   if (st.status === 'active') {
-    const moverIdx = st.turn % 2 === 1 ? 0 : 1;
+    const moverIdx = st.turn % 2 === 1 ? 1 : 0;   // p1 — Боря, страница 1
     const watcher = pages[1 - moverIdx];
     const mover = pages[moverIdx];
     // Ходящий: открыл дуэль по кнопке бота

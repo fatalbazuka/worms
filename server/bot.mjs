@@ -57,7 +57,7 @@ export function webhookSecret(token, explicit = '') {
 }
 
 export function createBot({ db, api, players, tournaments, analytics = null, admin: adminPanel = null, adminIds = new Set(), publicUrl = '',
-  tz = 'Europe/Moscow', now = () => Date.now(), log = console, appName = '', promos = null }) {
+  tz = 'Europe/Moscow', now = () => Date.now(), log = console, appName = '', promos = null, duels = () => null }) {
   const q = {
     payAdd: db.prepare(`insert or ignore into payment (charge_id, player_id, tg_id, amount, purpose, ref, created_at)
                         values (?, ?, ?, ?, ?, ?, ?)`),
@@ -526,21 +526,41 @@ export function createBot({ db, api, players, tournaments, analytics = null, adm
   }
 
   /**
-   * @бот в любом чате: карточка «вызов на дуэль». Кнопка ведёт в одну и ту
-   * же комнату башни — кто нажал первым, тот хозяин, второй садится к нему.
+   * Дуэль-вызов по переписке для карточки из @бота: позвал и ушёл, первым
+   * ходит принявший, о ходе пишет бот. Незанятый вызов у игрока один —
+   * инлайн-запрос летит на каждую букву, плодить дуэли нельзя. Не вышло
+   * (дуэлей уже пять) — null, и карточка зовёт в живую комнату, как раньше.
+   */
+  function inlineDuel(from) {
+    const ds = duels();
+    if (!ds || !from?.id) return null;
+    const me = players.byTg(from.id) ?? players.upsertTg(from);
+    if (!me || me.banned_at) return null;
+    const r = ds.create(me, { link: true, theyFirst: true });
+    return r.duel?.code ?? null;
+  }
+
+  /**
+   * @бот в любом чате: карточка «вызов на дуэль» — дуэль по переписке, где
+   * первым ходит принявший (inlineDuel). Если дуэль не завести — кнопка
+   * ведёт в комнату башни: кто нажал первым, тот хозяин.
    * Вторая карточка — просто «позвать в игру» по рефералке.
    */
   async function onInline(iq) {
     const name = String(iq.from?.first_name ?? 'Друг').slice(0, 40);
     const en = /^en/i.test(String(iq.from?.language_code ?? '')) && !/^ru|^uk|^be|^kk/i.test(String(iq.from?.language_code ?? ''));
-    const room = towerRoom();
-    const duel = startLink(room);
+    let code = null;
+    try { code = startLink('x') ? inlineDuel(iq.from) : null; } catch (e) { log.warn?.('[bot] дуэль для карточки', e.message); }
+    const room = code ?? towerRoom();
+    const duel = startLink(code ? `duel_${code}` : room);
     const ref = startLink(`ref_${iq.from?.id}`);
     if (!duel) return api.call('answerInlineQuery', { inline_query_id: iq.id, results: [], cache_time: 0 });
-    rememberRoom(room, iq.from?.id, name);
+    if (!code) rememberRoom(room, iq.from?.id, name);
     const t = en ? {
-      duelTitle: '⚔️ Challenge to a duel', duelDesc: 'A tower duel — tap to fight',
-      duelText: `⚔️ ${name} challenges you to a duel in Smiles!
+      duelTitle: '⚔️ Challenge to a duel', duelDesc: code ? 'Turn-based: they move first, you answer later' : 'A tower duel — tap to fight',
+      duelText: code ? `⚔️ ${name} challenges you to a duel in Smiles!
+Take turns whenever it suits you — your move first. The bot will ping when it's your turn again.`
+        : `⚔️ ${name} challenges you to a duel in Smiles!
 Tower, grappling hook, slingshot and smileys. Tap the button — you both land in the same battle.`,
       duelBtn: '⚔️ Accept the challenge',
       inviteTitle: '🎮 Invite to Smiles', inviteDesc: 'You both get a skin box',
@@ -548,8 +568,10 @@ Tower, grappling hook, slingshot and smileys. Tap the button — you both land i
 Join via this link and you both get a skin box 🎁`,
       inviteBtn: '🎮 Play',
     } : {
-      duelTitle: '⚔️ Вызвать на дуэль', duelDesc: 'Бой на башне — жми и в бой',
-      duelText: `⚔️ ${name} вызывает на дуэль в Smiles!
+      duelTitle: '⚔️ Вызвать на дуэль', duelDesc: code ? 'По переписке: он ходит первым, ты — когда удобно' : 'Бой на башне — жми и в бой',
+      duelText: code ? `⚔️ ${name} вызывает на дуэль в Smiles!
+Ходите по очереди, когда удобно, — твой ход первый. Бот напишет, когда снова твой ход.`
+        : `⚔️ ${name} вызывает на дуэль в Smiles!
 Башня, трос, рогатка и смайлики. Жми кнопку — окажетесь в одном бою.`,
       duelBtn: '⚔️ Принять вызов',
       inviteTitle: '🎮 Позвать в Smiles', inviteDesc: 'Обоим — коробка со скином',
@@ -563,7 +585,7 @@ Join via this link and you both get a skin box 🎁`,
       is_personal: true,
       results: [
         {
-          type: 'article', id: `duel-${room}`, title: t.duelTitle, description: t.duelDesc,
+          type: 'article', id: `duel-${room}`.slice(0, 64), title: t.duelTitle, description: t.duelDesc,
           input_message_content: { message_text: t.duelText },
           reply_markup: { inline_keyboard: [[{ text: t.duelBtn, url: duel }]] },
         },
@@ -686,19 +708,22 @@ Join via this link and you both get a skin box 🎁`,
    * Кнопка — ссылка в мини-приложение сразу в комнату вызвавшего.
    * @returns {Promise<string|null>} id подготовленного сообщения
    */
-  async function prepareChallenge(player, room, link) {
+  async function prepareChallenge(player, room, link, { duel = false } = {}) {
     if (!player?.tg_id) return null;
-    rememberRoom(room, player.tg_id, player.name);
+    if (!duel) rememberRoom(room, player.tg_id, player.name);
     const res = await api.call('savePreparedInlineMessage', {
       user_id: Number(player.tg_id),
       result: {
         type: 'article',
-        id: `ch-${room}`.slice(0, 64),
+        id: `${duel ? 'dl' : 'ch'}-${room}`.slice(0, 64),
         title: 'Вызов на бой ⚔️',
-        description: `${player.name} зовёт на башню`,
+        description: duel ? `${player.name} зовёт на дуэль по переписке` : `${player.name} зовёт на башню`,
         input_message_content: {
-          message_text: `⚔️ ${player.name} вызывает тебя на бой в Smiles!\n`
-            + 'Башня, тросы, рогатка и смайлики. Жми кнопку — и сразу в бой.',
+          message_text: duel
+            ? `⚔️ ${player.name} вызывает тебя на дуэль в Smiles!\n`
+              + 'Ходите по очереди, когда удобно, — твой ход первый. Бот напишет, когда ответят.'
+            : `⚔️ ${player.name} вызывает тебя на бой в Smiles!\n`
+              + 'Башня, тросы, рогатка и смайлики. Жми кнопку — и сразу в бой.',
         },
         reply_markup: { inline_keyboard: [[{ text: '⚔️ Принять вызов', url: link }]] },
       },
