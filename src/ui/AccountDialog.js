@@ -63,7 +63,7 @@ function achButton(onAch) {
  * Открыть кабинет. onTop — таблица лидеров, onTours — турниры, onAch —
  * витрина достижений (их меню показывает само).
  */
-export function openAccountDialog({ onTop = null, onTours = null, onAch = null } = {}) {
+export function openAccountDialog({ onTop = null, onTours = null, onAch = null, settings = null } = {}) {
   const ov = openOverlay({ closed: () => { current = null; } });
   current = ov;
   const { box } = ov;
@@ -72,8 +72,9 @@ export function openAccountDialog({ onTop = null, onTours = null, onAch = null }
 
   const render = () => {
     box.replaceChildren(closeButton());
-    if (!loggedIn()) { guestView(box, render, onAch); return; }
+    if (!loggedIn()) { guestView(box, render, onAch); box.append(settingsRow(settings)); return; }
     profileView(box, { onTop, onTours, onAch, history });
+    box.append(settingsRow(settings));
   };
   render();
   if (loggedIn()) {
@@ -81,6 +82,22 @@ export function openAccountDialog({ onTop = null, onTours = null, onAch = null }
     fetchHistory().then((items) => { history = items; if (ov.isOpen()) render(); })
       .catch(() => { history = []; if (ov.isOpen()) render(); });
   }
+}
+
+/**
+ * Настройки — прицел, язык, управление. Раньше висели плашками на главном
+ * экране и мешали «Играть».
+ */
+function settingsRow(settings) {
+  const row = el('div', { class: 'acc-row' });
+  if (!settings) return row;
+  const wrap = el('div', {}, el('div', { class: 'ov-sec' }, 'Настройки'), row);
+  for (const key of ['aim', 'lang', 'ui']) {
+    const s = settings[key];
+    if (!s) continue;
+    row.append(el('button', { class: 'acc-btn', type: 'button', onclick: () => { closeAccountDialog(); s.go(); } }, s.label));
+  }
+  return wrap;
 }
 
 function guestView(box, render, onAch) {

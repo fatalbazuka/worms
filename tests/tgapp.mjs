@@ -111,7 +111,7 @@ async function tgPage(i, user, { gateOnly = false } = {}) {
 }
 
 const menuReady = (p) => p.waitForFunction(() => window.__WORMS__?.scene.isActive('Menu')
-  && window.__WORMS__.scene.getScene('Menu').buttons.tournaments, null, { timeout: 30000 });
+  && window.__WORMS__.scene.getScene('Menu').buttons.top, null, { timeout: 30000 });
 
 // --- обычный браузер при TELEGRAM_ONLY: заглушка со ссылкой на бота ---
 {
@@ -138,8 +138,8 @@ const me = await A.evaluate(() => JSON.parse(localStorage.getItem('worms.player.
 check('вход сам по подписи Telegram: имя, аватар, админ', me.id === `tg${ADMIN}` && me.name === 'Админ'
   && me.photo === 'https://example.test/a.jpg' && me.admin === true, `${me.id} ${me.name}`);
 const rootKeys = await A.evaluate(() => Object.keys(window.__WORMS__.scene.getScene('Menu').buttons));
-check('в меню турниры и кабинет, переключателя управления нет',
-  rootKeys.includes('tournaments') && rootKeys.includes('account') && !rootKeys.includes('ui-mode'), rootKeys.join(','));
+check('в меню «С друзьями» и кабинет, переключателя управления нет',
+  rootKeys.includes('social') && rootKeys.includes('account') && !rootKeys.includes('ui-mode'), rootKeys.join(','));
 
 await A.evaluate(() => window.__WORMS__.scene.getScene('Menu').openAccount());
 await A.waitForSelector('.acc-box .acc-name');

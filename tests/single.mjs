@@ -72,6 +72,12 @@ const view = async () => page.evaluate(() => {
 });
 
 /** Клик по кнопке меню — координаты берём у самой сцены. */
+/** Раздел меню, у которого больше нет кнопки в списке (Классика, Свои правила). */
+async function openSection(name) {
+  await page.evaluate((n) => window.__WORMS__.scene.getScene('Menu')[n](), name);
+  await page.waitForTimeout(300);
+}
+
 async function menuTap(key) {
   const b = await page.evaluate((k) => window.__WORMS__.scene.getScene('Menu').buttons[k] ?? null, key);
   if (!b) throw new Error(`нет кнопки меню: ${key}`);
@@ -118,17 +124,20 @@ await menuReady();
 await page.evaluate(() => { window.__WORMS__.scene.getScene('Menu').streakShown = true; });
 const rootButtons = await page.evaluate(
   () => Object.keys(window.__WORMS__.scene.getScene('Menu').buttons));
-check('на главном экране «Играть», режимы и вкладки',
-  ['play', 'modes', 'tournaments', 'top', 'account'].every((k) => rootButtons.includes(k)),
+check('на главном экране «Играть», соперник, режимы, «С друзьями» и вкладки без турниров',
+  ['play', 'tower', 'modes', 'social', 'top', 'account'].every((k) => rootButtons.includes(k))
+    && !rootButtons.includes('tournaments') && !rootButtons.includes('aim-mode'),
   rootButtons.join(', '));
 await menuTap('modes');
 const modeButtons = await page.evaluate(
   () => Object.keys(window.__WORMS__.scene.getScene('Menu').buttons));
-check('в режимах башня и три прежних', ['tower', 'quick', 'campaign', 'online'].every((k) => modeButtons.includes(k)),
+check('в режимах четыре: Подъём, Башня дня, С друзьями, Испытания',
+  ['ascent', 'daily', 'social', 'challenges'].every((k) => modeButtons.includes(k))
+    && !modeButtons.includes('campaign') && !modeButtons.includes('quick'),
   modeButtons.join(', '));
 
-// --- кампания: миссия «Пристрелка» ---
-await menuTap('campaign');
+// --- кампания: миссия «Пристрелка» (из списка убрана, экран остался) ---
+await openSection('showCampaign');
 const missionButtons = await page.evaluate(
   () => window.__WORMS__.scene.getScene('Menu').buttons);
 check('первая миссия открыта, остальные заперты',
@@ -263,8 +272,7 @@ await menuReady();
 check('после миссии возвращаемся в меню', true);
 
 // --- все миссии собираются в играбельные карты ---
-await menuTap('modes');
-await menuTap('campaign');
+await openSection('showCampaign');
 const unlocked = await page.evaluate(
   () => window.__WORMS__.scene.getScene('Menu').buttons.storm?.enabled);
 check('следующая миссия открылась после победы', unlocked === true);
@@ -312,13 +320,11 @@ for (const { id, sizes: expected } of CAMPAIGN) {
   }
   await page.evaluate(() => window.__WORMS__.scene.getScene('Game').toMenu());
   await menuReady();
-  await menuTap('modes');
-  await menuTap('campaign');
+  await openSection('showCampaign');
 }
 
 // --- быстрая игра против бота ---
-await menuTap('back');     // из кампании — на экран режимов
-await menuTap('quick');
+await openSection('showQuick');
 await menuTap('sniper');
 await gameReady();
 await page.waitForTimeout(1000);
@@ -330,7 +336,7 @@ check('быстрая игра против бота собирается',
 // --- быстрый бой онлайн: соперника нет — бой с ботом на башне ---
 await page.evaluate(() => window.__WORMS__.scene.getScene('Game').toMenu());
 await menuReady();
-await menuTap('modes');
+await menuTap('social');
 await menuTap('online');
 await menuTap('quickmatch');
 const searching = await page.evaluate(() => {
@@ -720,7 +726,10 @@ check('Великан повален — победа, бой пройден, е
 // --- выбор прицела в меню: прежние кнопки вместо рогатки ---
 await page.goto(`${BASE}${BASE.includes('?') ? '&' : '?'}aim=buttons`, { waitUntil: 'domcontentloaded' });
 await menuReady();
-const pillLabel = await page.evaluate(() => Boolean(window.__WORMS__.scene.getScene('Menu').buttons['aim-mode']));
+// Выбор прицела — экран «Прицел» (из профиля): три схемы, отмечена текущая
+await openSection('showAim');
+const pillLabel = await page.evaluate(() => Boolean(window.__WORMS__.scene.getScene('Menu').buttons['aim-buttons']));
+await openSection('showRoot');
 await menuTap('play');
 await gameReady();
 await page.waitForFunction(() => window.__WORMS__.scene.getScene('Game').canPlayerAct(), null, { timeout: 40000 });

@@ -494,8 +494,8 @@ export default class MenuScene extends Phaser.Scene {
       ['battle', 'Бой', 'battle', () => this.showRoot()],
       ['tasks', 'Задания', 'tasks', () => this.showTasks()],
       ['shop', 'Магазин', 'shop', () => this.showShop()],
-      ['tournaments', 'Турниры', 'trophy', () => this.openTournaments()],
-      ['top', 'Топ', 'podium', () => { this.topFrom = 'tab'; this.showTop(); }],
+      // Топ и друзья — одна вкладка: сначала свои, переключатель «все» там же
+      ['top', 'Друзья', 'podium', () => { this.topFrom = 'tab'; this.showTop('rating', 'friends'); }],
       ['account', 'Профиль', 'profile', () => this.openAccount()],
     ];
     const span = Math.min(W, 960);
@@ -512,7 +512,8 @@ export default class MenuScene extends Phaser.Scene {
         font(this.portrait && W < 640 ? 16 : 18, 800, on ? UI.accent : UI.textDim)).setOrigin(0.5);
       // Есть что забрать — красная точка на «Заданиях»
       // Красные точки — после первой победы: до неё новичку нужна одна «Играть»
-      if (!on && !isNewbie() && ((key === 'tasks' && rewardWaiting()) || (key === 'shop' && skinState().boxes > 0))) {
+      if (!on && !isNewbie() && ((key === 'tasks' && rewardWaiting()) || (key === 'shop' && skinState().boxes > 0)
+        || (key === 'top' && (this.duelsTurn ?? 0) > 0))) {
         this.items.push(this.add.circle(x + size * 0.55, y0 + h * 0.36 - size * 0.45, 9, 0xff4d4d)
           .setStrokeStyle(3, 0x0b1018));
       }
@@ -583,28 +584,16 @@ export default class MenuScene extends Phaser.Scene {
     this._leagueBar(cx, top + 84, me.rating, Math.min(W - pad * 2, 760), 18);
     // Монеты — вход в магазин: плашка с «+», как в любой игре. На узком
     // экране ряд плашек слева её бы накрыл — тогда она строкой ниже
-    const coinY = W < 900 ? top + 222 : top + 156;
+    const coinY = W < 900 && canOfferHomeScreen() ? top + 222 : top + 156;
     this._coinShopLink(W - pad, coinY);
 
-    // Редкое — мелкими плашками под лигой: иконка на экран Домой (пока
-    // Telegram говорит, что её нет) и схема управления (вне Telegram)
+    // Настройки (прицел, язык, управление) — в профиле: на главном они
+    // мешали «Играть». Здесь осталась только иконка на экран Домой, пока
+    // Telegram говорит, что её нет
     let pillX = pad;
-    const pill = (key, label, w, onTap) => {
-      this._button(key, pillX + w / 2, top + 156, label, '', onTap, { w, h: 48, titleSize: 19 });
-      pillX += w + 10;
-    };
-    if (canOfferHomeScreen()) pill('home', '⌂ На экран Домой', 250, () => addToHomeScreen());
-    const desktop = isDesktop();
-    if (!desktop) {
-      // Три схемы прицела — выбор на отдельном экране с пояснениями
-      const aimName = { sling: 'рычаг', anywhere: 'где угодно', buttons: 'классика' }[aimScheme()];
-      pill('aim-mode', `Прицел: ${aimName}`, 230, () => this.showAim());
-    }
-    // Язык: по умолчанию — из Telegram, здесь можно сменить
-    pill('lang', LANG === 'en' ? 'RU' : 'EN', 74, () => setLang(LANG === 'en' ? 'ru' : 'en'));
-    if (!inTelegram()) {
-      pill('ui-mode', desktop ? 'Управление: ПК' : 'Управление: сенсор', 260,
-        () => { setUiMode(desktop ? 'touch' : 'desktop'); this.showRoot(); });
+    if (canOfferHomeScreen()) {
+      this._button('home', pillX + 125, top + 156, '⌂ На экран Домой', '', () => addToHomeScreen(), { w: 250, h: 48, titleSize: 19 });
+      pillX += 260;
     }
     // Уровень — вход в «Дорогу наград». До первого выстрела его нет: новичку
     // нужна одна «Играть», а опыт он увидит на экране итога обучения.
@@ -628,13 +617,24 @@ export default class MenuScene extends Phaser.Scene {
       () => this.start(tutorial ? tutorialMatch()
         : choice.level === 'rookie' && onboardStage() === 'rookie' ? rookieMatch() : towerMatch(choice.level)),
       { w: Math.min(W - 72, 560), h: playH, variant: 'primary', big: true });
-    // Под «Играть»: другие режимы и вызов друга — бок о бок
-    const subY = playY + playH / 2 + (portrait ? 48 : 36);
-    const subW = Math.min(300, (Math.min(W - 72, 560) - 16) / 2);
-    this._button('modes', cx - subW / 2 - 8, subY, 'другие режимы', '',
-      () => this.showModes(), { w: subW, h: portrait ? 56 : 48, titleSize: 22 });
-    this._button('challenge', cx + subW / 2 + 8, subY, 'вызвать друга', '',
-      () => this.challengeFriend(), { w: subW, h: portrait ? 56 : 48, titleSize: 22 });
+    // Под «Играть»: соперник, режимы и всё с людьми — три кнопки в ряд.
+    // Новичку — только «Играть»: выбирать ему ещё не из чего
+    if (!tutorial) {
+      const subY = playY + playH / 2 + (portrait ? 48 : 36);
+      const rowW = Math.min(W - 72, 560), gap = 10;
+      const subW = (rowW - gap * 2) / 3;
+      const sub = { w: subW, h: portrait ? 56 : 48, titleSize: 20 };
+      this._button('tower', cx - subW - gap, subY, 'Соперник', '', () => this.showTower(), sub);
+      this._button('modes', cx, subY, 'Режимы', '', () => this.showModes(), sub);
+      this._button('social', cx + subW + gap, subY, 'С друзьями', '', () => this.showSocial(), sub);
+      // Твой ход в дуэли — красный значок на «С друзьями»
+      const n = this.duelsTurn ?? 0;
+      if (n) {
+        this.items.push(this.add.circle(cx + subW * 1.5 + gap - 6, subY - sub.h / 2 + 4, 15, 0xff4d4d).setStrokeStyle(3, 0x0b1018));
+        this.items.push(this.add.text(cx + subW * 1.5 + gap - 6, subY - sub.h / 2 + 4, String(n), font(16, 900, '#ffffff')).setOrigin(0.5));
+      }
+      if (loggedIn()) this._refreshDuelBadge();
+    }
 
     // Партия оборвалась (Telegram перезапустился, погас экран), а мы
     // открылись без ссылки: предлагаем вернуться, пока соперник ждёт
@@ -652,20 +652,6 @@ export default class MenuScene extends Phaser.Scene {
       areaBottom = y - 44;
     }
 
-    // Дуэли по переписке — только с аккаунтом: они живут на сервере.
-    // Твой ход хоть в одной — красный значок с числом
-    if (loggedIn()) {
-      const y = areaBottom - 30;
-      const n = this.duelsTurn ?? 0;
-      this._button('duels', cx, y, 'Мои дуэли', n ? `по переписке · твой ход: ${n}` : 'по переписке · ходи, когда удобно',
-        () => this.showDuels(), { w: 360, h: 60 });
-      if (n) {
-        this.items.push(this.add.circle(cx + 172, y - 26, 17, 0xff4d4d).setStrokeStyle(3, 0x0b1018));
-        this.items.push(this.add.text(cx + 172, y - 26, String(n), font(18, 900, '#ffffff')).setOrigin(0.5));
-      }
-      areaBottom = y - 44;
-      this._refreshDuelBadge();
-    }
 
     // --- твой боец ---
     const areaTop = coinY + 40;
@@ -1184,25 +1170,8 @@ export default class MenuScene extends Phaser.Scene {
       : `Заходи каждый день: на ${STREAK_BOX_DAY}-й день подряд — коробка`,
       font(19, 700, UI.textDim)).setOrigin(0.5, 0).setAlign('center').setWordWrapWidth(wide ? W * 0.36 : cw));
 
-    // Коробка за монеты
-    y += 76;
-    const can = st.coins >= BOX_PRICE;
-    this._button('buy-box', cx, y, `Коробка со скином · ${BOX_PRICE}`, can ? 'купить за монеты' : `не хватает ${BOX_PRICE - st.coins}`,
-      () => this._buyBox(), { w: Math.min(cw, 460), h: 90, titleSize: 25, hintSize: 17, enabled: can });
-    if (this.textures.exists('shot_crate_weapon')) {
-      this.items.push(this.add.image(cx - Math.min(cw, 460) / 2 + 40, y, 'shot_crate_weapon')
-        .setScale(fitScale(this, 'shot_crate_weapon', 52)).setAlpha(can ? 1 : 0.5));
-    }
-
-    // Позвать друга: новичку и тебе — по коробке
-    this._inviteButton(cx, y + 106, Math.min(cw, 460));
-    // Куда тратить монеты, кроме коробок
-    this._button('cosmetics', cx, y + 212, 'Украшения', 'трос, след, надгробие · заморозка серии',
-      () => this.showCosmetics(), { w: Math.min(cw, 460), h: 90, titleSize: 25, hintSize: 17 });
-    // Достижения — длинные цели рядом с дневными
-    const ach = achState();
-    this._button('achievements', cx, y + 318, '🏅 Достижения', `открыто ${ach.got} из ${ach.total}`,
-      () => { this.achFrom = 'tasks'; this.showAchievements(); }, { w: Math.min(cw, 460), h: 90, titleSize: 25, hintSize: 17 });
+    // Только задания и серия: коробка и украшения — в магазине, достижения —
+    // в профиле, позвать друга — в «С друзьями»
     this._tabs('tasks');
   }
 
@@ -1245,7 +1214,7 @@ export default class MenuScene extends Phaser.Scene {
         this.showAim();
       }, { w, h, titleSize: 28, hintSize: 17, variant: on ? 'active' : 'normal' });
     });
-    this._back();
+    this._back(() => { this.showRoot(); this.openAccount(); });
     this._scrollable(212 + list.length * (h + 18) + 60);
   }
 
@@ -1421,7 +1390,9 @@ export default class MenuScene extends Phaser.Scene {
         if (buyStreakFreeze()) { haptic('win'); sfx.play('pickup'); this.showCosmetics(); toast('заморозка в запасе', '#8fe3ff'); return; }
         haptic('warn'); toast(full ? 'запас полон' : 'не хватает монет');
       }, { w: Math.min(W - 48, 620), h: 84, titleSize: 24, hintSize: 14, enabled: !full && d.coins >= FREEZE_PRICE });
-    this._back(() => (this.fromShop ? this.showShop() : this.showTasks()));
+    // Украшения — вкладка рядом со скинами: туда и обратно одной кнопкой
+    this._button('to-skins', 92, 80, 'Скины', '', () => this.showSkins(), { w: 150, h: 52, titleSize: 20 });
+    this._back(() => (this.fromShop ? this.showShop() : this.showRoot()));
   }
 
   /** Купить коробку и сразу открыть; назад — в раздел, откуда покупали. */
@@ -1461,6 +1432,7 @@ export default class MenuScene extends Phaser.Scene {
 
     // Промокод — в шапке: низ раздела на телефоне за краем экрана
     this._button('promo', W - 92, 80, '🎟 Код', '', () => this._askPromo(), { w: 150, h: 52, titleSize: 20 });
+    this._button('to-cosmetics', 102, 80, 'Украшения', '', () => this.showCosmetics(), { w: 170, h: 52, titleSize: 20 });
 
     // --- коробки ---
     const full = BOX_SKINS.every((s) => st.owned.includes(s.id));
@@ -1801,14 +1773,12 @@ export default class MenuScene extends Phaser.Scene {
     const modes = [
       ['ascent', 'Кампания «Подъём»', `${ASCENT.length} боёв, монстры и боссы · пройдено ${done} из ${ASCENT.length}`, () => this.showAscent()],
       ['daily', 'Башня дня', 'одна башня на всех · таблица дня', () => this.showDailyTower()],
-      ['tower', 'Башня', 'высокая арена и трос · выбрать соперника', () => this.showTower()],
+      ['social', 'С друзьями', 'онлайн на рейтинг · дуэли по переписке · турниры', () => this.showSocial()],
       ['challenges', 'Испытания', `задачи на три звезды · ★ ${stars} из ${CHALLENGES.length * 3}`, () => this.showChallenges()],
-      ['online', 'Онлайн', 'бой с человеком на башне · рейтинг', () => this.showOnline()],
-      ['duels', 'Дуэли по переписке', 'с другом, ход — когда удобно · 24 часа на ход', () => this.showDuels()],
-      ['campaign', 'Классика', 'старые миссии на широких картах', () => this.showCampaign()],
-      ['quick', 'Свои правила', 'обычная карта, бот или вдвоём', () => this.showQuick()],
     ];
-    // В портрете — столбиком, в ландшафте — в две колонки: восемь не влезают
+    // «Классика» и «Свои правила» убраны из списка: старые широкие карты
+    // дублировали Подъём. Экраны остались в коде (showCampaign, showQuick)
+    // В портрете — столбиком, в ландшафте — в две колонки
     const cols = this.portrait ? 1 : 2;
     const w = this.portrait ? Math.min(this.W - 64, 620) : Math.min(420, (this.W - 96) / 2);
     const h = this.portrait ? 92 : 72, step = this.portrait ? 104 : 84;
@@ -1820,6 +1790,42 @@ export default class MenuScene extends Phaser.Scene {
         { w, h, titleSize: 28, hintSize: 17, variant: i < 2 ? 'primary' : 'normal' });
     });
     this._back();
+  }
+
+  // ------------------------------------------------------------ с друзьями
+
+  /**
+   * Всё, где играют с людьми, в одном месте: онлайн на рейтинг, дуэли по
+   * переписке, турниры и вызов друга. Раньше это были три пункта режимов,
+   * кнопка «Мои дуэли» на главном и отдельная вкладка турниров.
+   */
+  showSocial() {
+    this.section = this.showSocial;
+    this._clear();
+    this._title('С друзьями', 'бой с людьми — вживую или ходом в день');
+    const cx = this.W / 2;
+    const w = Math.min(this.W - 64, 620), h = this.portrait ? 96 : 78, step = this.portrait ? 110 : 90;
+    const y0 = 196;
+    const n = this.duelsTurn ?? 0;
+    const rows = [
+      ['online', 'Бой онлайн', 'с человеком на башне · рейтинг', () => this.showOnline(), 'primary'],
+      ['duels', 'Дуэли по переписке', n ? `твой ход: ${n} · ход раз в сутки` : 'ходишь, когда удобно · 24 часа на ход', () => this.showDuels()],
+      ['tournaments', 'Турниры', 'сетка на выбывание · бот напишет, когда стартует', () => this.openTournaments()],
+      ['challenge', 'Вызвать друга', 'карточкой в любой чат · без рейтинга', () => this.challengeFriend()],
+    ];
+    rows.forEach(([key, title, hint, go, variant], i) => {
+      this._button(key, cx, y0 + i * step, title, hint, go, { w, h, titleSize: 28, hintSize: 17, variant: variant ?? 'normal' });
+    });
+    if (n) {
+      const y = y0 + step - h / 2 + 6;
+      this.items.push(this.add.circle(cx + w / 2 - 14, y, 17, 0xff4d4d).setStrokeStyle(3, 0x0b1018));
+      this.items.push(this.add.text(cx + w / 2 - 14, y, String(n), font(18, 900, '#ffffff')).setOrigin(0.5));
+    }
+    // Позвать друга по ссылке — обоим по коробке
+    this._inviteButton(cx, y0 + rows.length * step + 10, Math.min(w, 460));
+    if (loggedIn()) this._refreshDuelBadge();
+    this._back();
+    this._scrollable(y0 + rows.length * step + 80);
   }
 
   // ------------------------------------------------------------- башня дня
@@ -2131,7 +2137,7 @@ export default class MenuScene extends Phaser.Scene {
     // С другом по сети: комната башни, ссылка-приглашение, без рейтинга
     this._button('tower-friend', cx, y0 + step * 4, 'С другом по ссылке', 'каждый со своего телефона · без рейтинга',
       () => this.showRoom(randomRoom(true, true)), big);
-    this._back(() => this.showModes());
+    this._back();
   }
 
   // ------------------------------------------------------- быстрая игра
@@ -2314,7 +2320,7 @@ export default class MenuScene extends Phaser.Scene {
     this._button('top', this.W - 300, this.bottomY(46), '🏆 Топ', '',
       () => { this.topFrom = 'online'; this.showTop(); }, { w: 170, h: 50 });
 
-    this._back();
+    this._back(() => this.showSocial());
     this._ensureLobby();
     this._showTables(this.lobby?.tables() ?? []);
   }
@@ -2564,6 +2570,13 @@ export default class MenuScene extends Phaser.Scene {
       onTop: () => { this.topFrom = 'tab'; this.showTop(); },
       onTours: () => this.openTournaments(),
       onAch: () => { this.achFrom = 'account'; this.showAchievements(); },
+      // Настройки переехали с главного экрана
+      settings: {
+        aim: isDesktop() ? null : { label: `Прицел: ${{ sling: 'рычаг', anywhere: 'где угодно', buttons: 'классика' }[aimScheme()]}`, go: () => this.showAim() },
+        lang: { label: LANG === 'en' ? 'Язык: English' : 'Язык: русский', go: () => setLang(LANG === 'en' ? 'ru' : 'en') },
+        ui: inTelegram() ? null : { label: isDesktop() ? 'Управление: ПК' : 'Управление: сенсор',
+          go: () => { setUiMode(isDesktop() ? 'touch' : 'desktop'); this.showRoot(); } },
+      },
     });
   }
 
@@ -2889,7 +2902,7 @@ export default class MenuScene extends Phaser.Scene {
     fetchDuels().then((r) => {
       if (!r || r.myTurn === (this.duelsTurn ?? 0)) return;
       this.duelsTurn = r.myTurn;
-      if (this.section === this.showRoot) this.showRoot();
+      if (this.section === this.showRoot || this.section === this.showSocial) this.section.call(this);
     });
   }
 
@@ -2904,7 +2917,7 @@ export default class MenuScene extends Phaser.Scene {
     const cx = this.W / 2;
     const note = this.add.text(cx, 150, 'загружаю…', font(this.fs(14), 700, UI.textDim)).setOrigin(0.5, 0);
     this.items.push(note);
-    this._back();
+    this._back(() => this.showSocial());
     if (!loggedIn()) {
       note.setText('Дуэли по переписке живут на сервере — открой игру в Telegram.');
       return;

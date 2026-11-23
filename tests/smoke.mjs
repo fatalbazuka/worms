@@ -104,8 +104,9 @@ const menuTap = async (key) => {
 
 await menuReady();
 check('меню открылось первым', true);
-await menuTap('modes');
-await menuTap('quick');
+// «Свои правила» убраны из списка режимов — экран открываем напрямую
+await page.evaluate(() => window.__WORMS__.scene.getScene('Menu').showQuick());
+await page.waitForTimeout(300);
 await menuTap('hotseat');
 
 await ready();
