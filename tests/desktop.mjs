@@ -39,8 +39,15 @@ check('без сенсорного экрана выбран интерфейс 
 check('SDK Telegram вне Telegram не загружается',
   !requests.some((u) => u.includes('telegram-web-app.js')));
 const menuButtons = await page.evaluate(() => Object.keys(window.__WORMS__.scene.getScene('Menu').buttons));
-check('в меню есть переключатели управления и звука',
-  menuButtons.includes('ui-mode') && menuButtons.includes('sound'), menuButtons.join(', '));
+// Переключатель управления — в профиле, в разделе «Настройки»
+const settings = await page.evaluate(() => {
+  window.__WORMS__.scene.getScene('Menu').openAccount();
+  const t = [...document.querySelectorAll('.acc-btn')].map((b) => b.textContent);
+  document.querySelector('.ov-close')?.click();
+  return t;
+});
+check('звук на главном, переключатель управления — в настройках профиля',
+  menuButtons.includes('sound') && settings.some((t) => t.startsWith('Управление')), `${menuButtons.join(', ')} | ${settings.join(', ')}`);
 
 await page.evaluate(async () => {
   const m = await import('/src/core/match.js');

@@ -271,6 +271,19 @@ const MIGRATIONS = [
     primary key (duel_id, n)
   );
   `,
+  // 12: кто позвал в комнату вызова (карточка в чат, @бот, вызов друга).
+  // Друг открыл ссылку, когда позвавшего уже нет в игре, — бот пишет
+  // позвавшему «заходи» (server/bot.mjs knockRoom). Старые строки чистятся
+  `
+  create table if not exists room_owner (
+    room       text primary key,
+    tg_id      integer not null,
+    name       text not null,
+    created_at integer not null,
+    knocked_at integer
+  );
+  create index if not exists room_owner_created on room_owner (created_at);
+  `,
 ];
 
 export function openDb(path) {

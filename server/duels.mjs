@@ -76,6 +76,12 @@ export function createDuels({ db, players, friends, analytics, notify, now = () 
                         updated_at = ? where id = ?`),
     join: db.prepare(`update duel set p2 = ?, status = 'active', code = null, deadline = coalesce(deadline, ?),
                       updated_at = ? where id = ?`),
+    // Создатель ещё не ходил: принявший становится первым (p1), создатель —
+    // вторым. В UPDATE справа старые значения, поэтому p2 = p1 — создатель
+    joinFirst: db.prepare(`update duel set p1 = ?, p2 = p1, status = 'active', code = null, deadline = ?,
+                           updated_at = ? where id = ?`),
+    openInvite: db.prepare(`select * from duel where p1 = ? and p2 is null and status = 'open' and turn = 1
+                              and created_at > ? order by created_at desc limit 1`),
     seen1: db.prepare('update duel set seen1 = ? where id = ?'),
     seen2: db.prepare('update duel set seen2 = ? where id = ?'),
     reminded: db.prepare('update duel set reminded_turn = turn where id = ?'),
@@ -92,6 +98,7 @@ export function createDuels({ db, players, friends, analytics, notify, now = () 
   const otherOf = (d, id) => (d.p1 === id ? d.p2 : d.p1);
   const daytime = () => { const h = analytics.hourOf(); return h >= DAY_FROM && h < DAY_TO; };
   const activeCount = (id) => q.active.get({ p: id }).n;
+  const isInvite = (d) => d.status === 'open' && d.turn === 1 && d.deadline === null;
 
   function pub(id) {
     const r = id ? q.pub.get(id) : null;
@@ -114,11 +121,15 @@ export function createDuels({ db, players, friends, analytics, notify, now = () 
   function view(d, meId, { withTurns = false } = {}) {
     const team = d.p1 === meId ? 0 : 1;
     const mover = moverOf(d);
+    // Вызов «позвал и ушёл», который ещё никто не принял: ходить создателю
+    // не надо — первым пойдёт принявший
+    const invite = isInvite(d);
     const out = {
       id: d.id, seed: d.seed, status: d.status, turn: d.turn, deadline: d.deadline,
       winner: d.winner ? (d.winner === d.p1 ? 0 : 1) : null, reason: d.reason ?? null,
       me: team, p1: pub(d.p1), p2: pub(d.p2), opponent: pub(team === 0 ? d.p2 : d.p1),
-      myTurn: (d.status === 'active' || d.status === 'open') && mover === meId,
+      myTurn: !invite && (d.status === 'active' || d.status === 'open') && mover === meId,
+      ...(invite ? { invite: true } : {}),
       skips: [d.skips1, d.skips2],
       ...(d.code && d.p1 === meId ? { code: d.code } : {}),
       updatedAt: d.updated_at,
@@ -167,6 +178,10 @@ export function createDuels({ db, players, friends, analytics, notify, now = () 
     if (!to) return Promise.resolve(null);
     const foe = nameOf(otherOf(d, to));
     const why = skippedBy ? `\n${foe} не успел походить — его ход пропущен.` : '';
+    if (d.turn === 1 && !skippedBy) {
+      return ping(d, to, `⚔️ ${foe} вызывает тебя на дуэль в Smiles!\n`
+        + 'Ходите по очереди, когда удобно, — твой ход первый. На ход 24 часа.', 'turn', '⚔️ Принять и ходить');
+    }
     return ping(d, to, `⚔️ Твой ход против ${foe}!${why}\nДуэль по переписке: на ход 24 часа.`, 'turn');
   }
 
@@ -192,15 +207,25 @@ export function createDuels({ db, players, friends, analytics, notify, now = () 
   }
 
   /**
-   * Новая дуэль: с другом (opponent) или ссылкой (link). Создатель ходит
-   * первым и обычно тут же делает первый ход.
+   * Новая дуэль: с другом (opponent) или ссылкой (link). Обычно создатель
+   * ходит первым и тут же делает первый ход.
+   *
+   * theyFirst — вызов «позвал и ушёл»: первым ходит тот, кого позвали.
+   * С другом — бот сразу пишет ему «твой ход»; ссылкой — создатель не
+   * ходит, а принявший ссылку станет первым (join). Незанятый вызов-ссылка
+   * у игрока один: карточку шлют в разные чаты — дуэль та же, кто первым
+   * принял, тот и соперник. Ждать никому не надо: о ходе пишет бот.
    */
-  function create(me, { opponent = null, link = false } = {}) {
-    if (activeCount(me.id) >= MAX_ACTIVE) return { status: 409, error: `дуэлей уже ${MAX_ACTIVE} — доиграй одну` };
+  function create(me, { opponent = null, link = false, theyFirst = false } = {}) {
     const t = now();
+    if (link && theyFirst) {
+      const open = q.openInvite.get(me.id, t - OPEN_TTL);
+      if (open) return { duel: view(open, me.id) };
+    }
+    if (activeCount(me.id) >= MAX_ACTIVE) return { status: 409, error: `дуэлей уже ${MAX_ACTIVE} — доиграй одну` };
     const seed = randomInt(1, 2 ** 31);
     if (link) {
-      const id = q.add.run(me.id, null, code(), seed, 'open', t + TURN_MS, t, t).lastInsertRowid;
+      const id = q.add.run(me.id, null, code(), seed, 'open', theyFirst ? null : t + TURN_MS, t, t).lastInsertRowid;
       return { duel: view(q.byId.get(id), me.id) };
     }
     const f = players.byId(String(opponent ?? ''));
@@ -209,8 +234,11 @@ export function createDuels({ db, players, friends, analytics, notify, now = () 
       return { status: 403, error: 'это не твой друг' };
     }
     if (activeCount(f.id) >= MAX_ACTIVE) return { status: 409, error: `у ${f.name} уже ${MAX_ACTIVE} дуэлей` };
-    const id = q.add.run(me.id, f.id, null, seed, 'active', t + TURN_MS, t, t).lastInsertRowid;
-    return { duel: view(q.byId.get(id), me.id) };
+    const [p1, p2] = theyFirst ? [f.id, me.id] : [me.id, f.id];
+    const id = q.add.run(p1, p2, null, seed, 'active', t + TURN_MS, t, t).lastInsertRowid;
+    const d = q.byId.get(id);
+    if (theyFirst) turnNotice(d);
+    return { duel: view(d, me.id) };
   }
 
   /** Принять дуэль по коду ссылки. */
@@ -220,8 +248,10 @@ export function createDuels({ db, players, friends, analytics, notify, now = () 
     if (d.p1 === me.id) return { duel: view(d, me.id) };
     if (activeCount(me.id) >= MAX_ACTIVE) return { status: 409, error: `дуэлей уже ${MAX_ACTIVE} — доиграй одну` };
     const t = now();
-    // Первый ход создатель уже сделал — часы второго идут с этой минуты
-    q.join.run(me.id, t + TURN_MS, t, d.id);
+    // Создатель ещё не ходил (вызов «позвал и ушёл») — первым ходит принявший;
+    // иначе первый ход уже сделан, и часы второго идут с этой минуты
+    if (d.turn === 1) q.joinFirst.run(me.id, t + TURN_MS, t, d.id);
+    else q.join.run(me.id, t + TURN_MS, t, d.id);
     return { duel: view(q.byId.get(d.id), me.id) };
   }
 
@@ -244,6 +274,7 @@ export function createDuels({ db, players, friends, analytics, notify, now = () 
     const was = Number.isSafeInteger(n) ? q.turn.get(d.id, n) : null;
     if (was && was.player_id === me.id && was.kind === 'move') return { duel: view(q.byId.get(d.id), me.id), repeated: true };
     if (d.status !== 'active' && !(d.status === 'open' && d.turn === 1)) return { status: 409, error: 'дуэль окончена', duel: view(d, me.id) };
+    if (isInvite(d)) return { status: 409, error: 'первым ходит тот, кто примет вызов', duel: view(d, me.id) };
     if (n !== d.turn) return { status: 409, error: 'этот ход уже не твой', duel: view(d, me.id) };
     if (moverOf(d) !== me.id) return { status: 409, error: 'сейчас ход соперника', duel: view(d, me.id) };
 
@@ -352,5 +383,9 @@ export function createDuels({ db, players, friends, analytics, notify, now = () 
     return out;
   }
 
-  return { list, create, join, get, submit, resign, tick, view, byId: (id) => q.byId.get(Number(id)) };
+  return {
+    list, create, join, get, submit, resign, tick, view,
+    byId: (id) => q.byId.get(Number(id)),
+    byCode: (c) => q.byCode.get(String(c ?? '').toUpperCase()) ?? null,
+  };
 }

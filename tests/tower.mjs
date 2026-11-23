@@ -51,6 +51,24 @@ for (let i = 0; i < 2; i++) {
   });
   await page.goto(`${URL}/?seed=4242&room=${ROOM}`, { waitUntil: 'domcontentloaded' });
   pages.push(page);
+  // Первый пришёл один: партии без соперника нет — ни ходить, ни часов
+  // (раньше друг, открывший ссылку через час, играл за обе команды)
+  if (i === 0) {
+    await page.waitForFunction(() => {
+      const s = window.__WORMS__?.scene.getScene('Game');
+      return s?.turn?.activeWorm && s.net && s.waitUi?.length;
+    }, null, { timeout: 40000 });
+    const alone = await page.evaluate(() => {
+      const s = window.__WORMS__.scene.getScene('Game');
+      const t0 = s.turn.timeLeft;
+      return { waiting: s.waitingPeer, act: s.canAct(), t0, keys: Object.keys(s.overButtons ?? {}) };
+    });
+    await page.waitForTimeout(1500);
+    const t1 = await page.evaluate(() => window.__WORMS__.scene.getScene('Game').turn.timeLeft);
+    check('один в комнате: ждём соперника, ходить нельзя', alone.waiting && !alone.act, JSON.stringify(alone));
+    check('один в комнате: часы хода стоят', t1 === alone.t0, `${alone.t0} → ${t1}`);
+    check('один в комнате: можно позвать или уйти', alone.keys.includes('wait-invite') && alone.keys.includes('wait-menu'));
+  }
 }
 
 const ready = (p) => p.waitForFunction(

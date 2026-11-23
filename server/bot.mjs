@@ -57,13 +57,19 @@ export function webhookSecret(token, explicit = '') {
 }
 
 export function createBot({ db, api, players, tournaments, analytics = null, admin: adminPanel = null, adminIds = new Set(), publicUrl = '',
-  tz = 'Europe/Moscow', now = () => Date.now(), log = console, appName = '', promos = null }) {
+  tz = 'Europe/Moscow', now = () => Date.now(), log = console, appName = '', promos = null, duels = () => null }) {
   const q = {
     payAdd: db.prepare(`insert or ignore into payment (charge_id, player_id, tg_id, amount, purpose, ref, created_at)
                         values (?, ?, ?, ?, ?, ?, ?)`),
     pay: db.prepare('select * from payment where charge_id = ?'),
     payRefunded: db.prepare('update payment set refunded_at = ? where charge_id = ?'),
     payTotal: db.prepare("select coalesce(sum(amount), 0) as s, count(*) as n from payment where refunded_at is null"),
+    ownerSet: db.prepare(`insert into room_owner (room, tg_id, name, created_at) values (?, ?, ?, ?)
+                          on conflict (room) do update set tg_id = excluded.tg_id, name = excluded.name,
+                          created_at = excluded.created_at, knocked_at = null`),
+    owner: db.prepare('select * from room_owner where room = ?'),
+    ownerKnocked: db.prepare('update room_owner set knocked_at = ? where room = ?'),
+    ownerPrune: db.prepare('delete from room_owner where created_at < ?'),
   };
   let username = '';
   const appUrl = (params = '') => (publicUrl ? `${publicUrl.replace(/\/+$/, '')}/${params}` : '');
@@ -102,9 +108,41 @@ export function createBot({ db, api, players, tournaments, analytics = null, adm
    */
   async function inviteDuel(to, from, room, { silent = false } = {}) {
     if (!to?.tg_id || !publicUrl || !/^ZW[A-Z0-9]{2,10}$/.test(room)) return null;
+    rememberRoom(room, from.tg_id, from.name);
     return send(to.tg_id, `⚔️ ${from.name} вызывает тебя на бой в Smiles!\n`
       + 'Башня, трос и рогатка — комната уже ждёт, жми кнопку.\n\n/mute — не писать о серии и друзьях',
     playButton('⚔️ Принять вызов', `?room=${room}`), { silent });
+  }
+
+  // ------------------------------------------- «друг зашёл — заходи»
+
+  const ROOM_TTL = 7 * 24 * 3600_000;   // сколько помним, чья комната
+  const KNOCK_GAP = 10 * 60_000;        // не чаще раза в 10 минут на комнату
+
+  /** Запомнить, кто позвал в комнату. */
+  function rememberRoom(room, tgId, name) {
+    if (!tgId || !/^ZW[A-Z0-9]{2,10}$/.test(room)) return;
+    const t = now();
+    q.ownerSet.run(room, Number(tgId), String(name ?? '').slice(0, 40) || 'Друг', t);
+    q.ownerPrune.run(t - ROOM_TTL);
+  }
+
+  /**
+   * Друг сидит в комнате вызова, а позвавшего нет: пишем позвавшему с
+   * кнопкой в ту же комнату. Раньше друг, пришедший через час, играл сам с
+   * собой и уходил — позвавший так и не узнавал, что вызов приняли.
+   * @returns {Promise<{sent: boolean, reason?: string, owner?: string}>}
+   */
+  async function knockRoom(me, room) {
+    const o = q.owner.get(room);
+    if (!o || now() - o.created_at > ROOM_TTL) return { sent: false, reason: 'unknown' };
+    if (String(o.tg_id) === String(me.tg_id ?? '')) return { sent: false, reason: 'own', owner: o.name };
+    if (o.knocked_at && now() - o.knocked_at < KNOCK_GAP) return { sent: false, reason: 'limit', owner: o.name };
+    q.ownerKnocked.run(now(), room);
+    const ok = publicUrl && await send(o.tg_id, `⚔️ ${me.name} принял твой вызов и ждёт в бою!\n`
+      + 'Жми кнопку — и сразу в бой.', playButton('⚔️ В бой', `?room=${room}`)).catch(() => null);
+    if (!ok) { q.ownerKnocked.run(null, room); return { sent: false, reason: 'failed', owner: o.name }; }
+    return { sent: true, owner: o.name };
   }
 
   async function notifyAdmins(text) {
@@ -488,20 +526,41 @@ export function createBot({ db, api, players, tournaments, analytics = null, adm
   }
 
   /**
-   * @бот в любом чате: карточка «вызов на дуэль». Кнопка ведёт в одну и ту
-   * же комнату башни — кто нажал первым, тот хозяин, второй садится к нему.
+   * Дуэль-вызов по переписке для карточки из @бота: позвал и ушёл, первым
+   * ходит принявший, о ходе пишет бот. Незанятый вызов у игрока один —
+   * инлайн-запрос летит на каждую букву, плодить дуэли нельзя. Не вышло
+   * (дуэлей уже пять) — null, и карточка зовёт в живую комнату, как раньше.
+   */
+  function inlineDuel(from) {
+    const ds = duels();
+    if (!ds || !from?.id) return null;
+    const me = players.byTg(from.id) ?? players.upsertTg(from);
+    if (!me || me.banned_at) return null;
+    const r = ds.create(me, { link: true, theyFirst: true });
+    return r.duel?.code ?? null;
+  }
+
+  /**
+   * @бот в любом чате: карточка «вызов на дуэль» — дуэль по переписке, где
+   * первым ходит принявший (inlineDuel). Если дуэль не завести — кнопка
+   * ведёт в комнату башни: кто нажал первым, тот хозяин.
    * Вторая карточка — просто «позвать в игру» по рефералке.
    */
   async function onInline(iq) {
     const name = String(iq.from?.first_name ?? 'Друг').slice(0, 40);
     const en = /^en/i.test(String(iq.from?.language_code ?? '')) && !/^ru|^uk|^be|^kk/i.test(String(iq.from?.language_code ?? ''));
-    const room = towerRoom();
-    const duel = startLink(room);
+    let code = null;
+    try { code = startLink('x') ? inlineDuel(iq.from) : null; } catch (e) { log.warn?.('[bot] дуэль для карточки', e.message); }
+    const room = code ?? towerRoom();
+    const duel = startLink(code ? `duel_${code}` : room);
     const ref = startLink(`ref_${iq.from?.id}`);
     if (!duel) return api.call('answerInlineQuery', { inline_query_id: iq.id, results: [], cache_time: 0 });
+    if (!code) rememberRoom(room, iq.from?.id, name);
     const t = en ? {
-      duelTitle: '⚔️ Challenge to a duel', duelDesc: 'A tower duel — tap to fight',
-      duelText: `⚔️ ${name} challenges you to a duel in Smiles!
+      duelTitle: '⚔️ Challenge to a duel', duelDesc: code ? 'Turn-based: they move first, you answer later' : 'A tower duel — tap to fight',
+      duelText: code ? `⚔️ ${name} challenges you to a duel in Smiles!
+Take turns whenever it suits you — your move first. The bot will ping when it's your turn again.`
+        : `⚔️ ${name} challenges you to a duel in Smiles!
 Tower, grappling hook, slingshot and smileys. Tap the button — you both land in the same battle.`,
       duelBtn: '⚔️ Accept the challenge',
       inviteTitle: '🎮 Invite to Smiles', inviteDesc: 'You both get a skin box',
@@ -509,8 +568,10 @@ Tower, grappling hook, slingshot and smileys. Tap the button — you both land i
 Join via this link and you both get a skin box 🎁`,
       inviteBtn: '🎮 Play',
     } : {
-      duelTitle: '⚔️ Вызвать на дуэль', duelDesc: 'Бой на башне — жми и в бой',
-      duelText: `⚔️ ${name} вызывает на дуэль в Smiles!
+      duelTitle: '⚔️ Вызвать на дуэль', duelDesc: code ? 'По переписке: он ходит первым, ты — когда удобно' : 'Бой на башне — жми и в бой',
+      duelText: code ? `⚔️ ${name} вызывает на дуэль в Smiles!
+Ходите по очереди, когда удобно, — твой ход первый. Бот напишет, когда снова твой ход.`
+        : `⚔️ ${name} вызывает на дуэль в Smiles!
 Башня, трос, рогатка и смайлики. Жми кнопку — окажетесь в одном бою.`,
       duelBtn: '⚔️ Принять вызов',
       inviteTitle: '🎮 Позвать в Smiles', inviteDesc: 'Обоим — коробка со скином',
@@ -524,7 +585,7 @@ Join via this link and you both get a skin box 🎁`,
       is_personal: true,
       results: [
         {
-          type: 'article', id: `duel-${room}`, title: t.duelTitle, description: t.duelDesc,
+          type: 'article', id: `duel-${room}`.slice(0, 64), title: t.duelTitle, description: t.duelDesc,
           input_message_content: { message_text: t.duelText },
           reply_markup: { inline_keyboard: [[{ text: t.duelBtn, url: duel }]] },
         },
@@ -647,18 +708,22 @@ Join via this link and you both get a skin box 🎁`,
    * Кнопка — ссылка в мини-приложение сразу в комнату вызвавшего.
    * @returns {Promise<string|null>} id подготовленного сообщения
    */
-  async function prepareChallenge(player, room, link) {
+  async function prepareChallenge(player, room, link, { duel = false } = {}) {
     if (!player?.tg_id) return null;
+    if (!duel) rememberRoom(room, player.tg_id, player.name);
     const res = await api.call('savePreparedInlineMessage', {
       user_id: Number(player.tg_id),
       result: {
         type: 'article',
-        id: `ch-${room}`.slice(0, 64),
+        id: `${duel ? 'dl' : 'ch'}-${room}`.slice(0, 64),
         title: 'Вызов на бой ⚔️',
-        description: `${player.name} зовёт на башню`,
+        description: duel ? `${player.name} зовёт на дуэль по переписке` : `${player.name} зовёт на башню`,
         input_message_content: {
-          message_text: `⚔️ ${player.name} вызывает тебя на бой в Smiles!\n`
-            + 'Башня, тросы, рогатка и смайлики. Жми кнопку — и сразу в бой.',
+          message_text: duel
+            ? `⚔️ ${player.name} вызывает тебя на дуэль в Smiles!\n`
+              + 'Ходите по очереди, когда удобно, — твой ход первый. Бот напишет, когда ответят.'
+            : `⚔️ ${player.name} вызывает тебя на бой в Smiles!\n`
+              + 'Башня, тросы, рогатка и смайлики. Жми кнопку — и сразу в бой.',
         },
         reply_markup: { inline_keyboard: [[{ text: '⚔️ Принять вызов', url: link }]] },
       },
@@ -670,7 +735,7 @@ Join via this link and you both get a skin box 🎁`,
 
   return {
     handleUpdate, setup, notify, notifyAdmins, refund, donateInvoice, tourInvoice, shopInvoice, remind,
-    prepareChallenge, inviteDuel,
+    prepareChallenge, inviteDuel, knockRoom,
     get username() { return username; },
   };
 }

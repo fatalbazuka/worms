@@ -511,15 +511,20 @@ check('«твой ход» бот не пишет', !calls('sendMessage').some((
     res.status === 200 && buf.subarray(0, 15).toString() === 'SQLite format 3' && noAuth.status === 401, `${res.status} ${buf.length} байт`);
 }
 
-// @бот в любом чате: карточка дуэли с общей комнатой башни и «позвать» по рефералке
+// @бот в любом чате: карточка — дуэль по переписке (первым ходит принявший), вторая — «позвать» по рефералке
 {
   await hook({ update_id: 9001, inline_query: { id: 'iq1', from: { id: 555, first_name: 'Вася', language_code: 'ru' }, query: '' } });
   const a = calls('answerInlineQuery').at(-1)?.params;
   const duel = a?.results?.[0]?.reply_markup?.inline_keyboard?.[0]?.[0]?.url ?? '';
   const ref = a?.results?.[1]?.reply_markup?.inline_keyboard?.[0]?.[0]?.url ?? '';
-  check('инлайн: карточка дуэли ведёт в комнату башни, вторая — по рефералке',
-    /startapp=ZW[A-Z2-9]{4}$/.test(duel) && ref.endsWith('startapp=ref_555') && a.results[0].input_message_content.message_text.includes('Вася'),
+  const code = /startapp=duel_([A-Z2-9]{6})$/.exec(duel)?.[1];
+  check('инлайн: карточка ведёт в дуэль-вызов по переписке, вторая — по рефералке',
+    Boolean(code) && ref.endsWith('startapp=ref_555') && a.results[0].input_message_content.message_text.includes('Вася'),
     JSON.stringify(a)?.slice(0, 300));
+  // Инлайн-запрос летит на каждую букву — вызов тот же, новых дуэлей нет
+  await hook({ update_id: 9002, inline_query: { id: 'iq2', from: { id: 555, first_name: 'Вася', language_code: 'ru' }, query: 'а' } });
+  const again = calls('answerInlineQuery').at(-1)?.params?.results?.[0]?.reply_markup?.inline_keyboard?.[0]?.[0]?.url ?? '';
+  check('инлайн: повторный запрос — тот же вызов', again === duel, again);
   check('при запуске: вебхук принимает инлайн-запросы',
     calls('setWebhook').at(-1)?.params.allowed_updates?.includes('inline_query'));
 }
@@ -661,6 +666,19 @@ check('«твой ход» бот не пишет', !calls('sendMessage').some((
   const stranger = await call('POST', '/api/friends/challenge', { id: far.player.id, room: 'ZWFR14' }, host.token);
   check('«Вызвать»: повтор сразу — нет (игра позовёт карточкой), не другу — отказ',
     again.data?.sent === false && again.data.reason === 'limit' && stranger.status === 403, `${JSON.stringify(again.data)} ${stranger.status}`);
+
+  // Друг открыл вызов, когда позвавшего уже нет: бот пишет позвавшему «заходи»
+  const knock = await call('POST', '/api/room/knock', { room: 'ZWFR12' }, guest.token);
+  const kn = calls('sendMessage').at(-1)?.params;
+  check('друг ждёт в комнате вызова — позвавшему сообщение с кнопкой в ту же комнату',
+    knock.data?.sent === true && knock.data.owner === 'Хозяин' && kn?.chat_id === 6001
+      && kn.reply_markup.inline_keyboard[0][0].web_app.url.endsWith('?room=ZWFR12'), JSON.stringify(knock.data));
+  const knock2 = await call('POST', '/api/room/knock', { room: 'ZWFR12' }, guest.token);
+  const own = await call('POST', '/api/room/knock', { room: 'ZWFR12' }, host.token);
+  const unknown = await call('POST', '/api/room/knock', { room: 'ZWNOPE' }, guest.token);
+  check('«заходи»: не чаще раза в 10 минут, себе не пишем, чужую комнату не знаем',
+    knock2.data?.sent === false && knock2.data.reason === 'limit' && own.data?.reason === 'own'
+      && unknown.data?.reason === 'unknown', `${JSON.stringify(knock2.data)} ${JSON.stringify(own.data)} ${JSON.stringify(unknown.data)}`);
   clock = realNow;
   fsrv.close();
   fdb.close();
@@ -774,6 +792,19 @@ check('«твой ход» бот не пишет', !calls('sendMessage').some((
       && msgsTo(7001).slice(before).some((m) => /проиграна/.test(m.params.text)), JSON.stringify(r.data?.duel));
   r = await call('POST', '/api/duels', { opponent: C.player.id }, A.token);
   check('с соперником по прошлой дуэли можно реванш, хоть он и не друг', r.status === 200, r.data?.error);
+
+  // Вызов «позвал и ушёл»: создатель не ходит, первым ходит принявший, создателю — «твой ход»
+  const inv = (await call('POST', '/api/duels', { link: true, theyFirst: true }, B.token)).data.duel;
+  const early = await call('POST', `/api/duels/${inv.id}/turn`, turn(1), B.token);
+  const accepted = await call('POST', '/api/duels/join', { code: inv.code }, C.token);
+  const beforeB = msgsTo(7002).length;
+  const first = await call('POST', `/api/duels/${inv.id}/turn`, turn(1), C.token);
+  const nudge = msgsTo(7002).slice(beforeB).map((m) => m.params.text).join(' | ');
+  check('вызов: пока не приняли — не «твой ход» и ходить нельзя; принявший ходит первым, позвавшему — «твой ход»',
+    inv.invite === true && inv.myTurn === false && early.status === 409
+      && accepted.data?.duel?.me === 0 && accepted.data.duel.myTurn === true
+      && first.status === 200 && /Твой ход против Чужой/.test(nudge),
+    `${JSON.stringify(inv)} ${early.status} ${JSON.stringify(accepted.data?.duel)} ${first.status} ${nudge}`);
 
   // Сдаться: дуэль соперника, пишем только ему. Ночью — без звука
   clock = Date.UTC(2026, 10, 27, 21, 30);           // 00:30 МСК

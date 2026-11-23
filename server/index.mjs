@@ -33,6 +33,7 @@
  *   POST /api/friends/challenge {id, room} → {sent}          вызов другу через бота; sent=false — звать карточкой
  *   GET  /api/duels                       → {items, myTurn, max}  дуэли по переписке (server/duels.mjs)
  *   POST /api/duels {opponent} | {link}   → {duel}            новая: с другом или ссылкой с кодом
+ *        + theyFirst                                          первым ходит позванный, создатель не ждёт
  *   POST /api/duels/join {code}           → {duel}            принять по ссылке
  *   GET  /api/duels/:id                   → {duel}            с историей ходов
  *   POST /api/duels/:id/turn {turn, cmds, state, hash, prevHash, prevTurn, over, winner} → {duel}
@@ -109,7 +110,9 @@ export function createApp({
   const saves = createSaves({ db, now });
   const daily = createDailyTower({ db, players, dayOf: () => analytics.dayOf(), now });
   const admin = createAdmin({ db, players, analytics, tournaments, shop, saves, api, now, log });
-  bot = createBot({ db, api, players, tournaments, analytics, admin, adminIds: admins, publicUrl, tz, now, log, appName, promos });
+  // Дуэли заводятся ниже (им нужны друзья, а друзьям — бот): боту — ссылка
+  bot = createBot({ db, api, players, tournaments, analytics, admin, adminIds: admins, publicUrl, tz, now, log, appName, promos,
+    duels: () => duels });
   weekly = createWeekly({ db, tournaments, shop, notify: (...a) => bot.notify(...a), tz, now, log });
   const friends = createFriends({
     db, players, analytics, now, log,
@@ -341,6 +344,13 @@ export function createApp({
         if (r.error) throw new HttpError(403, r.error);
         return r;
       }
+      case 'POST /api/room/knock': {
+        const me = auth(req);
+        if (!limits.duel.hit(me.id)) throw new HttpError(429, 'слишком часто');
+        const code = String((await readJson(req)).room ?? '').toUpperCase();
+        if (!/^ZW[A-Z0-9]{2,10}$/.test(code)) throw new HttpError(400, 'не та комната');
+        return bot.knockRoom(me, code);
+      }
       case 'GET /api/duels': return duels.list(auth(req).id);
       case 'POST /api/duels':
       case 'POST /api/duels/join': {
@@ -348,7 +358,7 @@ export function createApp({
         if (!limits.duel.hit(me.id)) throw new HttpError(429, 'слишком много дуэлей за час');
         const body = await readJson(req);
         const r = path.endsWith('/join') ? duels.join(me, body.code)
-          : duels.create(me, { opponent: body.opponent, link: body.link === true });
+          : duels.create(me, { opponent: body.opponent, link: body.link === true, theyFirst: body.theyFirst === true });
         if (r.error) throw new HttpError(r.status ?? 400, r.error);
         return r;
       }
@@ -385,15 +395,19 @@ export function createApp({
       case 'POST /api/daily-tower': { const me = auth(req); return daily.submit(me, await readJson(req)); }
       case 'POST /api/challenge': {
         const me = auth(req);
-        const { room, link } = await readJson(req);
-        const code = String(room ?? '').toUpperCase();
-        // Только комната башни с другом и только ссылка в Telegram на неё же
-        if (!/^ZW[A-Z0-9]{2,10}$/.test(code)) throw new HttpError(400, 'не та комната');
+        const { room, duel, link } = await readJson(req);
+        // Комната башни с другом или своя дуэль-вызов, ссылка — на неё же
+        const code = String(duel ?? room ?? '').toUpperCase();
+        if (duel != null) {
+          const d = duels.byCode(code);
+          if (!d || d.p1 !== me.id || d.status !== 'open') throw new HttpError(400, 'не та дуэль');
+        } else if (!/^ZW[A-Z0-9]{2,10}$/.test(code)) throw new HttpError(400, 'не та комната');
+        const param = duel != null ? `duel_${code}` : code;
         const url = String(link ?? '');
-        if (!/^https:\/\/t\.me\/[\w/]+\?startapp=[A-Za-z0-9_-]+$/.test(url) || !url.endsWith(`startapp=${code}`)) {
+        if (!/^https:\/\/t\.me\/[\w/]+\?startapp=[A-Za-z0-9_-]+$/.test(url) || !url.endsWith(`startapp=${param}`)) {
           throw new HttpError(400, 'не та ссылка');
         }
-        const id = await bot.prepareChallenge(me, code, url);
+        const id = await bot.prepareChallenge(me, code, url, { duel: duel != null });
         if (!id) throw new HttpError(503, 'карточка сейчас недоступна');
         return { id };
       }

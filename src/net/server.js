@@ -231,6 +231,12 @@ export async function prepareChallenge(room, link) {
   try { return (await call('POST', '/challenge', { room, link })).id ?? null; } catch { return null; }
 }
 
+/** То же для дуэли-вызова по переписке: карточка с кнопкой на startapp=duel_КОД. */
+export async function prepareDuelChallenge(code, link) {
+  if (!token) return null;
+  try { return (await call('POST', '/challenge', { duel: code, link })).id ?? null; } catch { return null; }
+}
+
 export async function buyShopItem(item) {
   const r = await call('POST', '/shop/buy', { item });
   return r.invoice;
@@ -292,6 +298,15 @@ export async function fetchFriends() {
  * Вызвать друга через бота: ему придёт сообщение с кнопкой в комнату.
  * false — не вышло (лимит, друг отписался, нет сети): зовём карточкой.
  */
+/**
+ * Сидим в комнате вызова одни: попросить бота написать позвавшему.
+ * {sent, owner, reason} или null без входа / без сервера.
+ */
+export async function knockRoom(room) {
+  if (!token) return null;
+  try { return await call('POST', '/room/knock', { room }); } catch { return null; }
+}
+
 export async function inviteFriend(id, room) {
   if (!token) return false;
   try { return (await call('POST', '/friends/challenge', { id, room })).sent === true; } catch { return false; }

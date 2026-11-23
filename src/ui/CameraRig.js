@@ -221,18 +221,31 @@ export class CameraRig {
    * (её прямоугольник специально уходит намного ниже мира).
    */
   _applyScrollY(targetY, k = 1) {
-    const want = this.clampTop((targetY ?? CFG.WORLD_H / 2) - this.visibleH / 2);
+    // Сама камера неба над миром не показывает (на высоком экране это
+    // срезало бы низ башни) — только за снарядом, улетевшим выше мира
+    const y = targetY ?? CFG.WORLD_H / 2;
+    const want = this.clampTop(y - this.visibleH / 2, y < 0);
     this.setViewTop(k >= 1 ? want : this.viewTop + (want - this.viewTop) * k);
   }
 
   /** Допустимый верх кадра для желаемого. */
-  clampTop(top) {
+  clampTop(top, sky = true) {
     const vh = this.visibleH;
     // Центрируемся на полосе земли, но не опускаем вид ниже нуля: при
     // зуме 1 высота вида ровно равна миру, и любое смещение резало бы
     // небо сверху и показывало лишнюю воду снизу.
     if (vh >= CFG.WORLD_H) return Math.min(CFG.WORLD_FOCUS_Y - vh / 2, 0);
-    return Phaser.Math.Clamp(top, 0, CFG.WORLD_H - vh);
+    return Phaser.Math.Clamp(top, sky ? -this.headroom : 0, CFG.WORLD_H - vh);
+  }
+
+  /**
+   * Сколько неба над миром можно показать. Верх мира — это верхний этаж
+   * башни, а сверху кадр закрыт полосой счёта и рядом оружия: упрись камера
+   * в ноль, верхний этаж сидел бы под ними, а улетевший вверх снаряд
+   * пропадал бы из виду. Поэтому запас — высота шапки на экране плюс небо.
+   */
+  get headroom() {
+    return (CFG.CAM_HUD_TOP + CFG.CAM_SKY) / this.zoom;
   }
 
   // ------------------------------------------------------------ протяжка
