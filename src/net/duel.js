@@ -132,6 +132,17 @@ export class DuelSession {
     this.prevTurn = null;      // и какой это был ход
     this.checks = [];          // [{n, mine, theirs}] — для тестов и отладки
     this.onPhase = null;       // сцена подписывается: показать «ход отправлен»
+    // «Пересмотреть ход»: последний ход показывается заново, даже если он свой
+    this.forceShow = Boolean(duel.replayLast);
+  }
+
+  /** Есть что пересмотреть, и это не сотрёт начатый ход. */
+  get canRewatch() {
+    if (!(this.duel.turns ?? []).length) return false;
+    // Свой ход идёт: пересмотр соберёт партию заново, и шаги этого хода
+    // пропадут — до выстрела не жалко, после выстрела нельзя
+    if (this.phase === 'play') return !this.rec || !this.rec.cmds.some((c) => c.k === 'shot');
+    return this.phase === 'wait' || this.phase === 'sent' || this.phase === 'over';
   }
 
   get connected() { return true; }
@@ -181,7 +192,7 @@ export class DuelSession {
     const turns = this.duel.turns ?? [];
     const last = turns.at(-1);
     // Последний ход соперника — показом; всё, что до него, — мгновенно
-    const show = Boolean(last && last.team !== this.myTeam);
+    const show = Boolean(last && (last.team !== this.myTeam || this.forceShow));
     s.fastForward = true;
     for (const t of show ? turns.slice(0, -1) : turns) this._applyInstant(t);
     s.fastForward = false;
@@ -230,8 +241,9 @@ export class DuelSession {
   /** Повтор хода соперника: его шаги, трос, прицел и выстрел — в обычном темпе. */
   async _show(t) {
     const s = this.scene;
-    s.fx.banner(t.kind === 'skip' ? `${this.opponent.name} не успел — ход пропущен` : 'Повтор хода соперника',
-      '#ffd166', 1800);
+    const own = t.team === this.myTeam;
+    s.fx.banner(t.kind === 'skip' ? `${own ? 'Ты не успел' : `${this.opponent.name} не успел`} — ход пропущен`
+      : own ? 'Повтор твоего хода' : 'Повтор хода соперника', '#ffd166', 1800);
     s.followTarget = s.turn.activeWorm;
     await this._wait(t.kind === 'skip' ? 1400 : 1100);
     if (t.kind === 'skip') { this._pass(); return; }

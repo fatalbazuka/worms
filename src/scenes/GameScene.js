@@ -823,6 +823,25 @@ export default class GameScene extends Phaser.Scene {
     this.myTeam = this.net.myTeam;
     this.net.attach(this);
     this._netStatus(`дуэль с ${this.net.opponent.name} · восстанавливаю ходы…`);
+    // «Пересмотреть ход» — внизу посередине, между стиком и рычагом
+    const x = CFG.VIEW_W / 2, y = CFG.VIEW_H - 34;
+    this.rewatchBtn = this.rig.ui(this.add.text(x, y, '↺ Пересмотреть ход', font(20, 800, '#1a1408'))
+      .setOrigin(0.5).setPadding(16, 8, 16, 8).setBackgroundColor('#ffd166')
+      .setScrollFactor(0).setDepth(DEPTH.HUD + 14).setVisible(false));
+    this.rewatchBtn.setInteractive({ useHandCursor: true });
+    this.rewatchBtn.on('pointerup', () => this.rewatchDuel());
+  }
+
+  /**
+   * Пересмотреть последний ход дуэли: партия собирается заново из истории,
+   * и последний ход — чей бы он ни был — показывается в обычном темпе.
+   * Начатый свой ход не теряется: кнопки нет, пока что-то сделано.
+   */
+  rewatchDuel() {
+    if (!this.net?.isDuel || !this.net.canRewatch) return;
+    this.haptic?.('tap');
+    this.registry.set('duel', { ...this.net.duel, replayLast: true });
+    this.scene.restart();
   }
 
   /** Свой ход ушёл на сервер (ok) или нет — показать, что дальше. */
@@ -859,7 +878,9 @@ export default class GameScene extends Phaser.Scene {
       .setWordWrapWidth(Math.min(CFG.VIEW_W - 60, 640))));
     ui.push(this._overButton(-140, 'Мои дуэли', () => this.toMenu('duels'), 'duels'));
     ui.push(this._overButton(140, 'В меню', () => this.toMenu('root'), 'menu'));
+    ui.push(this._overButton(0, '↺ Пересмотреть ход', () => this.rewatchDuel(), 'rewatch', 96));
     this.duelUi = ui;
+    this.rewatchBtn?.setVisible(false);
   }
 
   /** Строка над полем в дуэли: с кем, чей ход и сколько у него времени. */
@@ -1411,6 +1432,7 @@ export default class GameScene extends Phaser.Scene {
     if (this.net.isDuel) {
       const [text, color] = this._duelStatus();
       if (text !== this.netStatusText) this._netStatus(text, color);
+      this.rewatchBtn?.setVisible(this.net.canRewatch && !this.duelUi?.length);
       return;
     }
     const mine = this.turn.currentTeam === this.net.myTeam;
@@ -2516,6 +2538,10 @@ export default class GameScene extends Phaser.Scene {
         }).catch((e) => sub.setText(e.message));
       }, 'rematch'));
       this.gameOverUi.push(this._overButton(140, 'Мои дуэли', () => this.toMenu('duels'), 'duels'));
+      // Чем кончилось — посмотреть ещё раз
+      if (this.net?.isDuel && (this.net.duel.turns ?? []).length) {
+        this.gameOverUi.push(this._overButton(0, '↺ Пересмотреть ход', () => this.rewatchDuel(), 'rewatch', 96));
+      }
       return;
     }
 
