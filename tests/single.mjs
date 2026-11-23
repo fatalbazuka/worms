@@ -121,7 +121,14 @@ const info = () => page.evaluate(() => {
 await menuReady();
 // Бонус серии всплывает после первого боя и перехватил бы тапы по меню —
 // его проверяет свой тест ниже
-await page.evaluate(() => { window.__WORMS__.scene.getScene('Menu').streakShown = true; });
+// Новичку до первого выстрела на главном только «Играть» — здесь игрок
+// уже не новичок: выбран соперник, значит, видны и режимы
+await page.evaluate(() => {
+  localStorage.setItem('worms.play.v1', JSON.stringify({ level: 'fighter' }));
+  const m = window.__WORMS__.scene.getScene('Menu');
+  m.streakShown = true;
+  m.showRoot();
+});
 const rootButtons = await page.evaluate(
   () => Object.keys(window.__WORMS__.scene.getScene('Menu').buttons));
 check('на главном экране «Играть», соперник, режимы, «С друзьями» и вкладки без турниров',

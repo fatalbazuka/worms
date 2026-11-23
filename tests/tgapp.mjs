@@ -138,8 +138,8 @@ const me = await A.evaluate(() => JSON.parse(localStorage.getItem('worms.player.
 check('вход сам по подписи Telegram: имя, аватар, админ', me.id === `tg${ADMIN}` && me.name === 'Админ'
   && me.photo === 'https://example.test/a.jpg' && me.admin === true, `${me.id} ${me.name}`);
 const rootKeys = await A.evaluate(() => Object.keys(window.__WORMS__.scene.getScene('Menu').buttons));
-check('в меню «С друзьями» и кабинет, переключателя управления нет',
-  rootKeys.includes('social') && rootKeys.includes('account') && !rootKeys.includes('ui-mode'), rootKeys.join(','));
+check('в меню вкладки «Друзья» и кабинет, переключателя управления нет',
+  rootKeys.includes('top') && rootKeys.includes('account') && !rootKeys.includes('ui-mode'), rootKeys.join(','));
 
 await A.evaluate(() => window.__WORMS__.scene.getScene('Menu').openAccount());
 await A.waitForSelector('.acc-box .acc-name');
