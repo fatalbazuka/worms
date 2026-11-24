@@ -127,8 +127,10 @@ async function playTurn(p, k) {
     const w = s.turn.activeWorm;
     const foes = s.worms.filter((o) => o.alive && o.team !== w.team);
     let best = null;
-    for (let a = -175; a <= -5; a += 5) {
-      for (let v = 250; v <= 950; v += 50) {
+    // Сетка мелкая: на грубой (5° и 50 px/с) все выстрелы партии могли
+    // лечь в шаге от радиуса взрыва, и сверять было нечего
+    for (let a = -176; a <= -4; a += 2) {
+      for (let v = 250; v <= 975; v += 25) {
         const dx = Math.cos(a * Math.PI / 180), dy = Math.sin(a * Math.PI / 180);
         const m = muzzle(s, w, dx, dy);
         const r = simulateShot(s, m.x, m.y, dx * v, dy * v, s.turn.weapon, w);
@@ -222,6 +224,7 @@ pages[1] = null;
 // --- по очереди: открыл по кнопке бота → повтор хода соперника → свой ход ---
 let turns = 1;
 const replayChecks = [];
+const shownDamage = [];
 for (let k = 2; k <= 7; k++) {
   const i = k % 2 === 0 ? 0 : 1;    // чётные — Аня, нечётные — Боря (он ходил первым)
   if (k === 5) {
@@ -257,6 +260,16 @@ for (let k = 2; k <= 7; k++) {
     return { phase: s.net.phase, act: s.canPlayerAct() };
   });
   if (during.phase === 'replay') check(`ход ${k}: пока идёт повтор хода соперника — ходить нельзя`, !during.act);
+  // Урон из повтора виден: цифра над бойцом, когда приходит итог хода
+  if (during.phase === 'replay' && k !== 3) {
+    await p.evaluate(() => {
+      const s = window.__WORMS__.scene.getScene('Game');
+      if (s.__dmgSpy) return;
+      s.__dmgSpy = true; window.__shown = 0; window.__hp0 = s.worms.map((w) => w.health);
+      const f = s.fx.damageNumber.bind(s.fx);
+      s.fx.damageNumber = (x, y, n) => { window.__shown += n; return f(x, y, n); };
+    });
+  }
   if (k === 3 && during.phase === 'replay') {
     // «Пропустить повтор»: кнопка на экране, после неё ход сразу мой, итог тот же (сверки ниже)
     const seen = await p.waitForFunction(() => window.__WORMS__.scene.getScene('Game').skipBtn?.visible === true, null, { timeout: 20000 })
@@ -270,6 +283,15 @@ for (let k = 2; k <= 7; k++) {
       `${seen} ${hidden} ${Date.now() - t0} мс`);
   }
   await waitPhase(p, ['play', 'over']);
+  {
+    const seen = await p.evaluate(() => {
+      const s = window.__WORMS__.scene.getScene('Game');
+      if (!s.__dmgSpy) return null;
+      const lost = s.worms.reduce((a, w, j) => a + Math.max(0, window.__hp0[j] - (w.alive ? w.health : window.__hp0[j])), 0);
+      return { lost, shown: window.__shown };
+    });
+    if (seen && seen.lost > 0) shownDamage.push(seen);
+  }
   replayChecks.push(...(await checksOf(p)).map((c) => ({ ...c, by: i, at: k })));
   if ((await phase(p)) === 'over') break;
   if (k === 2) {
@@ -305,6 +327,9 @@ for (let k = 2; k <= 7; k++) {
   if (k < 7) { await p.close(); pages[i] = null; }
 }
 
+if (shownDamage.length) {
+  check('урон из повтора хода соперника показан цифрой', shownDamage.every((d) => d.shown === d.lost), JSON.stringify(shownDamage));
+} else console.log('  (в этой партии повторов с уроном по живому бойцу не случилось — показ цифр не проверен)');
 const bad = replayChecks.filter((c) => c.mine !== c.theirs);
 check('каждый ход, восстановленный другим браузером, сошёлся со свёрткой ходившего',
   replayChecks.length >= 6 && bad.length === 0, `${replayChecks.length} сверок, расхождений ${bad.length}: ${JSON.stringify(bad.slice(0, 3))}`);
