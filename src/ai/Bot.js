@@ -736,6 +736,24 @@ export class Bot {
    */
   solveAir(worm, target, weaponIndex) {
     const weapon = WEAPONS[weaponIndex];
+    // Башня: удар — в точку прицела; ракеты приходят на этаж под ней
+    if (weapon.tall(this.scene)) {
+      const reach = weapon.reachOf(this.scene);
+      let hit = null;
+      for (const off of [-24, 0, 24]) {
+        const dx = target.x + off - worm.x, dy = target.centerY - worm.centerY;
+        const power = Math.hypot(dx, dy) / reach;
+        if (power < CFG.CHARGE_MIN + 0.06 || power > 1) continue;
+        const facing = dx >= 0 ? 1 : -1;
+        const angle = Math.atan2(-dy, Math.abs(dx));
+        const speed = power * CFG.AIM_MAX_POWER;
+        const plan = weapon.plan(this.scene, worm, Math.cos(angle) * facing * speed, -Math.sin(angle) * speed);
+        const impacts = plan.missiles.map((m) => ({ kind: 'terrain', x: m.landX, y: plan.t.y }));
+        const score = this.scoreImpacts(impacts, target, worm, weapon.missileWeapon.explosion) + this.ammoCost(weapon);
+        if (!hit || score < hit.score) hit = { angle, power, facing, weapon: weaponIndex, score };
+      }
+      return hit;
+    }
     const side = target.x >= worm.x ? 1 : -1;
     const W = this.scene.terrain.width;
     let best = null;

@@ -611,7 +611,8 @@ export class AimController {
       return;
     }
     // Авиаудар: пунктир сверху до земли и полоса накрытия
-    const top = Math.max(0, this.scene.rig.viewTop);
+    // На башне ракеты идут с высоты drop над этажом — оттуда и пунктир
+    const top = Math.max(0, this.scene.rig.viewTop, t.tall ? t.y - (weapon.drop ?? 520) : 0);
     for (let y = top; y < t.y - 8; y += 18) {
       g.fillStyle(c, 0.55);
       g.fillRect(t.x - 1, y, 2, 10);
