@@ -251,6 +251,18 @@ for (let k = 2; k <= 7; k++) {
     return { phase: s.net.phase, act: s.canPlayerAct() };
   });
   if (during.phase === 'replay') check(`ход ${k}: пока идёт повтор хода соперника — ходить нельзя`, !during.act);
+  if (k === 3 && during.phase === 'replay') {
+    // «Пропустить повтор»: кнопка на экране, после неё ход сразу мой, итог тот же (сверки ниже)
+    const seen = await p.waitForFunction(() => window.__WORMS__.scene.getScene('Game').skipBtn?.visible === true, null, { timeout: 20000 })
+      .then(() => true).catch(() => false);
+    const t0 = Date.now();
+    await p.evaluate(() => window.__WORMS__.scene.getScene('Game').net.skipShow());
+    await waitPhase(p, ['play', 'over']);
+    const hidden = await p.waitForFunction(() => window.__WORMS__.scene.getScene('Game').skipBtn?.visible === false, null, { timeout: 10000 })
+      .then(() => true).catch(() => false);
+    check('«Пропустить повтор»: кнопка видна во время показа, после неё — сразу свой ход', seen && hidden && Date.now() - t0 < 5000,
+      `${seen} ${hidden} ${Date.now() - t0} мс`);
+  }
   await waitPhase(p, ['play', 'over']);
   replayChecks.push(...(await checksOf(p)).map((c) => ({ ...c, by: i, at: k })));
   if ((await phase(p)) === 'over') break;

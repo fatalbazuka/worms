@@ -843,6 +843,12 @@ export default class GameScene extends Phaser.Scene {
       .setScrollFactor(0).setDepth(DEPTH.HUD + 14).setVisible(false));
     this.rewatchBtn.setInteractive({ useHandCursor: true });
     this.rewatchBtn.on('pointerup', () => this.rewatchDuel());
+    // «Пропустить повтор» — там же, пока идёт показ хода соперника
+    this.skipBtn = this.rig.ui(this.add.text(x, y, '▶▶ Пропустить повтор', font(20, 800, '#1a1408'))
+      .setOrigin(0.5).setPadding(16, 8, 16, 8).setBackgroundColor('#ffd166')
+      .setScrollFactor(0).setDepth(DEPTH.HUD + 14).setVisible(false));
+    this.skipBtn.setInteractive({ useHandCursor: true });
+    this.skipBtn.on('pointerup', () => { this.haptic?.('tap'); this.net?.skipShow?.(); });
     // Часы своего хода идут с первого действия игрока
     const begin = () => this.net?.begin?.();
     this.input.on('pointerdown', begin);
@@ -1537,6 +1543,7 @@ export default class GameScene extends Phaser.Scene {
   /** Строка «чей ход» в сетевой партии. Переписывается только при смене. */
   _updateNetStatus() {
     this._updateWaitPanel();
+    this.skipBtn?.setVisible(Boolean(this.net?.isDuel && this.net.showing && !this.net.skip));
     if (!this.net?.connected || this.turn.state === STATE.OVER) return;
     if (this.net.isDuel) {
       const [text, color] = this._duelStatus();
