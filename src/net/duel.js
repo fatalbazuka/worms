@@ -35,8 +35,15 @@ import { fetchDuel, sendDuelTurn, ApiError } from './server.js';
  */
 
 /** Описание партии для сцены: башня, как в онлайне, своё зерно. */
+/**
+ * Дуэль — та же башня, но ход длиннее: никто не ждёт за экраном, а
+ * открывают её между делом — осмотреться, пройти, прицелиться.
+ */
+export const DUEL_TURN_TIME = 60;
+
 export function duelMatch(duel) {
-  return { ...towerMatch(null), mode: 'duel', seed: duel.seed, duelId: duel.id };
+  const m = towerMatch(null);
+  return { ...m, mode: 'duel', seed: duel.seed, duelId: duel.id, rules: { ...m.rules, turnTime: DUEL_TURN_TIME } };
 }
 
 /** Самые длинные паузы в повторе чужого хода: думал он долго, смотреть — нет. */
@@ -287,6 +294,9 @@ export class DuelSession {
         s.turn.turnNumber = d.turn;
       }
       this.rec = { n: d.turn, t0: performance.now(), cmds: [], lastMove: 0 };
+      // Часы хода — с этой минуты: пока грузилась история и шёл повтор
+      // соперника, они стояли (GameScene._turnClock), но полный ход — честнее
+      s.turn.timeLeft = s.turnTime;
       this.ready = true;
       this._setPhase('play');
       // Начало своего хода: заморозка, подсказка «твой ход», вибрация

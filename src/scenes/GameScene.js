@@ -1516,6 +1516,10 @@ export default class GameScene extends Phaser.Scene {
    */
   _turnClock(realDt, physDt) {
     if (this.waitingPeer) return 0;
+    // Дуэль: пока история не восстановлена и идёт повтор — часы стоят.
+    // Раньше 25 секунд хода съедались загрузкой и показом хода соперника,
+    // и свой ход «пропадал», едва начавшись
+    if (this.net?.isDuel && !this.net.ready) return 0;
     if (this.net || this.room) return realDt;
     return Math.min(realDt, Math.max(physDt, realDt / CFG.TURN_CLOCK_STRETCH));
   }

@@ -182,6 +182,12 @@ pages[0] = null;
 // --- Боря открыл по кнопке бота и сходил; Ане бот пишет «твой ход» ---
 pages[1] = await open(1, `?duel=${duelId}`);
 await waitPhase(pages[1], ['play']);
+// Ход «пропадал»: 25 секунд съедала загрузка истории и повтор соперника
+const clock = await pages[1].evaluate(() => {
+  const s = window.__WORMS__.scene.getScene('Game');
+  return { left: s.turn.timeLeft, full: s.turnTime };
+});
+check('дуэль: свой ход начинается с полными часами, на ход минута', clock.full === 60 && clock.left > 55, JSON.stringify(clock));
 await playTurn(pages[1], 1);
 const pinged = tgCalls.filter((c) => c.method === 'sendMessage' && c.params.chat_id === 811 && /ход/.test(c.params.text));
 check('Ане бот пишет «твой ход против Боря» с кнопкой в дуэль', pinged.length === 1
