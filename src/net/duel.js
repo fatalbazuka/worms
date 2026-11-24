@@ -48,6 +48,8 @@ export function duelMatch(duel) {
 
 /** Самые длинные паузы в повторе чужого хода: думал он долго, смотреть — нет. */
 const MAX_GAP = 1200;
+/** Дорога до выстрела в повторе — не дольше этого, мс. */
+const SHOW_MAX = 8000;
 /** Шагов в записи хода не больше — иначе ход не влезет в запрос. */
 const MAX_MOVES = 160;
 const POLL_MS = 10_000;
@@ -106,6 +108,15 @@ function setPending(id, payload) {
   writeStore(st);
 }
 
+/**
+ * Сервер ход рассмотрел и отказал — слать его снова незачем. Сюда не
+ * входят 401 (сессия истекла — после входа уйдёт), 408 и 429 (подождать):
+ * раньше на них ход выбрасывался, как будто его отвергли.
+ */
+function refused(e) {
+  return e instanceof ApiError && e.status >= 400 && e.status < 500 && ![401, 408, 429].includes(e.status);
+}
+
 /** Дослать ходы, которые не дошли (оборвалась сеть, закрыли игру). */
 export async function flushPendingTurns() {
   const st = readStore();
@@ -115,7 +126,7 @@ export async function flushPendingTurns() {
       setPending(id, null);
     } catch (e) {
       // Сервер ход знает и не примет (не тот ход, дуэль окончена) — забываем
-      if (e instanceof ApiError && e.status >= 400 && e.status < 500) setPending(id, null);
+      if (refused(e)) setPending(id, null);
     }
   }
 }
@@ -135,6 +146,7 @@ export class DuelSession {
     this.ready = false;        // история ещё не восстановлена — ходить нельзя
     this.phase = 'replay';     // replay | play | sent | wait | over
     this.rec = null;           // запись своего хода
+    this.started = false;      // игрок начал ход — до этого часы хода стоят
     this.prevHash = null;      // свёртка после последнего восстановленного хода
     this.prevTurn = null;      // и какой это был ход
     this.checks = [];          // [{n, mine, theirs}] — для тестов и отладки
@@ -257,8 +269,15 @@ export class DuelSession {
     const cmds = (t.cmds ?? []).slice().sort((a, b) => (a.at ?? 0) - (b.at ?? 0));
     let at = cmds[0]?.at ?? 0;
     let shot = false;
-    for (const c of cmds) {
-      const gap = Math.max(0, Math.min(MAX_GAP, (c.at ?? 0) - at));
+    // Соперник мог ходить минуту — смотреть это минуту незачем: дорога до
+    // выстрела сжимается до SHOW_MAX, сам выстрел идёт в обычном темпе
+    const gaps = cmds.map((c, i) => (i ? Math.max(0, Math.min(MAX_GAP, (c.at ?? 0) - (cmds[i - 1].at ?? 0))) : 0));
+    const firstShot = cmds.findIndex((c) => c.k === 'shot');
+    const walk = gaps.slice(0, firstShot < 0 ? gaps.length : firstShot + 1).reduce((a, b) => a + b, 0);
+    const speed = walk > SHOW_MAX ? SHOW_MAX / walk : 1;
+    for (const [i, c] of cmds.entries()) {
+      if (this.dead) return;
+      const gap = gaps[i] * (firstShot < 0 || i <= firstShot ? speed : 1);
       at = c.at ?? at;
       if (gap > 16) await this._wait(gap);
       if (c.k === 'move') applyMove(s, c.m);
@@ -294,9 +313,10 @@ export class DuelSession {
         s.turn.turnNumber = d.turn;
       }
       this.rec = { n: d.turn, t0: performance.now(), cmds: [], lastMove: 0 };
-      // Часы хода — с этой минуты: пока грузилась история и шёл повтор
-      // соперника, они стояли (GameScene._turnClock), но полный ход — честнее
+      // Часы хода — полные и стоят, пока игрок не начал (begin): дуэль
+      // открывают между делом, и ход не должен уходить, пока смотришь на поле
       s.turn.timeLeft = s.turnTime;
+      this.started = false;
       this.ready = true;
       this._setPhase('play');
       // Начало своего хода: заморозка, подсказка «твой ход», вибрация
@@ -310,6 +330,13 @@ export class DuelSession {
   // ------------------------------------------------------------- свой ход
 
   _at() { return Math.round(performance.now() - this.rec.t0); }
+
+  /** Игрок начал свой ход (первое касание, шаг, клавиша) — часы пошли. */
+  begin() {
+    if (this.phase !== 'play' || this.started) return;
+    this.started = true;
+    if (this.rec) this.rec.t0 = performance.now();
+  }
 
   sendMove(m) {
     if (this.phase !== 'play' || !this.rec || !m) return;
@@ -361,7 +388,7 @@ export class DuelSession {
       this.scene?.onDuelSent?.(true);
       if (!payload.over) this._poll();
     } catch (e) {
-      if (e instanceof ApiError && e.status >= 400 && e.status < 500) {
+      if (refused(e)) {
         setPending(this.duel.id, null);
         this.scene?.onDuelSent?.(false, e.message);
         return;

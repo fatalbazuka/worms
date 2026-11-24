@@ -44,7 +44,8 @@ export const REMIND_BEFORE = 2 * 3600_000;
 export const MAX_ACTIVE = 5;
 export const MAX_SKIPS = 3;
 export const OPEN_TTL = 7 * 86400_000;      // ссылку никто не принял за неделю — дуэль отменяется
-export const WATCH_MS = 60_000;
+export const WATCH_MS = 25_000;             // опрос у смотрящего — раз в 10 секунд
+export const NOTIFY_LATE = 45_000;          // через сколько досылаем «твой ход», если его не увидели
 export const TURN_PINGS_PER_DAY = 40;
 const FINISHED_SHOWN = 7 * 86400_000;       // доигранные видны в списке неделю
 const DAY_FROM = 9, DAY_TO = 23;
@@ -85,6 +86,9 @@ export function createDuels({ db, players, friends, analytics, notify, now = () 
     seen1: db.prepare('update duel set seen1 = ? where id = ?'),
     seen2: db.prepare('update duel set seen2 = ? where id = ?'),
     reminded: db.prepare('update duel set reminded_turn = turn where id = ?'),
+    notified: db.prepare('update duel set notified_turn = turn where id = ?'),
+    unnotified: db.prepare(`select * from duel where status = 'active' and deadline is not null
+                              and coalesce(notified_turn, 0) != turn and updated_at <= ? limit 200`),
     due: db.prepare(`select * from duel where status = 'active' and deadline is not null and deadline <= ? limit 200`),
     remindDue: db.prepare(`select * from duel where status = 'active' and deadline is not null
                              and deadline > $now and deadline - $now <= $before
@@ -156,12 +160,15 @@ export function createDuels({ db, players, friends, analytics, notify, now = () 
    * Сообщение игроку о дуэли с кнопкой прямо в неё. kind = 'turn' — с
    * ограничениями «смотрит сейчас» и дневным лимитом (см. шапку).
    */
-  async function ping(d, toId, text, kind = 'other', button = '⚔️ Ходить') {
+  async function ping(d, toId, text, kind = 'other', button = '⚔️ Ходить', { late = false } = {}) {
     const p = toId ? players.byId(toId) : null;
     if (!p?.tg_id || !p.remind || p.banned_at) return null;
     if (kind === 'turn') {
       const seen = p.id === d.p1 ? d.seen1 : d.seen2;
-      if (seen && now() - seen < WATCH_MS) return null;
+      // Смотрит дуэль прямо сейчас — увидит сам. Но если он тут же закрыл
+      // игру, хода он не увидит: tick дошлёт сообщение (late), когда станет
+      // ясно, что новое состояние он так и не открыл
+      if (!late && seen && now() - seen < WATCH_MS) return null;
       const day = analytics.dayOf();
       if (q.pinged.get(p.id, day).n >= TURN_PINGS_PER_DAY) return null;
       q.ping.run(otherOf(d, p.id) ?? p.id, p.id, day, now());
@@ -173,16 +180,18 @@ export function createDuels({ db, players, friends, analytics, notify, now = () 
 
   const nameOf = (id) => players.byId(id)?.name ?? 'соперник';
 
-  function turnNotice(d, skippedBy = null) {
+  async function turnNotice(d, skippedBy = null, { late = false } = {}) {
     const to = moverOf(d);
-    if (!to) return Promise.resolve(null);
+    if (!to) return null;
     const foe = nameOf(otherOf(d, to));
     const why = skippedBy ? `\n${foe} не успел походить — его ход пропущен.` : '';
-    if (d.turn === 1 && !skippedBy) {
-      return ping(d, to, `⚔️ ${foe} вызывает тебя на дуэль в Smiles!\n`
-        + 'Ходите по очереди, когда удобно, — твой ход первый. На ход 24 часа.', 'turn', '⚔️ Принять и ходить');
-    }
-    return ping(d, to, `⚔️ Твой ход против ${foe}!${why}\nДуэль по переписке: на ход 24 часа.`, 'turn');
+    const sent = d.turn === 1 && !skippedBy
+      ? await ping(d, to, `⚔️ ${foe} вызывает тебя на дуэль в Smiles!\n`
+        + 'Ходите по очереди, когда удобно, — твой ход первый. На ход 24 часа.', 'turn', '⚔️ Принять и ходить', { late })
+      : await ping(d, to, `⚔️ Твой ход против ${foe}!${why}\nДуэль по переписке: на ход 24 часа.`, 'turn', '⚔️ Ходить', { late });
+    // Написали — отмечаем; не написали («смотрит») — tick проверит позже
+    if (sent || late) q.notified.run(d.id);
+    return sent;
   }
 
   async function resultNotice(d, { only = null } = {}) {
@@ -237,7 +246,9 @@ export function createDuels({ db, players, friends, analytics, notify, now = () 
     const [p1, p2] = theyFirst ? [f.id, me.id] : [me.id, f.id];
     const id = q.add.run(p1, p2, null, seed, 'active', t + TURN_MS, t, t).lastInsertRowid;
     const d = q.byId.get(id);
+    // Создатель, который ходит сам, про свой ход знает; позванному — пишем
     if (theyFirst) turnNotice(d);
+    else q.notified.run(d.id);
     return { duel: view(d, me.id) };
   }
 
@@ -252,6 +263,8 @@ export function createDuels({ db, players, friends, analytics, notify, now = () 
     // иначе первый ход уже сделан, и часы второго идут с этой минуты
     if (d.turn === 1) q.joinFirst.run(me.id, t + TURN_MS, t, d.id);
     else q.join.run(me.id, t + TURN_MS, t, d.id);
+    // Принявший ходит сейчас и сам — писать ему «твой ход» не о чем
+    q.notified.run(d.id);
     return { duel: view(q.byId.get(d.id), me.id) };
   }
 
@@ -347,7 +360,7 @@ export function createDuels({ db, players, friends, analytics, notify, now = () 
    * @returns {Promise<{skipped: number, lost: number, reminded: number}>}
    */
   async function tick() {
-    const out = { skipped: 0, lost: 0, reminded: 0 };
+    const out = { skipped: 0, lost: 0, reminded: 0, late: 0 };
     if (ticking) return out;
     ticking = true;
     try {
@@ -368,6 +381,14 @@ export function createDuels({ db, players, friends, analytics, notify, now = () 
         });
         const fresh = q.byId.get(d.id);
         if (lost) { out.lost++; await resultNotice(fresh); } else { out.skipped++; await turnNotice(fresh, mover); }
+      }
+      // «Твой ход» не писали, потому что игрок смотрел дуэль, — а он ушёл,
+      // не дождавшись: новое состояние так и не открыл. Досылаем
+      for (const d of q.unnotified.all(t - NOTIFY_LATE)) {
+        const mover = moverOf(d);
+        const seen = mover === d.p1 ? d.seen1 : d.seen2;
+        if (seen && seen > d.updated_at) { q.notified.run(d.id); continue; }
+        if (await turnNotice(d, null, { late: true })) out.late++;
       }
       for (const d of q.remindDue.all({ now: t, before: REMIND_BEFORE })) {
         q.reminded.run(d.id);

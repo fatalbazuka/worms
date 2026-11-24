@@ -284,6 +284,13 @@ const MIGRATIONS = [
   );
   create index if not exists room_owner_created on room_owner (created_at);
   `,
+  // 13: за какой ход дуэли игроку уже написали «твой ход» (или он сам его
+  // увидел). Если писать не стали — «он же смотрит дуэль» — а он тут же
+  // закрыл игру, сообщение досылается по часам (server/duels.mjs tick)
+  `
+  alter table duel add column notified_turn integer;
+  update duel set notified_turn = turn;
+  `,
 ];
 
 export function openDb(path) {
