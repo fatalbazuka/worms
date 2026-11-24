@@ -856,22 +856,41 @@ export default class GameScene extends Phaser.Scene {
     this.rewatchBtn = this.rig.ui(this.add.text(x, y, '↺ Пересмотреть ход', font(20, 800, '#1a1408'))
       .setOrigin(0.5).setPadding(16, 8, 16, 8).setBackgroundColor('#ffd166')
       .setScrollFactor(0).setDepth(DEPTH.HUD + 14).setVisible(false));
-    this.rewatchBtn.setInteractive({ useHandCursor: true });
-    this.rewatchBtn.on('pointerup', () => this.rewatchDuel());
+    this._tapButton(this.rewatchBtn, () => this.rewatchDuel());
     // «Пропустить повтор» — там же, пока идёт показ хода соперника
     this.skipBtn = this.rig.ui(this.add.text(x, y, '▶▶ Пропустить повтор', font(20, 800, '#1a1408'))
       .setOrigin(0.5).setPadding(16, 8, 16, 8).setBackgroundColor('#ffd166')
       .setScrollFactor(0).setDepth(DEPTH.HUD + 14).setVisible(false));
-    this.skipBtn.setInteractive({ useHandCursor: true });
-    this.skipBtn.on('pointerup', () => { this.haptic?.('tap'); this.net?.skipShow?.(); });
-    // Часы своего хода идут с первого действия игрока
-    const begin = () => this.net?.begin?.();
+    this._tapButton(this.skipBtn, () => { this.haptic?.('tap'); this.net?.skipShow?.(); });
+    // Часы своего хода идут с первого действия игрока. Тап по самим кнопкам
+    // повтора — не действие: иначе «Пересмотреть» гасла бы под пальцем
+    const begin = (pointer, over) => {
+      if (Array.isArray(over) && (over.includes(this.rewatchBtn) || over.includes(this.skipBtn))) return;
+      this.net?.begin?.();
+    };
     this.input.on('pointerdown', begin);
     this.input.keyboard?.on('keydown', begin);
     this.events.once('shutdown', () => {
       this.input.off('pointerdown', begin);
       this.input.keyboard?.off('keydown', begin);
     });
+  }
+
+  /**
+   * Кнопка поверх поля, которая слушается только настоящего тапа: палец и
+   * опустили, и подняли на ней. Раньше хватало отпускания: рычаг прицела
+   * тянут вниз, отпускают над кнопкой — и вместо выстрела она нажималась.
+   */
+  _tapButton(obj, onTap) {
+    obj.setInteractive({ useHandCursor: true });
+    let downTime = null;
+    obj.on('pointerdown', (pointer) => { downTime = pointer.downTime; });
+    obj.on('pointerup', (pointer) => {
+      const mine = downTime !== null && pointer.downTime === downTime;
+      downTime = null;
+      if (mine && pointer.getDistance() < 24) onTap();
+    });
+    return obj;
   }
 
   /**
@@ -3040,8 +3059,7 @@ export default class GameScene extends Phaser.Scene {
     ensureButton(this, `ui-over-${w}x${h}-${variant}`, w, h, variant);
     const img = this.rig.ui(this.add.image(x, y, `ui-over-${w}x${h}-${variant}`)
       .setScrollFactor(0).setDepth(DEPTH.HUD + 12));
-    img.setInteractive({ useHandCursor: true });
-    img.on('pointerup', onTap);
+    this._tapButton(img, onTap);
     const text = this.rig.ui(this.add.text(x, y, label, font(26, 800))
       .setOrigin(0.5).setScrollFactor(0).setDepth(DEPTH.HUD + 13));
     this.gameOverUi?.push(text);

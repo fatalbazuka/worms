@@ -166,9 +166,10 @@ export class DuelSession {
   /** Есть что пересмотреть, и это не сотрёт начатый ход. */
   get canRewatch() {
     if (!(this.duel.turns ?? []).length) return false;
-    // Свой ход идёт: пересмотр соберёт партию заново, и шаги этого хода
-    // пропадут — до выстрела не жалко, после выстрела нельзя
-    if (this.phase === 'play') return !this.rec || !this.rec.cmds.some((c) => c.k === 'shot');
+    // Свой ход: пересмотреть можно, пока к нему не притронулся (часы ещё
+    // стоят). Начал ходить — кнопки нет: она внизу, ровно там, куда тянут
+    // рычаг прицела, и отпускание над ней сбрасывало ход в повтор соперника
+    if (this.phase === 'play') return !this.started;
     return this.phase === 'wait' || this.phase === 'sent' || this.phase === 'over';
   }
 
