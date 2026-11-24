@@ -380,6 +380,17 @@ export class DuelSession {
     if (this.phase === 'play' && this.rec) this.rec.cmds.push({ k: 'shot', at: this._at(), cmd });
   }
 
+  /**
+   * Взрыв своего хода — в историю: где, кого и на сколько задел. В показе
+   * хода не участвует (там приказы и снимок), нужен для разбора партии:
+   * /duellog у бота покажет, попал выстрел или прошёл мимо.
+   */
+  noteBoom(b) {
+    if (this.phase !== 'play' || !this.rec) return;
+    if (this.rec.cmds.filter((c) => c.k === 'boom').length >= 24) return;
+    this.rec.cmds.push({ k: 'boom', at: this._at(), ...b });
+  }
+
   sendSplit(m) {
     if (this.phase === 'play' && this.rec) this.rec.cmds.push({ k: 'split', at: this._at(), turn: m.turn, t: m.t });
   }

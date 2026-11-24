@@ -689,7 +689,7 @@ check('«твой ход» бот не пишет', !calls('sendMessage').some((
   const ddb = openDb(':memory:');
   const warns = [];
   const dapp = createApp({
-    db: ddb, botToken: BOT, mediaDir, publicUrl: 'https://example.test/worms',
+    db: ddb, botToken: BOT, mediaDir, adminIds: [7001], publicUrl: 'https://example.test/worms',
     telegramApiBase: `http://127.0.0.1:${fakeTg.address().port}`, now: () => clock,
     log: { warn: (m) => warns.push(String(m)), log() {}, error: console.error },
   });
@@ -819,6 +819,28 @@ check('«твой ход» бот не пишет', !calls('sendMessage').some((
   check('«твой ход» досылается, если игрок ушёл, не увидев ход соперника; один раз',
     quiet && lateTick.late === 1 && /Твой ход против Гость/.test(lateMsg) && lateAgain.late === 0
       && msgsTo(7003).length === toC0 + 1, `${quiet} ${JSON.stringify(lateTick)} ${lateMsg}`);
+
+  // /duellog: разбор дуэли по ходам — чем стрелял, куда пришёл взрыв, здоровье
+  {
+    const lg = (await call('POST', '/api/duels', { link: true, theyFirst: true }, A.token)).data.duel;
+    await call('POST', '/api/duels/join', { code: lg.code }, C.token);
+    const st = (n, hp) => ({ turn: n + 1, team: n % 2, worms: [{ x: 1, y: 2, hp: hp[0], alive: true }, { x: 5, y: 2, hp: hp[1], alive: true }] });
+    await call('POST', `/api/duels/${lg.id}/turn`, { turn: 1, hash: 'a', state: st(1, [100, 64]), cmds: [
+      { k: 'shot', at: 100, cmd: { type: 'shot', turn: 1, worm: 0, vx: 1, vy: 1, weapon: 0 } },
+      { k: 'boom', at: 900, x: 5, y: 2, r: 72, hits: [[1, 36]], near: 12 }] }, C.token);
+    await call('POST', `/api/duels/${lg.id}/turn`, { turn: 2, hash: 'b', state: st(2, [100, 64]), cmds: [
+      { k: 'shot', at: 100, cmd: { type: 'shot', turn: 2, worm: 1, vx: 1, vy: 1, weapon: 17 } },
+      { k: 'boom', at: 900, x: 300, y: 2, r: 72, hits: [], near: 140 }] }, A.token);
+    await hook({ message: { from: { id: 7001, first_name: 'Хозяин' }, chat: { id: 7001, type: 'private' }, text: `/duellog ${lg.id}` } });
+    const text = msgsTo(7001).at(-1)?.params.text ?? '';
+    check('/duellog: по ходам — оружие, взрыв (задел или мимо) и здоровье с разницей',
+      /1\. Чужой: базука → задел #1 −36/.test(text) && /HP 100\/64/.test(text)
+        && /2\. Хозяин: самонаводка → мимо \(до бойца 140px, радиус 72\)/.test(text), text);
+    const stranger = msgsTo(7003).length;
+    await hook({ message: { from: { id: 7003, first_name: 'Чужой' }, chat: { id: 7003, type: 'private' }, text: `/duellog ${lg.id}` } });
+    check('/duellog — только админу', !/Дуэль \d+:/.test(msgsTo(7003).slice(stranger).map((m) => m.params.text).join()));
+    await call('POST', `/api/duels/${lg.id}/resign`, null, A.token);
+  }
 
   // Сдаться: дуэль соперника, пишем только ему. Ночью — без звука
   clock = Date.UTC(2026, 10, 27, 21, 30);           // 00:30 МСК

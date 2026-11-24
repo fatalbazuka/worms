@@ -262,9 +262,11 @@ for (let k = 2; k <= 7; k++) {
   if (during.phase === 'replay') check(`ход ${k}: пока идёт повтор хода соперника — ходить нельзя`, !during.act);
   // Урон из повтора виден: цифра над бойцом, когда приходит итог хода
   if (during.phase === 'replay' && k !== 3) {
+    // Точка отсчёта — когда история уже собрана и начался показ последнего хода
+    await p.waitForFunction(() => { const n = window.__WORMS__.scene.getScene('Game').net; return n.showing || n.phase !== 'replay'; }, null, { timeout: 60000 }).catch(() => {});
     await p.evaluate(() => {
       const s = window.__WORMS__.scene.getScene('Game');
-      if (s.__dmgSpy) return;
+      if (s.__dmgSpy || !s.net.showing) return;
       s.__dmgSpy = true; window.__shown = 0; window.__hp0 = s.worms.map((w) => w.health);
       const f = s.fx.damageNumber.bind(s.fx);
       s.fx.damageNumber = (x, y, n) => { window.__shown += n; return f(x, y, n); };
@@ -380,6 +382,15 @@ check('сервер подтверждает: у следующего игрок
   moves.filter((t) => t.seen_hash).length >= moves.length - 1
     && moves.every((t) => !t.seen_hash || t.seen_hash === t.hash), JSON.stringify(serverTurns));
 check('в истории есть пропуск по сроку', serverTurns.some((t) => t.kind === 'skip'));
+{
+  // Взрывы своего хода — в истории: кого и на сколько задел (для /duellog)
+  const booms = db.prepare("select cmds from duel_turn where duel_id = ? and kind = 'move'").all(duelId)
+    .flatMap((t) => JSON.parse(t.cmds).filter((c) => c.k === 'boom'));
+  const dealt = booms.flatMap((b) => b.hits).reduce((a, [, dmg]) => a + dmg, 0);
+  check('взрывы ходов записаны в историю: где, кого и на сколько задел',
+    booms.length >= moves.length - 1 && booms.every((b) => Number.isFinite(b.x) && Array.isArray(b.hits)) && dealt > 0,
+    `${booms.length} взрывов, урона ${dealt}`);
+}
 const real = await pages[0].evaluate(() => {
   const s = window.__WORMS__.scene.getScene('Game');
   return { hp: s.worms.map((w) => w.health), craters: s.explosionHistory.length };

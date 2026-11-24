@@ -2092,10 +2092,15 @@ export default class GameScene extends Phaser.Scene {
     let ouch = null, ouchDmg = 0;
     const shooter = owner?.team ?? this.turn.currentTeam;
     let foesHit = 0;
+    // Для истории хода дуэли: кого и на сколько задел этот взрыв, а если
+    // никого — как далеко был ближайший (разбор «попал, а урона нет»)
+    const boomHits = [];
+    let boomNear = Infinity;
     for (const w of this.worms) {
       if (!w.alive) continue;
       const wx = w.x, wy = w.centerY;
       const d = Math.hypot(wx - x, wy - y);
+      if (w.team !== shooter) boomNear = Math.min(boomNear, d);
       // Мимо, но рядом — подпрыгнул от испуга
       if (d > cfg.damageRadius && d < cfg.damageRadius + 130) w.startle();
       if (d > cfg.damageRadius) continue;
@@ -2108,6 +2113,7 @@ export default class GameScene extends Phaser.Scene {
       w.applyImpulse(nx * cfg.knockback * f, ny * cfg.knockback * f - 70 * f);
 
       w.damage(dmg, 'взрыв');
+      if (dmg > 0) boomHits.push([this.worms.indexOf(w), dmg]);
       if (dmg > 0) felt = Math.max(felt, this.isLocalTeam(w.team) ? 2 : 1);
       if (dmg > 0) this._countHit(w, dmg);
       if (dmg > 0 && w.team !== shooter) {
@@ -2118,6 +2124,7 @@ export default class GameScene extends Phaser.Scene {
     }
     this._blastBy = undefined;
     this._blastCfg = undefined;
+    this.net?.noteBoom?.({ x: ix, y: iy, r: cfg.damageRadius, hits: boomHits, near: Number.isFinite(boomNear) ? Math.round(boomNear) : null });
     this._impact(x, y, ouchDmg, foesHit);
     // Сильно досталось — боец вскрикивает. Царапины молча, иначе «ой» на каждый чих
     if (ouch && ouchDmg >= 25 && !this.gameOverUi) voice.say('hurt', { team: ouch.team });

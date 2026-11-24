@@ -56,6 +56,10 @@ export function webhookSecret(token, explicit = '') {
   return createHash('sha256').update(`worms-webhook:${token}`).digest('hex').slice(0, 48);
 }
 
+/** Оружие по номеру, как в игре (src/weapons/index.js): для разбора дуэли. */
+const DUEL_WEAPONS = ['базука', 'граната', 'кассета', 'крот', 'банан', 'святая граната', 'динамит', 'миномёт', 'дробовик',
+  'мина', 'бита', 'авиаудар', 'телепорт', 'гиря', 'липучка', 'батут', 'бумеранг', 'самонаводка'];
+
 export function createBot({ db, api, players, tournaments, analytics = null, admin: adminPanel = null, adminIds = new Set(), publicUrl = '',
   tz = 'Europe/Moscow', now = () => Date.now(), log = console, appName = '', promos = null, duels = () => null }) {
   const q = {
@@ -323,6 +327,7 @@ export function createBot({ db, api, players, tournaments, analytics = null, adm
     '/newweb логин [имя] — отдельный аккаунт только для сайта, без Telegram',
     '/newpromo КОД [коробок=3] [монет=0] [скин=id] [раз=100] [дней=30] — новый промокод',
     '/promos — промокоды и сколько активировали · /delpromo КОД — выключить',
+    '/duellog [ID] — разбор дуэли по ходам: чем стрелял, куда пришёл взрыв, здоровье (без ID — твоя последняя)',
   ].join('\n');
 
   /**
@@ -418,6 +423,37 @@ export function createBot({ db, api, players, tournaments, analytics = null, adm
           + [p.boxes && `коробок ${p.boxes}`, p.coins && `монет ${p.coins}`, p.skin && `скин ${p.skin}`].filter(Boolean).join(', ')
           + `${p.maxUses ? ` · до ${p.maxUses} активаций` : ' · без лимита'}${p.expiresAt ? ` · до ${fmtTime(p.expiresAt)}` : ''}.\n`
           + `Игрок вводит его в игре (Скины → Промокод) или пишет боту /promo ${p.code}`);
+      }
+      case '/duellog': {
+        // Разбор дуэли по истории ходов: что записал ходивший. Истина партии —
+        // снимок хода; здесь видно, попал выстрел или прошёл мимо
+        const d = /^\d+$/.test(args[0] ?? '')
+          ? db.prepare('select * from duel where id = ?').get(Number(args[0]))
+          : db.prepare('select * from duel where p1 = ? or p2 = ? order by updated_at desc limit 1').get(me.id, me.id);
+        if (!d) return send(chat, 'Нет такой дуэли. /duellog ID');
+        const turns = db.prepare('select n, player_id, kind, cmds, state, hash, seen_hash from duel_turn where duel_id = ? order by n').all(d.id);
+        const nameOf = (id) => players.byId(id)?.name ?? '?';
+        const json = (t) => { try { return JSON.parse(t); } catch { return null; } };
+        let prev = null;
+        const lines = turns.map((t) => {
+          const who = nameOf(t.player_id);
+          if (t.kind === 'skip') return `${t.n}. ${who}: ход пропущен`;
+          const cmds = json(t.cmds) ?? [], st = json(t.state);
+          const shots = cmds.filter((c) => c.k === 'shot').map((c) => DUEL_WEAPONS[c.cmd?.weapon] ?? `#${c.cmd?.weapon}`);
+          const booms = cmds.filter((c) => c.k === 'boom').map((b) => (b.hits?.length
+            ? `задел ${b.hits.map(([i, dmg]) => `#${i} −${dmg}`).join(', ')}`
+            : `мимо${b.near != null ? ` (до бойца ${b.near}px, радиус ${b.r})` : ''}`));
+          const hp = st?.worms?.map((w) => (w.alive ? w.hp : '†')) ?? [];
+          const delta = prev && hp.length === prev.length
+            ? hp.map((h, i) => (typeof h === 'number' && typeof prev[i] === 'number' && h !== prev[i] ? `#${i} ${h - prev[i] > 0 ? '+' : ''}${h - prev[i]}` : null)).filter(Boolean).join(', ')
+            : '';
+          prev = hp;
+          const diverged = t.seen_hash && t.hash && t.seen_hash !== t.hash ? ' ⚠️ у соперника итог сошёлся иначе' : '';
+          return `${t.n}. ${who}: ${shots.length ? shots.join('+') : 'без выстрела'}`
+            + `${booms.length ? ` → ${booms.join('; ')}` : ''}\n   HP ${hp.join('/')}${delta ? ` (${delta})` : ''}${diverged}`;
+        });
+        const head = `⚔️ Дуэль ${d.id}: ${nameOf(d.p1)} (бойцы #0,#2) — ${d.p2 ? nameOf(d.p2) : '…'} (бойцы #1,#3) · ${d.status} · ход ${d.turn}`;
+        return send(chat, [head, ...(lines.length > 14 ? ['…', ...lines.slice(-14)] : lines)].join('\n').slice(0, 4000));
       }
       case '/promos': {
         if (!promos) return send(chat, 'промокоды недоступны');
