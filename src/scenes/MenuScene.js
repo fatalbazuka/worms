@@ -633,8 +633,8 @@ export default class MenuScene extends Phaser.Scene {
         this.items.push(this.add.circle(cx + subW * 1.5 + gap - 6, subY - sub.h / 2 + 4, 15, 0xff4d4d).setStrokeStyle(3, 0x0b1018));
         this.items.push(this.add.text(cx + subW * 1.5 + gap - 6, subY - sub.h / 2 + 4, String(n), font(16, 900, '#ffffff')).setOrigin(0.5));
       }
-      if (loggedIn()) this._refreshDuelBadge();
     }
+    if (loggedIn()) this._refreshDuelBadge();
 
     // Партия оборвалась (Telegram перезапустился, погас экран), а мы
     // открылись без ссылки: предлагаем вернуться, пока соперник ждёт
@@ -649,6 +649,18 @@ export default class MenuScene extends Phaser.Scene {
         { w: 360, h: 60, variant: 'active' });
       this._button('resume-no', cx + 184, y, '✕', '',
         () => { forgetSession(pending.room); this.showRoot(); }, { w: 56, h: 56 });
+      areaBottom = y - 44;
+    }
+    // Дуэль ждёт твоего хода — строкой над «Играть», в один тап. Видна и
+    // новичку: он принял вызов друга, а раздела «С друзьями» у него ещё нет
+    const dn = this.duelsTurn ?? 0;
+    if (dn > 0 || (tutorial && (this.duelsLive ?? 0) > 0)) {
+      const y = areaBottom - 30;
+      const one = dn === 1 && this.duelsNext;
+      this._button('duel-turn', cx, y, dn ? '⚔️ Твой ход в дуэли' : 'Мои дуэли',
+        dn ? (one ? `против ${this.duelsNext.name}` : `ждут твоего хода: ${dn}`) : 'ход соперника · бот напишет',
+        () => (one ? this.openDuel(this.duelsNext.id) : this.showDuels()),
+        { w: 360, h: 60, variant: dn ? 'active' : 'normal' });
       areaBottom = y - 44;
     }
 
@@ -2947,11 +2959,25 @@ export default class MenuScene extends Phaser.Scene {
   _refreshDuelBadge() {
     if (Date.now() - (this.duelsAt ?? 0) < 15_000) return;
     this.duelsAt = Date.now();
-    fetchDuels().then((r) => {
-      if (!r || r.myTurn === (this.duelsTurn ?? 0)) return;
-      this.duelsTurn = r.myTurn;
+    // Сначала дослать ход, который не дошёл (оборвалась сеть, закрыли игру):
+    // раньше он уходил, только когда открывали саму дуэль
+    flushPendingTurns().then(() => fetchDuels()).then((r) => {
+      if (!r || !this._noteDuels(r)) return;
       if (this.section === this.showRoot || this.section === this.showSocial) this.section.call(this);
     });
+  }
+
+  /** Запомнить сводку дуэлей для главного экрана. @returns {boolean} изменилась ли */
+  _noteDuels(r) {
+    const next = r.items.find((d) => d.myTurn) ?? null;
+    const live = r.items.filter((d) => d.status === 'active').length;
+    const key = `${r.myTurn}:${next?.id ?? 0}:${live}`;
+    const changed = key !== this.duelsKey;
+    this.duelsKey = key;
+    this.duelsTurn = r.myTurn;
+    this.duelsLive = live;
+    this.duelsNext = next ? { id: next.id, name: next.opponent?.name ?? 'соперника' } : null;
+    return changed;
   }
 
   /**
@@ -2965,7 +2991,8 @@ export default class MenuScene extends Phaser.Scene {
     const cx = this.W / 2;
     const note = this.add.text(cx, 150, 'загружаю…', font(this.fs(14), 700, UI.textDim)).setOrigin(0.5, 0);
     this.items.push(note);
-    this._back(() => this.showSocial());
+    // Новичку раздел «С друзьями» ещё не показан — ему назад на главный
+    this._back(() => (onboardStage() === 'tutorial' ? this.showRoot() : this.showSocial()));
     if (!loggedIn()) {
       note.setText('Дуэли по переписке живут на сервере — открой игру в Telegram.');
       return;
@@ -2975,7 +3002,7 @@ export default class MenuScene extends Phaser.Scene {
     flushPendingTurns().then(() => fetchDuels()).then((r) => {
       if (!still()) return;
       if (!r) { note.setText('сервер недоступен — попробуй позже'); return; }
-      this.duelsTurn = r.myTurn;
+      this._noteDuels(r);
       this.duelsAt = Date.now();
       note.destroy();
       this._renderDuels(r);

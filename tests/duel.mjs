@@ -182,6 +182,23 @@ pages[0] = null;
 // --- Боря открыл по кнопке бота и сходил; Ане бот пишет «твой ход» ---
 pages[1] = await open(1, `?duel=${duelId}`);
 await waitPhase(pages[1], ['play']);
+// Ход «пропадал»: 25 секунд съедала загрузка истории и повтор соперника
+const clock = await pages[1].evaluate(() => {
+  const s = window.__WORMS__.scene.getScene('Game');
+  return { left: s.turn.timeLeft, full: s.turnTime };
+});
+check('дуэль: свой ход начинается с полными часами, на ход минута', clock.full === 60 && clock.left > 55, JSON.stringify(clock));
+// Часы стоят, пока игрок не тронул экран, и идут после первого касания
+await pages[1].waitForTimeout(1500);
+const idle = await pages[1].evaluate(() => window.__WORMS__.scene.getScene('Game').turn.timeLeft);
+await pages[1].evaluate(() => window.__WORMS__.scene.getScene('Game').input.emit('pointerdown', {}));
+await pages[1].waitForTimeout(1500);
+const ticking = await pages[1].evaluate(() => {
+  const s = window.__WORMS__.scene.getScene('Game');
+  return { left: s.turn.timeLeft, started: s.net.started };
+});
+check('дуэль: часы хода стоят до первого касания и идут после', idle === 60 && ticking.started && ticking.left < 60,
+  `${idle} → ${JSON.stringify(ticking)}`);
 await playTurn(pages[1], 1);
 const pinged = tgCalls.filter((c) => c.method === 'sendMessage' && c.params.chat_id === 811 && /ход/.test(c.params.text));
 check('Ане бот пишет «твой ход против Боря» с кнопкой в дуэль', pinged.length === 1
@@ -210,7 +227,22 @@ for (let k = 2; k <= 7; k++) {
     continue;
   }
   await pages[i]?.close();
-  pages[i] = await open(i, `?duel=${duelId}`);
+  if (k === 2) {
+    // Аня открыла игру не по кнопке бота: на главном — «Твой ход в дуэли», один тап
+    pages[i] = await open(i);
+    await pages[i].waitForFunction(() => Boolean(window.__WORMS__?.scene.getScene('Menu')?.buttonHandlers?.['duel-turn']), null, { timeout: 40000 })
+      .catch(() => {});
+    const strip = await pages[i].evaluate(() => {
+      const m = window.__WORMS__.scene.getScene('Menu');
+      const has = Boolean(m.buttonHandlers?.['duel-turn']);
+      if (has) m.buttonHandlers['duel-turn']();
+      return has;
+    });
+    check('на главном экране — «Твой ход в дуэли», ведёт прямо в неё', strip);
+    if (!strip) { await pages[i].close(); pages[i] = await open(i, `?duel=${duelId}`); }
+  } else {
+    pages[i] = await open(i, `?duel=${duelId}`);
+  }
   const p = pages[i];
   await waitPhase(p, ['replay', 'play']);
   // Во время повтора соперника ходить нельзя

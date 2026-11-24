@@ -806,6 +806,20 @@ check('«твой ход» бот не пишет', !calls('sendMessage').some((
       && first.status === 200 && /Твой ход против Чужой/.test(nudge),
     `${JSON.stringify(inv)} ${early.status} ${JSON.stringify(accepted.data?.duel)} ${first.status} ${nudge}`);
 
+  // Сходил и тут же закрыл игру, а соперник ответил через секунды: «он же
+  // смотрит» — сразу не пишем, но хода он не увидел — сообщение досылается
+  await call('GET', `/api/duels/${inv.id}`, null, C.token);
+  const toC0 = msgsTo(7003).length;
+  await call('POST', `/api/duels/${inv.id}/turn`, turn(2), B.token);
+  const quiet = msgsTo(7003).length === toC0;
+  clock += 50_000;
+  const lateTick = await dapp.duels.tick();
+  const lateMsg = msgsTo(7003).slice(toC0).map((m) => m.params.text).join(' | ');
+  const lateAgain = await dapp.duels.tick();
+  check('«твой ход» досылается, если игрок ушёл, не увидев ход соперника; один раз',
+    quiet && lateTick.late === 1 && /Твой ход против Гость/.test(lateMsg) && lateAgain.late === 0
+      && msgsTo(7003).length === toC0 + 1, `${quiet} ${JSON.stringify(lateTick)} ${lateMsg}`);
+
   // Сдаться: дуэль соперника, пишем только ему. Ночью — без звука
   clock = Date.UTC(2026, 10, 27, 21, 30);           // 00:30 МСК
   const rev = r.data.duel;

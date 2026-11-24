@@ -843,6 +843,14 @@ export default class GameScene extends Phaser.Scene {
       .setScrollFactor(0).setDepth(DEPTH.HUD + 14).setVisible(false));
     this.rewatchBtn.setInteractive({ useHandCursor: true });
     this.rewatchBtn.on('pointerup', () => this.rewatchDuel());
+    // Часы своего хода идут с первого действия игрока
+    const begin = () => this.net?.begin?.();
+    this.input.on('pointerdown', begin);
+    this.input.keyboard?.on('keydown', begin);
+    this.events.once('shutdown', () => {
+      this.input.off('pointerdown', begin);
+      this.input.keyboard?.off('keydown', begin);
+    });
   }
 
   /**
@@ -981,7 +989,7 @@ export default class GameScene extends Phaser.Scene {
     const n = this.net;
     const who = `дуэль с ${n.opponent.name}`;
     if (n.phase === 'replay') return [`${who} · повтор хода соперника`, '#ffd166'];
-    if (n.phase === 'play') return [`${who} · твой ход`, '#8ef0a0'];
+    if (n.phase === 'play') return [`${who} · твой ход${n.started ? '' : ' · часы пойдут, когда начнёшь'}`, '#8ef0a0'];
     if (n.phase === 'over') return [`${who} · окончена`, '#ffd166'];
     const left = n.duel.deadline ? Math.max(0, n.duel.deadline - Date.now()) : null;
     const h = left === null ? null : Math.floor(left / 3600_000);
@@ -1516,6 +1524,12 @@ export default class GameScene extends Phaser.Scene {
    */
   _turnClock(realDt, physDt) {
     if (this.waitingPeer) return 0;
+    // Дуэль: пока история не восстановлена и идёт повтор — часы стоят.
+    // Раньше 25 секунд хода съедались загрузкой и показом хода соперника,
+    // и свой ход «пропадал», едва начавшись
+    // И пока игрок не начал свой ход (первое касание или клавиша): можно
+    // спокойно осмотреть поле после повтора
+    if (this.net?.isDuel && (!this.net.ready || !this.net.started)) return 0;
     if (this.net || this.room) return realDt;
     return Math.min(realDt, Math.max(physDt, realDt / CFG.TURN_CLOCK_STRETCH));
   }
@@ -1888,6 +1902,10 @@ export default class GameScene extends Phaser.Scene {
    */
   awaitingPeer() {
     if (!this.net?.connected) return false;
+    // Дуэль: пока идёт повтор хода (в том числе своего — «Пересмотреть
+    // ход»), очередь ведёт история, а не мы: иначе в повторе своего хода
+    // не было видно ходьбы, а после выстрела он висел до тайм-аута
+    if (this.net.isDuel && this.net.phase === 'replay') return this.checkVictory() === null;
     if (this.turn.currentTeam === this.net.myTeam) return false;
     return this.checkVictory() === null;
   }
