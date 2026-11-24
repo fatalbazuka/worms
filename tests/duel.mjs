@@ -188,6 +188,12 @@ const clock = await pages[1].evaluate(() => {
   return { left: s.turn.timeLeft, full: s.turnTime };
 });
 check('дуэль: свой ход начинается с полными часами, на ход минута', clock.full === 60 && clock.left > 55, JSON.stringify(clock));
+const arsenal = await pages[1].evaluate(() => {
+  const s = window.__WORMS__.scene.getScene('Game');
+  return { ids: s.loadout, ammo: s.loadoutIdx.map((i) => s.turn.ammo[0][i] === s.turn.ammo[1][i] && s.turn.ammo[0][i] > 0) };
+});
+check('дуэль: арсенал боя — пять оружий сверх базовых, у обеих сторон поровну',
+  arsenal.ids.length === 5 && arsenal.ammo.every(Boolean), JSON.stringify(arsenal));
 // Часы стоят, пока игрок не тронул экран, и идут после первого касания
 await pages[1].waitForTimeout(1500);
 const idle = await pages[1].evaluate(() => window.__WORMS__.scene.getScene('Game').turn.timeLeft);

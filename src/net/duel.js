@@ -43,7 +43,12 @@ export const DUEL_TURN_TIME = 60;
 
 export function duelMatch(duel) {
   const m = towerMatch(null);
-  return { ...m, mode: 'duel', seed: duel.seed, duelId: duel.id, rules: { ...m.rules, turnTime: DUEL_TURN_TIME } };
+  // Арсенал боя — в дуэлях по новым правилам (сервер: duel.rules >= 2):
+  // начатая раньше доигрывается без него, её патроны уже в истории ходов
+  return {
+    ...m, mode: 'duel', seed: duel.seed, duelId: duel.id,
+    rules: { ...m.rules, turnTime: DUEL_TURN_TIME, loadout: (duel.rules ?? 1) >= 2 },
+  };
 }
 
 /** Самые длинные паузы в повторе чужого хода: думал он долго, смотреть — нет. */

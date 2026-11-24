@@ -291,6 +291,12 @@ const MIGRATIONS = [
   alter table duel add column notified_turn integer;
   update duel set notified_turn = turn;
   `,
+  // 14: по каким правилам идёт дуэль. 1 — как было; 2 — с «арсеналом боя»
+  // (пять оружий сверх базовых у обеих сторон). Начатые раньше дуэли
+  // доигрываются по своим правилам: их патроны уже записаны в ходах
+  `
+  alter table duel add column rules integer not null default 1;
+  `,
 ];
 
 export function openDb(path) {
