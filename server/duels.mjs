@@ -39,6 +39,8 @@ import { tx } from './db.mjs';
 import { skinSql } from './players.mjs';
 import { SKIN_IDS } from './shop.mjs';
 
+/** Версия правил новых дуэлей: 2 — с «арсеналом боя» (клиент: net/duel.js duelMatch). */
+export const RULES = 2;
 export const TURN_MS = 24 * 3600_000;
 export const REMIND_BEFORE = 2 * 3600_000;
 export const MAX_ACTIVE = 5;
@@ -56,8 +58,8 @@ export function createDuels({ db, players, friends, analytics, notify, now = () 
     byId: db.prepare('select * from duel where id = ?'),
     byCode: db.prepare('select * from duel where code = ?'),
     active: db.prepare(`select count(*) as n from duel where (p1 = $p or p2 = $p) and status in ('open', 'active')`),
-    add: db.prepare(`insert into duel (p1, p2, code, seed, status, deadline, created_at, updated_at)
-                     values (?, ?, ?, ?, ?, ?, ?, ?)`),
+    add: db.prepare(`insert into duel (p1, p2, code, seed, status, deadline, created_at, updated_at, rules)
+                     values (?, ?, ?, ?, ?, ?, ?, ?, ${RULES})`),
     mine: db.prepare(`select * from duel where (p1 = $p or p2 = $p)
                         and (status in ('open', 'active') or coalesce(finished_at, 0) > $since)
                       order by case when status in ('open', 'active') then 0 else 1 end, updated_at desc limit 30`),
@@ -129,7 +131,7 @@ export function createDuels({ db, players, friends, analytics, notify, now = () 
     // не надо — первым пойдёт принявший
     const invite = isInvite(d);
     const out = {
-      id: d.id, seed: d.seed, status: d.status, turn: d.turn, deadline: d.deadline,
+      id: d.id, seed: d.seed, status: d.status, turn: d.turn, deadline: d.deadline, rules: d.rules ?? 1,
       winner: d.winner ? (d.winner === d.p1 ? 0 : 1) : null, reason: d.reason ?? null,
       me: team, p1: pub(d.p1), p2: pub(d.p2), opponent: pub(team === 0 ? d.p2 : d.p1),
       myTurn: !invite && (d.status === 'active' || d.status === 'open') && mover === meId,

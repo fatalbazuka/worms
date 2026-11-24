@@ -407,12 +407,18 @@ check('один в лобби никого не находит', findMatch(p('a'
   const zero = new Set(WEAPONS.filter((w) => w.startAmmo === 0).map((w) => w.id));
   check('арсенал боя: то же зерно — тот же набор из трёх без стартовых',
     a.length === 3 && a.join() === b.join() && a.every((id) => zero.has(id)) && new Set(a).size === 3, a.join());
+  // С человеком — пять: те же три и ещё два
+  const five = battleLoadout(123456, WEAPONS, 5);
+  check('арсенал боя с человеком: пять разных, в них те же три',
+    five.length === 5 && new Set(five).size === 5 && a.every((id) => five.includes(id)) && five.every((id) => zero.has(id)), five.join());
   const seen = new Set();
   for (let s = 1; s <= 200; s++) for (const id of battleLoadout(s, WEAPONS)) seen.add(id);
   check('арсенал боя: разные зёрна — разные гости', seen.size >= 8, String(seen.size));
   check('арсенал боя: только в боях без своих правил оружия',
     loadoutApplies(towerMatch('rookie')) && loadoutApplies(dailyMatch('2026-11-20'))
-      && !loadoutApplies(onlineMatch()) && !loadoutApplies(towerMatch(null), { online: true })
+      && loadoutApplies(onlineMatch())
+      && loadoutApplies({ ...towerMatch(null), mode: 'duel', rules: { loadout: true } })
+      && !loadoutApplies({ ...towerMatch(null), mode: 'duel', rules: { loadout: false } })
       && !loadoutApplies(challengeMatch('first')) && !loadoutApplies(tutorialMatch())
       && !loadoutApplies(ascentMatch('up-1')));
 }

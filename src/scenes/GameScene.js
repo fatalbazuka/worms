@@ -19,7 +19,7 @@ import { AimController } from '../ui/AimController.js';
 import { ShotTrace } from '../ui/ShotTrace.js';
 import { KoLog } from '../ui/KoLog.js';
 import { koCause, koSummary } from '../core/knockouts.js';
-import { battleLoadout, loadoutApplies, loadoutAmmo } from '../core/loadout.js';
+import { battleLoadout, loadoutApplies, loadoutAmmo, LOADOUT_SIZE, PVP_LOADOUT_SIZE } from '../core/loadout.js';
 import { currentGoal } from '../platform/nextgoal.js';
 import { plural } from '../core/nextgoal.js';
 import { font, UI, ensureButton } from '../ui/theme.js';
@@ -692,20 +692,25 @@ export default class GameScene extends Phaser.Scene {
   }
 
   /**
-   * «Арсенал боя»: обеим сторонам — те же три оружия по зерну партии
-   * (core/loadout.js). Не в сети и не в дуэли: старый клиент из кэша их бы
-   * не выдал, а снимок хода переносит патроны от одного к другому.
+   * «Арсенал боя»: обеим сторонам — те же оружия по зерну партии
+   * (core/loadout.js): три в бою с ботом, пять — с человеком (онлайн и
+   * дуэль). В сети у обоих зерно одно, а патроны сверяет снимок хода.
    */
   _applyLoadout() {
     this.loadout = [];
     this.loadoutIdx = [];
-    const online = Boolean(startRoom()) || this.match.mode === 'duel';
-    if (!loadoutApplies(this.match, { online })) return;
-    this.loadout = battleLoadout(this.seed, WEAPONS);
+    if (!loadoutApplies(this.match)) return;
+    // С человеком (онлайн, дуэль) арсенал шире — пять оружий
+    // (и вдвоём на одном телефоне: бота в партии нет)
+    const pvp = this.match.mode === 'online' || this.match.mode === 'duel'
+      || !this.match.teams.some((t) => t.control === 'bot');
+    this.loadout = battleLoadout(this.seed, WEAPONS, pvp ? PVP_LOADOUT_SIZE : LOADOUT_SIZE);
     this.loadoutIdx = this.loadout.map((id) => WEAPONS.findIndex((w) => w.id === id));
     for (const row of this.turn.ammo) {
       for (const i of this.loadoutIdx) if (row[i] !== null) row[i] += loadoutAmmo(WEAPONS[i]);
     }
+    // В дуэли плашку показываем только в начале партии: открывают её десятки раз
+    if (this.match.mode === 'duel' && (this.registry.get('duel')?.turns?.length ?? 0) >= 2) return;
     this.time.delayedCall(this.variant?.intro ? 3300 : 700, () => this._announceLoadout());
   }
 
@@ -728,15 +733,25 @@ export default class GameScene extends Phaser.Scene {
       return { icon, name, w: (icon ? 46 : 0) + name.width };
     });
     const gap = 26;
-    const total = row.reduce((a, r) => a + r.w, 0) + gap * (row.length - 1);
-    let x = W / 2 - total / 2;
-    for (const r of row) {
-      if (r.icon) { r.icon.setPosition(x + 20, y + 14); x += 46; }
-      r.name.setX(x);
-      x += r.name.width + gap;
-    }
+    // Пять оружий в одну строку на телефоне не влезают — по три в строке
+    const per = H > W ? 3 : 5;
+    const lines = [];
+    for (let i = 0; i < row.length; i += per) lines.push(row.slice(i, i + per));
+    const lineH = 46;
+    let total = 0;
+    lines.forEach((line, li) => {
+      const lw = line.reduce((a, r) => a + r.w, 0) + gap * (line.length - 1);
+      total = Math.max(total, lw);
+      let x = W / 2 - lw / 2;
+      const ly = y + 14 + li * lineH;
+      for (const r of line) {
+        if (r.icon) { r.icon.setPosition(x + 20, ly); x += 46; }
+        r.name.setPosition(x, ly);
+        x += r.name.width + gap;
+      }
+    });
     title.setX(W / 2);
-    const bw = Math.max(total, title.width) + 48, bh = 104;
+    const bw = Math.max(total, title.width) + 48, bh = 104 + (lines.length - 1) * lineH;
     g.setPosition(W / 2, y);
     g.fillStyle(0x10131a, 0.88).fillRoundedRect(-bw / 2, -56, bw, bh, 20);
     g.lineStyle(3, 0xffd23f, 0.85).strokeRoundedRect(-bw / 2, -56, bw, bh, 20);
@@ -841,16 +856,41 @@ export default class GameScene extends Phaser.Scene {
     this.rewatchBtn = this.rig.ui(this.add.text(x, y, '↺ Пересмотреть ход', font(20, 800, '#1a1408'))
       .setOrigin(0.5).setPadding(16, 8, 16, 8).setBackgroundColor('#ffd166')
       .setScrollFactor(0).setDepth(DEPTH.HUD + 14).setVisible(false));
-    this.rewatchBtn.setInteractive({ useHandCursor: true });
-    this.rewatchBtn.on('pointerup', () => this.rewatchDuel());
-    // Часы своего хода идут с первого действия игрока
-    const begin = () => this.net?.begin?.();
+    this._tapButton(this.rewatchBtn, () => this.rewatchDuel());
+    // «Пропустить повтор» — там же, пока идёт показ хода соперника
+    this.skipBtn = this.rig.ui(this.add.text(x, y, '▶▶ Пропустить повтор', font(20, 800, '#1a1408'))
+      .setOrigin(0.5).setPadding(16, 8, 16, 8).setBackgroundColor('#ffd166')
+      .setScrollFactor(0).setDepth(DEPTH.HUD + 14).setVisible(false));
+    this._tapButton(this.skipBtn, () => { this.haptic?.('tap'); this.net?.skipShow?.(); });
+    // Часы своего хода идут с первого действия игрока. Тап по самим кнопкам
+    // повтора — не действие: иначе «Пересмотреть» гасла бы под пальцем
+    const begin = (pointer, over) => {
+      if (Array.isArray(over) && (over.includes(this.rewatchBtn) || over.includes(this.skipBtn))) return;
+      this.net?.begin?.();
+    };
     this.input.on('pointerdown', begin);
     this.input.keyboard?.on('keydown', begin);
     this.events.once('shutdown', () => {
       this.input.off('pointerdown', begin);
       this.input.keyboard?.off('keydown', begin);
     });
+  }
+
+  /**
+   * Кнопка поверх поля, которая слушается только настоящего тапа: палец и
+   * опустили, и подняли на ней. Раньше хватало отпускания: рычаг прицела
+   * тянут вниз, отпускают над кнопкой — и вместо выстрела она нажималась.
+   */
+  _tapButton(obj, onTap) {
+    obj.setInteractive({ useHandCursor: true });
+    let downTime = null;
+    obj.on('pointerdown', (pointer) => { downTime = pointer.downTime; });
+    obj.on('pointerup', (pointer) => {
+      const mine = downTime !== null && pointer.downTime === downTime;
+      downTime = null;
+      if (mine && pointer.getDistance() < 24) onTap();
+    });
+    return obj;
   }
 
   /**
@@ -1537,6 +1577,7 @@ export default class GameScene extends Phaser.Scene {
   /** Строка «чей ход» в сетевой партии. Переписывается только при смене. */
   _updateNetStatus() {
     this._updateWaitPanel();
+    this.skipBtn?.setVisible(Boolean(this.net?.isDuel && this.net.showing && !this.net.skip));
     if (!this.net?.connected || this.turn.state === STATE.OVER) return;
     if (this.net.isDuel) {
       const [text, color] = this._duelStatus();
@@ -3018,8 +3059,7 @@ export default class GameScene extends Phaser.Scene {
     ensureButton(this, `ui-over-${w}x${h}-${variant}`, w, h, variant);
     const img = this.rig.ui(this.add.image(x, y, `ui-over-${w}x${h}-${variant}`)
       .setScrollFactor(0).setDepth(DEPTH.HUD + 12));
-    img.setInteractive({ useHandCursor: true });
-    img.on('pointerup', onTap);
+    this._tapButton(img, onTap);
     const text = this.rig.ui(this.add.text(x, y, label, font(26, 800))
       .setOrigin(0.5).setScrollFactor(0).setDepth(DEPTH.HUD + 13));
     this.gameOverUi?.push(text);

@@ -43,7 +43,12 @@ export const DUEL_TURN_TIME = 60;
 
 export function duelMatch(duel) {
   const m = towerMatch(null);
-  return { ...m, mode: 'duel', seed: duel.seed, duelId: duel.id, rules: { ...m.rules, turnTime: DUEL_TURN_TIME } };
+  // Арсенал боя — в дуэлях по новым правилам (сервер: duel.rules >= 2):
+  // начатая раньше доигрывается без него, её патроны уже в истории ходов
+  return {
+    ...m, mode: 'duel', seed: duel.seed, duelId: duel.id,
+    rules: { ...m.rules, turnTime: DUEL_TURN_TIME, loadout: (duel.rules ?? 1) >= 2 },
+  };
 }
 
 /** Самые длинные паузы в повторе чужого хода: думал он долго, смотреть — нет. */
@@ -147,6 +152,9 @@ export class DuelSession {
     this.phase = 'replay';     // replay | play | sent | wait | over
     this.rec = null;           // запись своего хода
     this.started = false;      // игрок начал ход — до этого часы хода стоят
+    this.showing = false;      // идёт показ хода — его можно пропустить
+    this.skip = false;
+    this._skipped = new Promise((resolve) => { this._skipNow = resolve; });
     this.prevHash = null;      // свёртка после последнего восстановленного хода
     this.prevTurn = null;      // и какой это был ход
     this.checks = [];          // [{n, mine, theirs}] — для тестов и отладки
@@ -158,9 +166,10 @@ export class DuelSession {
   /** Есть что пересмотреть, и это не сотрёт начатый ход. */
   get canRewatch() {
     if (!(this.duel.turns ?? []).length) return false;
-    // Свой ход идёт: пересмотр соберёт партию заново, и шаги этого хода
-    // пропадут — до выстрела не жалко, после выстрела нельзя
-    if (this.phase === 'play') return !this.rec || !this.rec.cmds.some((c) => c.k === 'shot');
+    // Свой ход: пересмотреть можно, пока к нему не притронулся (часы ещё
+    // стоят). Начал ходить — кнопки нет: она внизу, ровно там, куда тянут
+    // рычаг прицела, и отпускание над ней сбрасывало ход в повтор соперника
+    if (this.phase === 'play') return !this.started;
     return this.phase === 'wait' || this.phase === 'sent' || this.phase === 'over';
   }
 
@@ -196,7 +205,20 @@ export class DuelSession {
 
   async _until(fn, timeout) {
     const t0 = performance.now();
-    while (!fn() && performance.now() - t0 < timeout) await this._wait(100);
+    while (!fn() && !this.skip && performance.now() - t0 < timeout) await this._wait(100);
+  }
+
+  /** Пауза внутри повтора: «Пропустить» обрывает её сразу. */
+  _pause(ms) {
+    if (this.skip) return Promise.resolve();
+    return Promise.race([this._wait(ms), this._skipped]);
+  }
+
+  /** «Пропустить повтор»: остаток хода — сразу итогом, без показа. */
+  skipShow() {
+    if (!this.showing || this.skip) return;
+    this.skip = true;
+    this._skipNow?.();
   }
 
   _setPhase(p) {
@@ -264,8 +286,9 @@ export class DuelSession {
     s.fx.banner(t.kind === 'skip' ? `${own ? 'Ты не успел' : `${this.opponent.name} не успел`} — ход пропущен`
       : own ? 'Повтор твоего хода' : 'Повтор хода соперника', '#ffd166', 1800);
     s.followTarget = s.turn.activeWorm;
-    await this._wait(t.kind === 'skip' ? 1400 : 1100);
-    if (t.kind === 'skip') { this._pass(); return; }
+    this.showing = true;
+    await this._pause(t.kind === 'skip' ? 1400 : 1100);
+    if (t.kind === 'skip') { this.showing = false; this._pass(); return; }
     const cmds = (t.cmds ?? []).slice().sort((a, b) => (a.at ?? 0) - (b.at ?? 0));
     let at = cmds[0]?.at ?? 0;
     let shot = false;
@@ -277,9 +300,11 @@ export class DuelSession {
     const speed = walk > SHOW_MAX ? SHOW_MAX / walk : 1;
     for (const [i, c] of cmds.entries()) {
       if (this.dead) return;
+      if (this.skip) break;
       const gap = gaps[i] * (firstShot < 0 || i <= firstShot ? speed : 1);
       at = c.at ?? at;
-      if (gap > 16) await this._wait(gap);
+      if (gap > 16) await this._pause(gap);
+      if (this.skip) break;
       if (c.k === 'move') applyMove(s, c.m);
       else if (c.k === 'shot') shot = applyCommand(s, c.cmd) || shot;
       else if (c.k === 'split') s.remoteSplit?.({ turn: c.turn, t: c.t });
@@ -289,7 +314,8 @@ export class DuelSession {
       await this._until(() => s.turn.state === STATE.RESOLVE && s.projectiles.length === 0
         && s.turn.resolveTimer >= CFG.RESOLVE_SETTLE && s.worms.every((w) => w.settled), 15000);
     }
-    await this._wait(400);
+    if (!this.skip) await this._wait(400);
+    this.showing = false;
     this._applyInstant(t);
   }
 

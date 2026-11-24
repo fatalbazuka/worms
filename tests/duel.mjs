@@ -188,6 +188,12 @@ const clock = await pages[1].evaluate(() => {
   return { left: s.turn.timeLeft, full: s.turnTime };
 });
 check('дуэль: свой ход начинается с полными часами, на ход минута', clock.full === 60 && clock.left > 55, JSON.stringify(clock));
+const arsenal = await pages[1].evaluate(() => {
+  const s = window.__WORMS__.scene.getScene('Game');
+  return { ids: s.loadout, ammo: s.loadoutIdx.map((i) => s.turn.ammo[0][i] === s.turn.ammo[1][i] && s.turn.ammo[0][i] > 0) };
+});
+check('дуэль: арсенал боя — пять оружий сверх базовых, у обеих сторон поровну',
+  arsenal.ids.length === 5 && arsenal.ammo.every(Boolean), JSON.stringify(arsenal));
 // Часы стоят, пока игрок не тронул экран, и идут после первого касания
 await pages[1].waitForTimeout(1500);
 const idle = await pages[1].evaluate(() => window.__WORMS__.scene.getScene('Game').turn.timeLeft);
@@ -251,9 +257,47 @@ for (let k = 2; k <= 7; k++) {
     return { phase: s.net.phase, act: s.canPlayerAct() };
   });
   if (during.phase === 'replay') check(`ход ${k}: пока идёт повтор хода соперника — ходить нельзя`, !during.act);
+  if (k === 3 && during.phase === 'replay') {
+    // «Пропустить повтор»: кнопка на экране, после неё ход сразу мой, итог тот же (сверки ниже)
+    const seen = await p.waitForFunction(() => window.__WORMS__.scene.getScene('Game').skipBtn?.visible === true, null, { timeout: 20000 })
+      .then(() => true).catch(() => false);
+    const t0 = Date.now();
+    await p.evaluate(() => window.__WORMS__.scene.getScene('Game').net.skipShow());
+    await waitPhase(p, ['play', 'over']);
+    const hidden = await p.waitForFunction(() => window.__WORMS__.scene.getScene('Game').skipBtn?.visible === false, null, { timeout: 10000 })
+      .then(() => true).catch(() => false);
+    check('«Пропустить повтор»: кнопка видна во время показа, после неё — сразу свой ход', seen && hidden && Date.now() - t0 < 5000,
+      `${seen} ${hidden} ${Date.now() - t0} мс`);
+  }
   await waitPhase(p, ['play', 'over']);
   replayChecks.push(...(await checksOf(p)).map((c) => ({ ...c, by: i, at: k })));
   if ((await phase(p)) === 'over') break;
+  if (k === 2) {
+    // Палец опустили на поле, а отпустили над «Пересмотреть ход» (так тянут
+    // рычаг прицела вниз): раньше это сбрасывало свой ход в повтор соперника
+    const btn = await p.evaluate(() => {
+      const s = window.__WORMS__.scene.getScene('Game');
+      s.net.__mark = 1;
+      const b = s.rewatchBtn.getBounds();
+      const r = window.__WORMS__.canvas.getBoundingClientRect();
+      const kx = r.width / window.__WORMS__.scale.width;
+      return { x: r.left + (b.centerX + s.rig.uiCam.x) * kx, y: r.top + (b.centerY + s.rig.uiCam.y) * kx, visible: s.rewatchBtn.visible };
+    });
+    const cdp = await p.context().newCDPSession(p);
+    await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: 195, y: 260 }] });
+    for (let j = 1; j <= 10; j++) {
+      await cdp.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ x: 195 + (btn.x - 195) * j / 10, y: 260 + (btn.y - 260) * j / 10 }] });
+      await p.waitForTimeout(30);
+    }
+    await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+    await p.waitForTimeout(1500);
+    const kept = await p.evaluate(() => {
+      const n = window.__WORMS__.scene.getScene('Game').net;
+      return { same: n?.__mark === 1, phase: n?.phase, btn: window.__WORMS__.scene.getScene('Game').rewatchBtn.visible };
+    });
+    check('отпустил палец над «Пересмотреть ход» — свой ход не сбрасывается; начал ходить — кнопки нет',
+      btn.visible && kept.same && kept.phase === 'play' && !kept.btn, `${JSON.stringify(btn)} ${JSON.stringify(kept)}`);
+  }
   await playTurn(p, k);
   turns++;
   if ((await phase(p)) === 'over') break;
