@@ -828,6 +828,10 @@ check('«твой ход» бот не пишет', !calls('sendMessage').some((
       d.delta > 0 && rC1.rating === rC0.rating + d.delta && rA1.rating === rA0.rating - d.delta
         && rC1.wins === rC0.wins + 1 && rA1.losses === rA0.losses + 1 && /Рейтинг −\d+/.test(lostMsg),
       `${JSON.stringify(rA0)}→${JSON.stringify(rA1)} ${JSON.stringify(rC0)}→${JSON.stringify(rC1)} δ${d.delta} | ${lostMsg}`);
+    const hist = (await call('GET', '/api/me/history', null, C.token)).data.items ?? [];
+    const chess = hist.find((x) => x.kind === 'chess');
+    check('профиль: доигранная шахматная партия в «Последних боях» — с соперником и сдвигом рейтинга',
+      chess && chess.won === true && chess.delta === d.delta && chess.opponent?.name === 'Хозяин', JSON.stringify(hist.slice(0, 3)));
   }
   r = await call('POST', '/api/duels', { opponent: C.player.id }, A.token);
   check('с соперником по прошлой дуэли можно реванш, хоть он и не друг', r.status === 200, r.data?.error);

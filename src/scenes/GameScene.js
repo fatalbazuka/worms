@@ -1541,8 +1541,12 @@ export default class GameScene extends Phaser.Scene {
     this.props?.update(dt);
     this._scrollBg();
     if (this.coach) {
-      this.coach.update();
-      if (this.coach.finished) this.coach = null;
+      // Бой кончился — плашка обучения не должна просвечивать сквозь итог
+      if (this.gameOverUi) { this.coach.destroy(); this.coach = null; }
+      else {
+        this.coach.update();
+        if (this.coach.finished) this.coach = null;
+      }
     }
     this.ambience?.update(dt);
     for (const m of this.monsters) m.update(dt);

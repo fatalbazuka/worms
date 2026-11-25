@@ -248,7 +248,7 @@ export function createApp({
   }
 
   function history(me) {
-    const items = [...players.duelHistory(me.id, 20), ...tournaments.historyFor(me.id, 20)]
+    const items = [...players.duelHistory(me.id, 20), ...tournaments.historyFor(me.id, 20), ...duels.history(me.id, 20)]
       .sort((a, b) => (b.at ?? 0) - (a.at ?? 0))
       .slice(0, 20);
     return { items };

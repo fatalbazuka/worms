@@ -89,6 +89,8 @@ export function createDuels({ db, players, friends, analytics, notify, now = () 
     reminded: db.prepare('update duel set reminded_turn = turn where id = ?'),
     notified: db.prepare('update duel set notified_turn = turn where id = ?'),
     setDelta: db.prepare('update duel set delta = ? where id = ? and delta is null'),
+    done: db.prepare(`select * from duel where (p1 = $p or p2 = $p) and status = 'finished' and p2 is not null
+                        order by finished_at desc limit $limit`),
     between: db.prepare(`select * from duel where status in ('open', 'active')
                            and ((p1 = $a and p2 = $b) or (p1 = $b and p2 = $a)) limit 1`),
     unnotified: db.prepare(`select * from duel where status = 'active' and deadline is not null
@@ -236,6 +238,19 @@ export function createDuels({ db, players, friends, analytics, notify, now = () 
   /** Победитель мог обогнать друзей — им напишет бот (server/friends.mjs). */
   function afterRated(rated) {
     if (rated) friends.onRated?.(rated)?.catch?.((e) => log.warn?.('[duels] обогнал', e.message));
+  }
+
+  /** Доигранные партии с победителем — для «Последних боёв» в профиле. */
+  function history(meId, limit = 20) {
+    return q.done.all({ p: meId, limit }).map((d) => {
+      const foe = pub(d.p1 === meId ? d.p2 : d.p1);
+      const won = d.winner ? d.winner === meId : null;
+      return {
+        kind: 'chess', at: d.finished_at, won, status: d.winner ? 'confirmed' : 'draw',
+        delta: d.delta == null ? null : (won ? d.delta : -d.delta),
+        opponent: foe ? { id: foe.id, name: foe.name, photo: foe.photo } : null,
+      };
+    });
   }
 
   /** Список моих дуэлей: идущие и доигранные за неделю. */
@@ -445,7 +460,7 @@ export function createDuels({ db, players, friends, analytics, notify, now = () 
   }
 
   return {
-    list, create, join, get, submit, resign, tick, view,
+    list, create, join, get, submit, resign, tick, view, history,
     byId: (id) => q.byId.get(Number(id)),
     byCode: (c) => q.byCode.get(String(c ?? '').toUpperCase()) ?? null,
   };

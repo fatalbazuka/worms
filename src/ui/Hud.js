@@ -5,6 +5,7 @@ import { UI, font, ensureButton, ensureRoundButton, ensureIcon, setTextColor } f
 import { Inventory } from './Inventory.js';
 import { isDesktop } from '../platform/device.js';
 import { sfx } from '../audio/Sfx.js';
+import { music } from '../audio/Music.js';
 import { EMOTES } from '../core/emotes.js';
 
 export const TOP_H = 62;
@@ -526,7 +527,11 @@ export class Hud {
     const service = (icon, onTap) => {
       y += step;
       const from = this.uiRects.length;
-      const img = this._tap(x, y, SB, icon, () => { onTap(); if (icon !== 'sound' && icon !== 'mute') this.setMore(false); });
+      const img = this._tap(x, y, SB, icon, () => {
+        onTap();
+        // Переключатели звука и музыки меню не закрывают — видно, что стало
+        if (!['sound', 'mute', 'music', 'music-off', 'home'].includes(icon)) this.setMore(false);
+      });
       // Спрятанная кнопка не должна ловить касания поля: её прямоугольник
       // включается вместе с ней
       this.moreItems.push({ img, rect: this.uiRects[from], y });
@@ -534,8 +539,13 @@ export class Hud {
     };
     service('help', () => this.toggleHelp());
     this.soundBtn = service(sfx.muted ? 'mute' : 'sound', () => this.toggleSound());
+    // Музыка — отдельно от звуков, как на главном экране: «выключить
+    // музыку, оставив звуки» в бою иначе было не сделать
+    this.musicBtn = service(music.enabled ? 'music' : 'music-off', () => this.toggleMusic());
     service('overview', () => s.rig.toggleOverview());
-    service('home', () => s.toMenu());
+    // Домой — двумя касаниями: первое спрашивает, второе выходит. Одно
+    // касание посреди хода бросало бой без вопроса
+    this.homeBtn = service('home', () => this.askHome());
     if (s.scale.fullscreen.available) {
       service('fullscreen', () => {
         if (s.scale.isFullscreen) s.scale.stopFullscreen();
@@ -654,12 +664,29 @@ export class Hud {
   }
 
   /** Переключить звук; иконка на кнопке меняется вместе с ним. */
+  toggleMusic() {
+    music.toggle();
+    if (!this.musicBtn) return;
+    const key = ensureIcon(this.scene, music.enabled ? 'music' : 'music-off', Math.round(this.musicBtn.plateSize * 0.62));
+    this.musicBtn.iconImage?.setTexture(key);
+    this.scene.fx?.banner(music.enabled ? 'музыка включена' : 'музыка выключена · звуки остались', '#ffd166', 1200);
+  }
+
+  /** «Домой» в бою: первое касание — вопрос, второе в течение 3 с — выход. */
+  askHome() {
+    const s = this.scene;
+    if (this.homeAskAt && Date.now() - this.homeAskAt < 3000) { this.homeAskAt = 0; s.toMenu(); return; }
+    this.homeAskAt = Date.now();
+    s.fx?.banner('выйти из боя? нажми ещё раз', '#ffd166', 2600);
+  }
+
   toggleSound() {
     sfx.setMuted(!sfx.muted);
     if (!this.soundBtn) return;
     const size = this.soundBtn.plateSize;
     const key = ensureIcon(this.scene, sfx.muted ? 'mute' : 'sound', Math.round(size * 0.62));
     this.soundBtn.iconImage?.setTexture(key);
+    this.scene.fx?.banner(sfx.muted ? 'звук выключен' : 'звук включён', '#ffd166', 1000);
     if (this.tip?.visible) this.tip.setText(sfx.muted ? 'Включить звук · M' : 'Выключить звук · M');
   }
 

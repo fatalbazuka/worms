@@ -559,6 +559,7 @@ export default class MenuScene extends Phaser.Scene {
    * телефоне раньше весь экран был пуст, а меню жалось в середину.
    */
   showRoot() {
+    this.duelsFrom = null;
     this.section = this.showRoot;
     this.fromShop = false;
     this._clear();
@@ -1883,6 +1884,7 @@ export default class MenuScene extends Phaser.Scene {
    */
   showSocial() {
     this.section = this.showSocial;
+    this.duelsFrom = null;
     this._clear();
     this._title('С друзьями', 'шахматная партия: позвал — и ходите по очереди, когда удобно');
     const cx = this.W / 2;
@@ -1893,7 +1895,7 @@ export default class MenuScene extends Phaser.Scene {
     // карточка в чат. Остальное — ниже и спокойнее
     const rows = [
       ['challenge', '♟ Позвать друга', 'на шахматную партию · ходите по очереди, когда удобно', () => this.challengeFriend(), 'primary'],
-      ['duels', 'Мои партии', n ? `твой ход: ${n} · на ход 24 часа` : 'кто ходит и сколько осталось', () => this.showDuels()],
+      ['duels', 'Мои партии', n ? `твой ход: ${n} · на ход 24 часа` : 'кто ходит и сколько осталось', () => { this.duelsFrom = 'social'; this.showDuels(); }],
       ['online', 'Бой онлайн', 'вживую с человеком · рейтинг', () => this.showOnline()],
       ['tournaments', 'Турниры', 'сетка на выбывание · бот напишет, когда стартует', () => this.openTournaments()],
     ];
@@ -3112,8 +3114,10 @@ export default class MenuScene extends Phaser.Scene {
     const cx = this.W / 2;
     const note = this.add.text(cx, 150, 'загружаю…', font(this.fs(14), 700, UI.textDim)).setOrigin(0.5, 0);
     this.items.push(note);
-    // Новичку раздел «С друзьями» ещё не показан — ему назад на главный
-    this._back(() => (onboardStage() === 'tutorial' ? this.showRoot() : this.showSocial()));
+    // «Назад» — туда, откуда пришли: с главного (кнопка «Позвать друга»,
+    // строка «Твой ход») — на главный, из «С друзьями» — туда
+    const from = this.duelsFrom;
+    this._back(() => (from === 'social' && onboardStage() !== 'tutorial' ? this.showSocial() : this.showRoot()));
     if (!loggedIn()) {
       note.setText('Шахматные партии живут на сервере — открой игру в Telegram.');
       return;
