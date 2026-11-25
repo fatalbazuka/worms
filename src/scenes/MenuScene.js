@@ -97,7 +97,8 @@ function seenText(at) {
 /** Сколько осталось на ход: «23 ч», «40 мин». */
 function leftText(deadline) {
   const ms = Math.max(0, (deadline ?? 0) - Date.now());
-  if (ms >= 3600_000) return `${Math.floor(ms / 3600_000)} ч`;
+  // Вверх: только что начатый ход — «24 ч», как в сообщении бота
+  if (ms >= 3600_000) return `${Math.ceil(ms / 3600_000)} ч`;
   return `${Math.max(1, Math.round(ms / 60_000))} мин`;
 }
 
@@ -146,7 +147,14 @@ export default class MenuScene extends Phaser.Scene {
     this._initScroll();
     // Коробки за миссии, пройденные раньше, чем появились скины
     syncCampaignBoxes();
-    this.showRoot();
+    // Открыли игру по кнопке «♟ Сделать ход» или по карточке друга: сразу
+    // экран «открываю партию», а не главное меню с «ИГРАТЬ» — иначе за
+    // пару секунд загрузки новичок жал «ИГРАТЬ» и уходил не туда
+    const params0 = new URLSearchParams(globalThis.location?.search ?? '');
+    const toDuel = !this.registry.get('duelLinkUsed')
+      && ((/^\d+$/.test(params0.get('duel') ?? '')) || Boolean(startDuelCode()));
+    if (toDuel) this._showOpening();
+    else this.showRoot();
 
     // Вернулись из турнирного матча — сразу к сетке. Пришли по кнопке бота
     // (?tour=ID или ?tour=list) — к турнирам, один раз за запуск.
@@ -3213,21 +3221,35 @@ export default class MenuScene extends Phaser.Scene {
   /** Открыть дуэль: вся история с сервера, сцена соберёт партию сама. */
   async openDuel(id) {
     this._duelNote('открываю партию…');
-    if (!(await this._whenLoggedIn())) { this._duelNote('партии — после входа через Telegram'); return; }
+    if (!(await this._whenLoggedIn())) { this._openFailed('партии — после входа через Telegram'); return; }
     await flushPendingTurns();
     try {
       const d = await fetchDuel(id);
       this.registry.set('duel', d);
       this.start(duelMatch(d));
     } catch (e) {
-      this._duelNote(`не открылась: ${e.message}`);
+      this._openFailed(`не открылась: ${e.message}`);
     }
+  }
+
+  /** Экран-заставка «открываю партию» — пока принимаем вызов и грузим историю. */
+  _showOpening() {
+    this.section = this._showOpening;
+    this._clear();
+    this._title('♟ Шахматная партия', 'сейчас откроется партия');
+    this.items.push(this.add.text(this.W / 2, this.H / 2, 'открываю…', font(this.fs(20), 800, UI.textDim)).setOrigin(0.5));
+  }
+
+  /** Партию открыть не вышло: с заставки — на главный, с подсказкой. */
+  _openFailed(text) {
+    if (this.section === this._showOpening) this.showRoot();
+    this._duelNote(text, 5000);
   }
 
   /** Открыли игру по ссылке на дуэль: принять и сразу в неё. */
   async joinDuelByCode(code) {
     this._duelNote('принимаю партию…');
-    if (!(await this._whenLoggedIn())) { this._duelNote('партии — после входа через Telegram'); return; }
+    if (!(await this._whenLoggedIn())) { this._openFailed('партии — после входа через Telegram'); return; }
     try {
       const d = await joinDuel(code);
       // Свою же карточку открыл — ходить не тебе: первым пойдёт принявший
@@ -3238,7 +3260,7 @@ export default class MenuScene extends Phaser.Scene {
       }
       this.openDuel(d.id);
     } catch (e) {
-      this._duelNote(e.message);
+      this._openFailed(e.message);
     }
   }
 

@@ -864,7 +864,7 @@ export default class GameScene extends Phaser.Scene {
     this.net = new DuelSession(duel);
     this.myTeam = this.net.myTeam;
     this.net.attach(this);
-    this._netStatus(`партия с ${this.net.opponent.name} · восстанавливаю ходы…`);
+    this._netStatus(`♟ ${this.net.opponent.name} · восстанавливаю ходы…`);
     // «Пересмотреть ход» — внизу посередине, между стиком и рычагом
     const x = CFG.VIEW_W / 2, y = CFG.VIEW_H - 34;
     this.rewatchBtn = this.rig.ui(this.add.text(x, y, '↺ Пересмотреть ход', font(20, 800, '#1a1408'))
@@ -1052,12 +1052,14 @@ export default class GameScene extends Phaser.Scene {
   /** Строка над полем в дуэли: с кем, чей ход и сколько у него времени. */
   _duelStatus() {
     const n = this.net;
-    const who = `партия с ${n.opponent.name}`;
+    // Имя без предлога: «партия с Атаман» не склоняется
+    const who = `♟ ${n.opponent.name}`;
     if (n.phase === 'replay') return [`${who} · повтор хода соперника`, '#ffd166'];
     if (n.phase === 'play') return [`${who} · твой ход${n.started ? '' : ' · часы пойдут, когда начнёшь'}`, '#8ef0a0'];
-    if (n.phase === 'over') return [`${who} · окончена`, '#ffd166'];
+    if (n.phase === 'over') return [`${who} · партия окончена`, '#ffd166'];
     const left = n.duel.deadline ? Math.max(0, n.duel.deadline - Date.now()) : null;
-    const h = left === null ? null : Math.floor(left / 3600_000);
+    // Вверх: только что начатый ход — «24 ч», как в сообщении бота
+    const h = left === null ? null : left < 3600_000 ? 0 : Math.ceil(left / 3600_000);
     return [`${who} · ход соперника${h === null ? '' : ` · у него ${h > 0 ? `${h} ч` : 'меньше часа'}`}`, '#ffd166'];
   }
 
