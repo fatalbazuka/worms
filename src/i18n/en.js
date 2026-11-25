@@ -1295,5 +1295,20 @@ export const EN = {
  "шахматная партия · на рейтинг": "chess-style game · ranked",
  "ссылка на партию скопирована": "game link copied",
  "Мой код для партии: ": "My game code: ",
- "Зову на шахматную партию в Smiles ♟ Ходим по очереди, когда удобно — твой ход первый": "Join me for a chess-style game in Smiles ♟ We take turns whenever it suits — your move first"
+ "Зову на шахматную партию в Smiles ♟ Ходим по очереди, когда удобно — твой ход первый": "Join me for a chess-style game in Smiles ♟ We take turns whenever it suits — your move first",
+ "шахматная партия · ходите по очереди, когда удобно": "chess-style game · take turns whenever it suits you",
+ "♟ С другом": "♟ With a friend",
+ "шахматная партия · каждый со своего телефона": "chess-style game · each on their own phone",
+ "🎉 Вечеринка": "🎉 Party",
+ "3–4 команды на одной башне · тап по месту — человек или бот": "3–4 teams on one tower · tap a seat — human or bot",
+ "🙂 Человек": "🙂 Human",
+ "🤖 Бот-новичок": "🤖 Rookie bot",
+ "🤖 Бот-боец": "🤖 Fighter bot",
+ "{0}: {1}": "{0}: {1}",
+ "3 команды": "3 teams",
+ "4 команды": "4 teams",
+ "В БОЙ": "FIGHT",
+ "людей: {0} · ходят по очереди с этого телефона": "humans: {0} · take turns on this phone",
+ "только боты — смотри, кто победит": "bots only — watch who wins",
+ "Победа: {0} (бот)!": "Victory: {0} (bot)!"
 };

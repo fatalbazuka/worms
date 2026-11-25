@@ -1,9 +1,9 @@
 import { UI, font, ensureButton, ensureIcon } from '../ui/theme.js';
-import { CFG } from '../config.js';
+import { CFG, TEAM_COLORS, TEAM_NAMES } from '../config.js';
 import { MISSIONS, loadProgress, isUnlocked } from '../campaign/missions.js';
 import { objectiveText } from '../campaign/objectives.js';
 import {
-  quickMatch, campaignMatch, onlineMatch, towerMatch, rookieMatch, tutorialMatch, fallbackMatch, challengeMatch, ascentMatch, dailyMatch, QUICK_OPTIONS,
+  quickMatch, campaignMatch, onlineMatch, towerMatch, rookieMatch, tutorialMatch, fallbackMatch, challengeMatch, ascentMatch, dailyMatch, partyMatch, QUICK_OPTIONS,
 } from '../core/match.js';
 import { CHALLENGES, challengeOpen, totalStars, STAR_COINS } from '../campaign/challenges.js';
 import { ASCENT, CHAPTERS, ascentOpen, bossName, chapterOf } from '../campaign/ascent.js';
@@ -377,7 +377,7 @@ export default class MenuScene extends Phaser.Scene {
     let sub = null;
     if (hint) {
       sub = this.add.text(x, big ? y + h * 0.27 : h >= 80 ? y + h * 0.2 : y + 15, hint,
-        font(hintSize ?? (big ? 20 : this.fs(12)), 700, big ? '#ffe9c2' : UI.textDim))
+        font(hintSize ?? (big ? 20 : this.fs(12)), 700, big ? '#ffe9c2' : variant === 'active' ? '#4a3408' : UI.textDim))
         .setOrigin(0.5).setAlpha(alpha);
       this.items.push(sub);
       into?.push(sub);
@@ -607,21 +607,28 @@ export default class MenuScene extends Phaser.Scene {
     }
 
     // --- «Играть» ---
-    const playH = portrait ? 128 : 104;
-    const playY = bottom - tabH - (portrait ? 168 : 124);
-    const choice = this.playChoice;
     // Самый первый раз «Играть» — это обучение: мишень, без ветра
     const tutorial = onboardStage() === 'tutorial';
+    const playH = portrait ? 128 : 104;
+    // Под «Играть» — «Позвать друга» во всю ширину: бой с друзьями — вторая
+    // главная кнопка экрана, а не пункт в глубине меню
+    const friendH = portrait ? 84 : 66;
+    const lift = tutorial ? 0 : friendH + (portrait ? 14 : 10);
+    const playY = bottom - tabH - (portrait ? 168 : 124) - lift;
+    const choice = this.playChoice;
     this._button('play', cx, playY, 'ИГРАТЬ',
       tutorial ? 'Первый бой · научим стрелять'
         : choice.level ? `Башня · бот «${BOT_LEVELS[choice.level].name}»` : 'Башня · вдвоём на одном телефоне',
       () => this.start(tutorial ? tutorialMatch()
         : choice.level === 'rookie' && onboardStage() === 'rookie' ? rookieMatch() : towerMatch(choice.level)),
       { w: Math.min(W - 72, 560), h: playH, variant: 'primary', big: true });
-    // Под «Играть»: соперник, режимы и всё с людьми — три кнопки в ряд.
-    // Новичку — только «Играть»: выбирать ему ещё не из чего
+    // Под «Играть»: позвать друга на шахматную партию, ниже — соперник,
+    // режимы и всё с людьми. Новичку — только «Играть»: выбирать не из чего
     if (!tutorial) {
-      const subY = playY + playH / 2 + (portrait ? 48 : 36);
+      const fy = playY + playH / 2 + (portrait ? 14 : 10) + friendH / 2;
+      this._button('friend', cx, fy, '♟ Позвать друга', 'шахматная партия · ходите по очереди, когда удобно',
+        () => this._inviteFriend(), { w: Math.min(W - 72, 560), h: friendH, titleSize: portrait ? 30 : 26, hintSize: portrait ? 17 : 15, variant: 'active' });
+      const subY = fy + friendH / 2 + (portrait ? 48 : 36) - (portrait ? 14 : 10);
       const rowW = Math.min(W - 72, 560), gap = 10;
       const subW = (rowW - gap * 2) / 3;
       const sub = { w: subW, h: portrait ? 56 : 48, titleSize: 20 };
@@ -1197,13 +1204,15 @@ export default class MenuScene extends Phaser.Scene {
   _inviteButton(x, y, w, h = 90) {
     const link = refLink();
     return this._button('invite', x, y, '♟ Позвать друга', link ? 'на шахматную партию · обоим по коробке' : 'работает в Telegram',
-      () => {
-        if (loggedIn()) { this.challengeFriend(); return; }
-        trackStep('invite');
-        if (!shareLink(link, 'Залетай в бой на башне! По этой ссылке нам обоим дадут коробку со скином 🎁')) {
-          copyText(link);
-        }
-      }, { w, h, titleSize: 25, hintSize: 17, enabled: Boolean(link), variant: 'primary' });
+      () => this._inviteFriend(), { w, h, titleSize: 25, hintSize: 17, enabled: Boolean(link), variant: 'primary' });
+  }
+
+  /** Позвать друга: с входом — шахматная партия карточкой в чат, без — ссылка в игру. */
+  _inviteFriend() {
+    if (loggedIn()) { this.challengeFriend(); return; }
+    const link = refLink();
+    trackStep('invite');
+    if (link && !shareLink(link, 'Залетай в бой на башне! По этой ссылке нам обоим дадут коробку со скином 🎁')) copyText(link);
   }
 
   // --------------------------------------------------------------- прицел
@@ -1785,14 +1794,20 @@ export default class MenuScene extends Phaser.Scene {
   showModes() {
     this.section = this.showModes;
     this._clear();
-    this._title('Режимы');
+    const title = this._title('Режимы');
+    // Секрет: пять тапов по заголовку — «Вечеринка» на 3–4 команды
+    title.setInteractive({ useHandCursor: false });
+    title.on('pointerdown', () => {
+      const t = Date.now();
+      this.partyTaps = (this.partyTaps ?? []).filter((x) => t - x < 2500).concat(t);
+      if (this.partyTaps.length >= 5) { this.partyTaps = []; haptic('win'); this.showParty(); }
+    });
     const cx = this.W / 2;
     const stars = totalStars(challengeStars());
     const done = ascentDone().size;
     const modes = [
       ['ascent', 'Кампания «Подъём»', `${ASCENT.length} боёв, монстры и боссы · пройдено ${done} из ${ASCENT.length}`, () => this.showAscent()],
       ['daily', 'Башня дня', 'одна башня на всех · таблица дня', () => this.showDailyTower()],
-      ['social', 'С друзьями', 'шахматные партии с друзьями · онлайн · турниры', () => this.showSocial()],
       ['challenges', 'Испытания', `задачи на три звезды · ★ ${stars} из ${CHALLENGES.length * 3}`, () => this.showChallenges()],
     ];
     // «Классика» и «Свои правила» убраны из списка: старые широкие карты
@@ -1809,6 +1824,46 @@ export default class MenuScene extends Phaser.Scene {
         { w, h, titleSize: 28, hintSize: 17, variant: i < 2 ? 'primary' : 'normal' });
     });
     this._back();
+  }
+
+  // ------------------------------------------------------------- вечеринка
+
+  /**
+   * Секретный режим «Вечеринка»: 3–4 команды на одной башне. Каждое место —
+   * человек (ходят по очереди с одного телефона) или бот. Тап по месту
+   * меняет его: человек → бот → … Рейтинг не трогает.
+   */
+  showParty() {
+    this.section = this.showParty;
+    this._clear();
+    this._title('🎉 Вечеринка', '3–4 команды на одной башне · тап по месту — человек или бот');
+    const cx = this.W / 2;
+    const kinds = ['human', 'rookie', 'fighter'];
+    const label = { human: '🙂 Человек', rookie: '🤖 Бот-новичок', fighter: '🤖 Бот-боец' };
+    this.partySeats ??= ['human', 'human', 'rookie'];
+    const seats = this.partySeats;
+    const w = Math.min(this.W - 64, 560), h = this.portrait ? 76 : 62, step = h + 14;
+    const y0 = 190;
+    seats.forEach((k, i) => {
+      this._button(`party-${i}`, cx, y0 + i * step, `${TEAM_NAMES[i]}: ${label[k]}`, '', () => {
+        seats[i] = kinds[(kinds.indexOf(k) + 1) % kinds.length];
+        this.showParty();
+      }, { w, h, titleSize: 24 });
+      this.items.push(this.add.circle(cx - w / 2 + 26, y0 + i * step, 11, TEAM_COLORS[i]).setStrokeStyle(2, 0x0b1018));
+    });
+    const yN = y0 + seats.length * step + 10;
+    const bw = (w - 14) / 2;
+    this._button('party-3', cx - bw / 2 - 7, yN, '3 команды', '', () => { this.partySeats = seats.slice(0, 3); this.showParty(); },
+      { w: bw, h: 52, titleSize: 20, variant: seats.length === 3 ? 'active' : 'normal' });
+    this._button('party-4', cx + bw / 2 + 7, yN, '4 команды', '', () => {
+      this.partySeats = seats.length === 4 ? seats : [...seats, 'rookie'];
+      this.showParty();
+    }, { w: bw, h: 52, titleSize: 20, variant: seats.length === 4 ? 'active' : 'normal' });
+    const humans = seats.filter((k) => k === 'human').length;
+    this._button('party-go', cx, yN + 96, 'В БОЙ',
+      humans ? `людей: ${humans} · ходят по очереди с этого телефона` : 'только боты — смотри, кто победит',
+      () => this.start(partyMatch(seats)), { w, h: 96, variant: 'primary', big: true });
+    this._back(() => this.showModes());
   }
 
   // ------------------------------------------------------------ с друзьями
@@ -1831,7 +1886,6 @@ export default class MenuScene extends Phaser.Scene {
     const rows = [
       ['challenge', '♟ Позвать друга', 'на шахматную партию · ходите по очереди, когда удобно', () => this.challengeFriend(), 'primary'],
       ['duels', 'Мои партии', n ? `твой ход: ${n} · на ход 24 часа` : 'кто ходит и сколько осталось', () => this.showDuels()],
-      ['by-code', 'Позвать по коду', 'если нет общего чата · код — в профиле у друга', () => this.challengeByCode()],
       ['online', 'Бой онлайн', 'вживую с человеком · рейтинг', () => this.showOnline()],
       ['tournaments', 'Турниры', 'сетка на выбывание · бот напишет, когда стартует', () => this.openTournaments()],
     ];
@@ -2154,9 +2208,9 @@ export default class MenuScene extends Phaser.Scene {
       () => go('sniper'), big);
     this._button('tower-hotseat', cx, y0 + step * 3, 'Вдвоём на одном телефоне', 'ходы по очереди',
       () => go(null), big);
-    // С другом по сети: комната башни, ссылка-приглашение, без рейтинга
-    this._button('tower-friend', cx, y0 + step * 4, 'С другом по ссылке', 'каждый со своего телефона · без рейтинга',
-      () => this.showRoom(randomRoom(true, true)), big);
+    // С другом — всегда шахматная партия: каждый со своего телефона, когда удобно
+    this._button('tower-friend', cx, y0 + step * 4, '♟ С другом', 'шахматная партия · каждый со своего телефона',
+      () => this._inviteFriend(), big);
     this._back();
   }
 
@@ -2445,9 +2499,7 @@ export default class MenuScene extends Phaser.Scene {
       const y = t.y + t.height + (p ? 70 : 52);
       const w = Math.min(W - 64, 460);
       this._inviteButton(cx, y, w, p ? 90 : 80);
-      if (data) this._button('friends-code', cx, y + (p ? 104 : 88), 'Позвать по коду', 'если нет общего чата · код — в профиле',
-        () => this.challengeByCode(), { w, h: p ? 70 : 62, titleSize: 21, hintSize: 15 });
-      const end = this._renderKnown(data?.known, y + (p ? 170 : 150));
+      const end = this._renderKnown(data?.known, y + (p ? 100 : 86));
       this._scrollable(Math.max(y + 140, end + 30) + (tabs ? 40 : 0));
       return;
     }
@@ -2484,11 +2536,8 @@ export default class MenuScene extends Phaser.Scene {
           { w: 148, h: Math.min(56, h - 18), titleSize: 19, variant: 'primary' });
       }
     });
-    // Под списком — вызов по коду и позвать ещё кого-нибудь
-    const codeY = listTop + rows.length * rowH + 40;
-    this._button('friends-code', cx, codeY, 'Позвать по коду', 'если нет общего чата · код — в профиле',
-      () => this.challengeByCode(), { w: Math.min(lw, 460), h: 70, titleSize: 22, hintSize: 15 });
-    const endY = codeY + 96;
+    // Под списком — позвать ещё кого-нибудь
+    const endY = listTop + rows.length * rowH + 56;
     this._inviteButton(cx, endY, Math.min(lw, 460), 84);
     const knownEnd = this._renderKnown(data.known, endY + 70);
     // Низ раздела — над вкладками (или «назад»), чтобы последняя строка не пряталась
@@ -2976,36 +3025,6 @@ export default class MenuScene extends Phaser.Scene {
     } catch (e) {
       this._duelNote(e.message);
     }
-  }
-
-  /**
-   * Вызов по коду игрока: у каждого в профиле пять знаков. Общий чат не
-   * нужен — код можно назвать вслух. Бот сам напишет вызванному.
-   */
-  async challengeByCode() {
-    if (!(await this._whenLoggedIn())) { this._duelNote('позвать по коду — после входа через Telegram'); return; }
-    let found = null;
-    const code = await askText({
-      title: 'Позвать по коду',
-      note: `Код — в профиле у друга (кнопка с аватаркой). Твой код: ${player().code ?? '—'}`,
-      label: 'Код игрока', placeholder: 'например, 7K2FQ', maxLength: 7, upper: true, okText: 'Позвать',
-      validate: async (v) => {
-        const c = v.replace(/[^A-Z0-9]/gi, '');
-        if (c.length !== 5) return 'код — пять букв и цифр';
-        try {
-          found = await createDuel({ code: c, theyFirst: true });
-          return null;
-        } catch (e) { return e.message; }
-      },
-    });
-    if (code === null || !found) return;
-    trackStep('invite');
-    haptic('win');
-    this.duelsAt = 0;
-    this.showDuels();
-    const name = found.opponent?.name ?? 'Соперник';
-    this._duelNote(found.existing ? `С ${name} партия уже идёт — она в списке`
-      : `Вызов ушёл: ${name} ходит первым · бот напишет, когда твой ход`, 6000);
   }
 
   /** Живая комната с другом: ждать вдвоём (без аккаунта — только так). */

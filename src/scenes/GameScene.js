@@ -89,6 +89,9 @@ export default class GameScene extends Phaser.Scene {
     // Что за партия — решает меню. Прямой заход по адресу описания не даёт,
     // и тогда игра ведёт себя как раньше: обычный хотсит на одном устройстве.
     this.match = this.registry.get('match') ?? HOTSEAT;
+    // Команд обычно две; «Вечеринка» (partyMatch) — три-четыре. Число
+    // ставится заново на каждую партию, чтобы одна не протекала в другую
+    CFG.TEAMS = Math.max(2, Math.min(4, this.match.teams?.length ?? 2));
     this.overButtons = null;
     this.myTurns = 0;            // своих ходов — для звёзд испытаний
     // Счётчики боя для ежедневных заданий: только за свою команду
@@ -2548,6 +2551,9 @@ export default class GameScene extends Phaser.Scene {
     const mine = this.myTeamIndex;
     let text;
     if (winner < 0) text = 'Ничья';
+    // Вечеринка: команд много, и людей может быть несколько — победителя
+    // называем по цвету (и честно говорим, если это бот)
+    else if (this.match.party) text = `Победа: ${TEAM_NAMES[winner]}${this.match.teams[winner]?.control === 'bot' ? ' (бот)' : ''}!`;
     else if (solo) text = winner === mine ? 'Победа!' : 'Поражение';
     else text = `Победа: ${TEAM_NAMES[winner]}!`;
     const color = winner >= 0 ? TEAM_COLORS[winner] : 0xffffff;

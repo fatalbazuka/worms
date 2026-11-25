@@ -680,7 +680,8 @@ check('«твой ход» бот не пишет', !calls('sendMessage').some((
 
   // Друг открыл вызов, когда позвавшего уже нет: бот пишет позвавшему «заходи»
   const knock = await call('POST', '/api/room/knock', { room: 'ZWFR12' }, guest.token);
-  const kn = calls('sendMessage').at(-1)?.params;
+  // Последнее сообщение Хозяину (рядом могут лететь чужие, отправленные без ожидания)
+  const kn = calls('sendMessage').filter((c) => c.params.chat_id === 6001).at(-1)?.params;
   check('друг ждёт в комнате вызова — позвавшему сообщение с кнопкой в ту же комнату',
     knock.data?.sent === true && knock.data.owner === 'Хозяин' && kn?.chat_id === 6001
       && kn.reply_markup.inline_keyboard[0][0].web_app.url.endsWith('?room=ZWFR12'), JSON.stringify(knock.data));

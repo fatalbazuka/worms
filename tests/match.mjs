@@ -456,6 +456,18 @@ check('один в лобби никого не находит', findMatch(p('a'
     !old.t.tall && old.missiles.every((m) => m.armY === null && m.y < 0) && air.reachOf(wide) === air.reach, JSON.stringify(old.t));
 }
 
+// --- секретная «Вечеринка»: 3–4 команды, люди и боты, вода позже ---
+{
+  const { partyMatch, towerMatch } = await import('../src/core/match.js');
+  const p3 = partyMatch(['human', 'human', 'rookie']);
+  const p4 = partyMatch(['human', 'fighter', 'rookie', 'human', 'human']);
+  check('вечеринка: 3 и 4 команды (не больше), боты где просили, вода позже обычного',
+    p3.party && p3.teams.length === 3 && p3.teams[2].control === 'bot' && p3.teams[2].level === 'rookie'
+      && p4.teams.length === 4 && p4.teams[1].level === 'fighter'
+      && p4.rules.flood.after > towerMatch(null).rules.flood.after && !towerMatch(null).party,
+    JSON.stringify(p4.teams));
+}
+
 // --- «Что дальше»: одна ближайшая цель по порядку важности ---
 {
   const { nextGoal } = await import('../src/core/nextgoal.js');

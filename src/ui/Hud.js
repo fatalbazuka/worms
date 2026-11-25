@@ -116,16 +116,22 @@ export class Hud {
     // Здоровье команд сходится к таймеру: слева красные, справа синие
     this.teamBars = [];
     const barW = 190, gap = 52;
+    // Вечеринка (3–4 команды): по две полосы на сторону — тоньше, без имён
+    const many = CFG.TEAMS > 2;
     for (let t = 0; t < CFG.TEAMS; t++) {
       const right = t % 2 === 1;
       const x = right ? this.timerCx + gap : this.timerCx - gap - barW;
-      this.fix(s.add.text(right ? x : x + barW, 8, TEAM_NAMES[t],
-        font(13, 800, hex(TEAM_COLORS[t]))).setOrigin(right ? 0 : 1, 0));
-      const cnt = this.fix(s.add.text(right ? x + barW : x, 8, '',
-        font(12, 700, UI.textDim)).setOrigin(right ? 1 : 0, 0));
-      this.fix(this._barImage(x, 36, barW, 12));
-      const bar = this.fix(s.add.rectangle(right ? x + 2 : x + barW - 2, 36,
-        barW - 4, 8, TEAM_COLORS[t]).setOrigin(right ? 0 : 1, 0.5), DEPTH.HUD + 1);
+      const row = many ? Math.floor(t / 2) : 0;
+      if (!many) {
+        this.fix(s.add.text(right ? x : x + barW, 8, TEAM_NAMES[t],
+          font(13, 800, hex(TEAM_COLORS[t]))).setOrigin(right ? 0 : 1, 0));
+      }
+      const cnt = this.fix(s.add.text(right ? x + barW : x, many ? 6 + row * 24 : 8, '',
+        font(12, 700, many ? hex(TEAM_COLORS[t]) : UI.textDim)).setOrigin(right ? 1 : 0, 0));
+      const by = many ? 26 + row * 24 : 36;
+      this.fix(this._barImage(x, by, barW, many ? 8 : 12));
+      const bar = this.fix(s.add.rectangle(right ? x + 2 : x + barW - 2, by,
+        barW - 4, many ? 5 : 8, TEAM_COLORS[t]).setOrigin(right ? 0 : 1, 0.5), DEPTH.HUD + 1);
       this.teamBars.push({ bar, cnt, width: barW - 4 });
     }
 
@@ -155,16 +161,22 @@ export class Hud {
     this.teamBars = [];
     const gap = 46;
     const barW = Math.round(Math.max(90, Math.min(190, W / 2 - gap - 126 - pad)));
+    // Вечеринка (3–4 команды): по две полосы на сторону — тоньше, без имён
+    const many = CFG.TEAMS > 2;
     for (let t = 0; t < CFG.TEAMS; t++) {
       const right = t % 2 === 1;
       const x = right ? this.timerCx + gap : this.timerCx - gap - barW;
-      this.fix(s.add.text(right ? x : x + barW, 4, TEAM_NAMES[t],
-        font(17, 800, hex(TEAM_COLORS[t]))).setOrigin(right ? 0 : 1, 0));
-      const cnt = this.fix(s.add.text(right ? x + barW : x, 5, '',
-        font(15, 700, UI.textDim)).setOrigin(right ? 1 : 0, 0));
-      this.fix(this._barImage(x, 40, barW, 14));
-      const bar = this.fix(s.add.rectangle(right ? x + 2 : x + barW - 2, 40,
-        barW - 4, 10, TEAM_COLORS[t]).setOrigin(right ? 0 : 1, 0.5), DEPTH.HUD + 1);
+      const row = many ? Math.floor(t / 2) : 0;
+      if (!many) {
+        this.fix(s.add.text(right ? x : x + barW, 4, TEAM_NAMES[t],
+          font(17, 800, hex(TEAM_COLORS[t]))).setOrigin(right ? 0 : 1, 0));
+      }
+      const cnt = this.fix(s.add.text(right ? x + barW : x, many ? 4 + row * 28 : 5, '',
+        font(many ? 13 : 15, 700, many ? hex(TEAM_COLORS[t]) : UI.textDim)).setOrigin(right ? 1 : 0, 0));
+      const by = many ? 24 + row * 28 : 40;
+      this.fix(this._barImage(x, by, barW, many ? 10 : 14));
+      const bar = this.fix(s.add.rectangle(right ? x + 2 : x + barW - 2, by,
+        barW - 4, many ? 6 : 10, TEAM_COLORS[t]).setOrigin(right ? 0 : 1, 0.5), DEPTH.HUD + 1);
       this.teamBars.push({ bar, cnt, width: barW - 4 });
     }
 

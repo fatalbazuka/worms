@@ -260,7 +260,7 @@ await A.waitForTimeout(1500);
 check('«вызвать друга» ещё раз — тот же незанятый вызов',
   db.prepare("select count(*) as n from duel where status = 'open'").get().n === 1);
 
-// --- вызов без общего чата: знакомые (друзья друзей), по коду, из рейтинга ---
+// --- вызов без общего чата: знакомые (друзья друзей) и из рейтинга ---
 {
   // Мага и Тигр оба пришли по ссылке Админа: друг другу не друзья, но знакомые
   const t0 = Date.now();
@@ -280,33 +280,15 @@ check('«вызвать друга» ещё раз — тот же незаня�
   check('знакомые: Тигр видит Магу (оба от Админа) и вызывает его без чата — бот пишет Маге, первым ходит Мага',
     knownBtn && Boolean(d1) && /Тигр зовёт тебя на шахматную партию/.test(toMaga), `${knownBtn} ${JSON.stringify(d1)} ${toMaga}`);
 
-  // По коду: код Админа — из его профиля; вводим в окно «Вызвать по коду»
-  // Код выдаётся при первом показе профиля (вход в Telegram его уже показал)
-  const adminCode = db.prepare("select code from player where id = 'tg100'").get()?.code;
-  // Не ждём промис: он ждёт ввода в окне
-  await T.evaluate(() => { window.__WORMS__.scene.getScene('Menu').challengeByCode(); });
-  await T.waitForSelector('#ask-input', { timeout: 10000 });
-  await T.fill('#ask-input', 'ZZZZZ');
-  await T.click('.acc-btn.primary');
-  const bad = await T.waitForFunction(() => document.querySelector('.acc-err')?.textContent || null, null, { timeout: 8000 })
-    .then((h) => h.jsonValue()).catch(() => null);
-  await T.fill('#ask-input', String(adminCode).toLowerCase());
-  await T.click('.acc-btn.primary');
-  await T.waitForTimeout(1500);
-  const d2 = db.prepare("select * from duel where p1 = 'tg100' and p2 = 'tg502'").get();
-  check('вызов по коду: неверный код — ошибка в окне; код друга (строчными) — дуэль, первым ходит он',
-    /^[A-Z2-9]{5}$/.test(adminCode ?? '') && /нет игрока с таким кодом/.test(bad ?? '') && Boolean(d2),
-    `${adminCode} ${bad} ${JSON.stringify(d2)}`);
-
-  // Из рейтинга: тап по игроку — окно «Вызвать?»; с тем, с кем дуэль идёт, — та же дуэль
-  await T.evaluate(() => window.__WORMS__.scene.getScene('Menu')._askChallenge({ id: 'tg100', name: 'Админ' }));
-  await T.click('.acc-btn.primary');
-  await T.waitForTimeout(1500);
+  // Из рейтинга: тап по игроку — окно «Позвать на партию?»; второй раз — та же партия
+  for (let k = 0; k < 2; k++) {
+    await T.evaluate(() => window.__WORMS__.scene.getScene('Menu')._askChallenge({ id: 'tg100', name: 'Админ' }));
+    await T.click('.acc-btn.primary');
+    await T.waitForTimeout(1500);
+  }
   const note = await T.evaluate(() => window.__WORMS__.scene.getScene('Menu').duelNoteText?.text ?? '');
   check('вызов из рейтинга: окно «Вызвать?», с тем же игроком — не вторая дуэль, а «уже идёт»',
     /уже идёт/.test(note) && db.prepare("select count(*) as n from duel where (p1 = 'tg100' and p2 = 'tg502') or (p1 = 'tg502' and p2 = 'tg100')").get().n === 1, note);
-  const code502 = await T.evaluate(() => JSON.parse(localStorage.getItem('worms.player.v1')).code);
-  check('код игрока виден в профиле', /^[A-Z2-9]{5}$/.test(code502 ?? ''), String(code502));
   await T.close();
 }
 
