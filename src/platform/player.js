@@ -136,6 +136,8 @@ export function adoptAccount(row) {
     if (row[k] !== undefined) p[k] = row[k];
   }
   if (Array.isArray(row.titles)) p.titles = row.titles;
+  // Код игрока — вызвать на дуэль без общего чата (server/players.mjs codeOf)
+  if (typeof row.code === 'string' && row.code) p.code = row.code;
   p.admin = row.admin === true;
   p.account = true;
   if (typeof row.telegram === 'boolean') p.telegram = row.telegram;

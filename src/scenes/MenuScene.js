@@ -27,7 +27,7 @@ import {
 import { duelMatch, flushPendingTurns } from '../net/duel.js';
 import { openAccountDialog } from '../ui/AccountDialog.js';
 import { openTournaments } from '../ui/Tournaments.js';
-import { askText, closeOverlay } from '../ui/Overlay.js';
+import { askText, closeOverlay, openOverlay, closeButton, el } from '../ui/Overlay.js';
 import { makeTransport } from '../net/connect.js';
 import { player } from '../platform/player.js';
 import {
@@ -1824,6 +1824,7 @@ export default class MenuScene extends Phaser.Scene {
       ['duels', 'Дуэли по переписке', n ? `твой ход: ${n} · ход раз в сутки` : 'ходишь, когда удобно · 24 часа на ход', () => this.showDuels()],
       ['tournaments', 'Турниры', 'сетка на выбывание · бот напишет, когда стартует', () => this.openTournaments()],
       ['challenge', 'Вызвать друга', 'карточкой в чат · он ходит первым, ты — когда удобно', () => this.challengeFriend()],
+      ['by-code', 'Вызвать по коду', 'без общего чата · код — в профиле у друга', () => this.challengeByCode()],
     ];
     rows.forEach(([key, title, hint, go, variant], i) => {
       this._button(key, cx, y0 + i * step, title, hint, go, { w, h, titleSize: 28, hintSize: 17, variant: variant ?? 'normal' });
@@ -2351,7 +2352,7 @@ export default class MenuScene extends Phaser.Scene {
     this._clear();
     const friends = scope === 'friends';
     this._title(friends ? 'Друзья' : 'Топ игроков', friends ? 'кого ты позвал, кто позвал тебя и с кем ты сыграл на рейтинг'
-      : kind === 'tourney' ? 'по победам в турнирах' : 'рейтинг по подтверждённым боям');
+      : kind === 'tourney' ? 'по победам в турнирах' : 'рейтинг по боям по сети и дуэлям');
     const cx = this.W / 2;
     // Ряд: [Все][Друзья]  [Рейтинг][Турниры] — 652 в ширину, влезает и в портрет 720
     const bw = 150, x0 = cx - 326;
@@ -2439,7 +2440,8 @@ export default class MenuScene extends Phaser.Scene {
       this._inviteButton(cx, y, w, p ? 90 : 80);
       this._button('friends-duel', cx, y + (p ? 104 : 88), 'Вызвать на бой', 'карточкой в чат · ходите, когда удобно',
         () => this.challengeFriend(), { w, h: p ? 80 : 70, titleSize: 23, hintSize: 16 });
-      this._scrollable(y + 140 + (tabs ? 40 : 0));
+      const end = this._renderKnown(data?.known, y + (p ? 170 : 150));
+      this._scrollable(Math.max(y + 140, end + 30) + (tabs ? 40 : 0));
       return;
     }
 
@@ -2484,11 +2486,79 @@ export default class MenuScene extends Phaser.Scene {
           { w: 180, h: Math.min(56, h - 18), titleSize: 17 });
       }
     });
-    // Под списком — позвать ещё кого-нибудь
-    const endY = listTop + rows.length * rowH + 56;
+    // Под списком — вызов по коду и позвать ещё кого-нибудь
+    const codeY = listTop + rows.length * rowH + 40;
+    this._button('friends-code', cx, codeY, 'Вызвать по коду', 'без общего чата · код — в профиле',
+      () => this.challengeByCode(), { w: Math.min(lw, 460), h: 70, titleSize: 22, hintSize: 15 });
+    const endY = codeY + 96;
     this._inviteButton(cx, endY, Math.min(lw, 460), 84);
+    const knownEnd = this._renderKnown(data.known, endY + 70);
     // Низ раздела — над вкладками (или «назад»), чтобы последняя строка не пряталась
-    this._scrollable(endY + 42 + (tabs ? (this.portrait ? 116 : 96) - 96 + 24 : 0));
+    this._scrollable(Math.max(endY + 42, knownEnd + 20) + (tabs ? (this.portrait ? 116 : 96) - 96 + 24 : 0));
+  }
+
+  /**
+   * «Знакомые» под друзьями: друзья твоих друзей (пришли по той же ссылке,
+   * сыграли с твоим другом). Вызвать их можно сразу — бот напишет сам, общий
+   * чат не нужен. @returns {number} низ блока
+   */
+  _renderKnown(known, y0) {
+    if (!known?.length) return y0;
+    const W = this.W, cx = W / 2;
+    const add = (o) => { this.items.push(o); return o; };
+    const short = (name, n) => (name.length > n ? `${name.slice(0, n - 1)}…` : name);
+    const roomy = this.portrait;
+    const lw = Math.min(W - 48, 980);
+    const lx0 = cx - lw / 2, lx1 = cx + lw / 2;
+    add(this.add.text(cx, y0, 'Знакомые — друзья твоих друзей', font(this.fs(16), 800, UI.accent)).setOrigin(0.5, 0));
+    add(this.add.text(cx, y0 + 26, 'вызови · бот напишет ему сам, общий чат не нужен', font(this.fs(12), 700, UI.textDim)).setOrigin(0.5, 0));
+    const top = y0 + 58;
+    const rowH = roomy ? 86 : 70;
+    const g = add(this.add.graphics());
+    known.forEach((r, i) => {
+      const y = top + i * rowH;
+      const h = rowH - 10;
+      g.fillStyle(0x141a29, 1).fillRoundedRect(lx0, y, lw, h, 12);
+      g.lineStyle(2, 0xffffff, 0.06).strokeRoundedRect(lx0, y, lw, h, 12);
+      const sheet = this._skinSheet(r.skin);
+      add(this.add.sprite(lx0 + 46, y + h - 2, sheet, 0).setOrigin(0.5, 0.92).setScale((h * 0.9) / 100).setFlipX(true))
+        .play(`${sheet}_idle`);
+      const nx = lx0 + 92;
+      add(this.add.text(nx, y + h / 2 - 2, short(r.name, roomy ? 14 : 22), font(this.fs(15), 800, UI.text)).setOrigin(0, 1));
+      const sub = [r.via ? `через ${short(r.via, 12)}` : '', `${r.rating}`, seenText(r.seenAt)].filter(Boolean).join(' · ');
+      add(this.add.text(nx, y + h / 2 + 4, sub, font(this.fs(11), 700, UI.textDim)).setOrigin(0, 0));
+      this._button(`known-${r.id}`, lx1 - 86, y + h / 2, 'Вызвать', '', () => this.duelChallenge(r),
+        { w: 148, h: Math.min(48, h - 16), titleSize: 19, variant: 'primary' });
+    });
+    return top + known.length * rowH;
+  }
+
+  /**
+   * Вызов из рейтинга: тап по игроку — окно «Вызвать на дуэль?». Бот
+   * напишет ему сам; первым ходит он. Себя не вызвать, без входа — нельзя.
+   */
+  _askChallenge(r) {
+    if (!loggedIn() || r.id === player().id) return;
+    const { box } = openOverlay();
+    box.append(closeButton(), el('h2', {}, `Вызвать ${r.name}?`),
+      el('p', { class: 'acc-note' }, 'Дуэль по переписке на рейтинг: он ходит первым, бот напишет тебе, когда твой ход.'),
+      el('div', { class: 'acc-row' },
+        el('button', { class: 'acc-btn primary', type: 'button', onclick: () => { closeOverlay(); this.duelChallenge(r); } }, '⚔️ Вызвать'),
+        el('button', { class: 'acc-btn', type: 'button', onclick: closeOverlay }, 'Отмена')));
+  }
+
+  /** Невидимая зона по плашке игрока в рейтинге: тап — вызов. */
+  _tapToChallenge(r, x, y, w, h) {
+    if (!loggedIn() || r.id === player().id) return;
+    const zone = this.add.zone(x, y, w, h).setOrigin(0, 0).setInteractive({ useHandCursor: true });
+    let down = null;
+    zone.on('pointerdown', (p) => { down = { x: p.x, y: p.y }; });
+    zone.on('pointerup', (p) => {
+      // Палец ехал — это прокрутка, а не тап
+      if (down && Math.hypot(p.x - down.x, p.y - down.y) < 12) this._askChallenge(r);
+      down = null;
+    });
+    this.items.push(zone);
   }
 
   /**
@@ -2534,6 +2604,7 @@ export default class MenuScene extends Phaser.Scene {
       g.fillStyle(0x1a2338, 1).fillRoundedRect(x - bw / 2, y, bw, h, 14);
       g.fillStyle(medal[i], 1).fillRoundedRect(x - bw / 2, y, bw, 10, { tl: 14, tr: 14, bl: 0, br: 0 });
       g.lineStyle(mine ? 4 : 2, mine ? 0xffd166 : 0xffffff, mine ? 1 : 0.12).strokeRoundedRect(x - bw / 2, y, bw, h, 14);
+      this._tapToChallenge(r, x - bw / 2, y - 100, bw, h + 100);
       add(this.add.text(x, y + 16, `${i + 1}`, font(this.fs(i ? 26 : 32), 800, `#${medal[i].toString(16).padStart(6, '0')}`)).setOrigin(0.5, 0));
       add(this.add.text(x, y + h - 52, short(r.name, 11), font(this.fs(13), 800, mine ? UI.accent : UI.text)).setOrigin(0.5, 0));
       add(this.add.text(x, y + h - 28, score(r), font(this.fs(12), 700, kind === 'tourney' ? UI.accent : leagueOf(r.rating).text)).setOrigin(0.5, 0));
@@ -2561,6 +2632,7 @@ export default class MenuScene extends Phaser.Scene {
       const h = rowH - 8;
       g.fillStyle(mine ? 0x2a2a1a : 0x161d2e, 1).fillRoundedRect(x0, y, w, h, 12);
       g.lineStyle(mine ? 3 : 2, mine ? 0xffd166 : 0xffffff, mine ? 1 : 0.08).strokeRoundedRect(x0, y, w, h, 12);
+      this._tapToChallenge(r, x0, y, w, h);
       add(this.add.text(x0 + 30, y + h / 2, `${place}`, font(this.fs(16), 800, UI.textDim)).setOrigin(0.5));
       const sheet = sheetOf(r);
       add(this.add.sprite(x0 + 82, y + h - 2, sheet, 0).setOrigin(0.5, 0.92).setScale((h * 0.95) / 100).setFlipX(true))
@@ -2571,8 +2643,9 @@ export default class MenuScene extends Phaser.Scene {
     });
 
     const rank = myRank(rows);
-    const foot = rank ? `ты на ${rank} месте` : !loggedIn() ? 'открой игру в Telegram, чтобы попасть в таблицу'
-      : kind === 'tourney' ? 'выиграй турнир — и ты здесь' : 'тебя пока нет в десятке — побеждай в боях по сети';
+    const foot = (rank ? `ты на ${rank} месте` : !loggedIn() ? 'открой игру в Telegram, чтобы попасть в таблицу'
+      : kind === 'tourney' ? 'выиграй турнир — и ты здесь' : 'тебя пока нет в десятке — побеждай в боях и дуэлях')
+      + (loggedIn() ? ' · нажми на игрока — вызвать на дуэль' : '');
     add(this.add.text(cx, bottom + 8, foot, font(this.fs(12), 700, UI.textDim)).setOrigin(0.5, 0));
   }
 
@@ -2888,6 +2961,11 @@ export default class MenuScene extends Phaser.Scene {
     try {
       const d = await createDuel(friend ? { opponent: friend.id, theyFirst: true } : { link: true, theyFirst: true });
       trackStep('invite');
+      if (friend && d.existing) {
+        this.showDuels();
+        this._duelNote(`С ${friend.name} дуэль уже идёт — она в списке`, 5000);
+        return;
+      }
       if (friend) {
         haptic('win');
         this.showDuels();
@@ -2900,6 +2978,36 @@ export default class MenuScene extends Phaser.Scene {
     } catch (e) {
       this._duelNote(e.message);
     }
+  }
+
+  /**
+   * Вызов по коду игрока: у каждого в профиле пять знаков. Общий чат не
+   * нужен — код можно назвать вслух. Бот сам напишет вызванному.
+   */
+  async challengeByCode() {
+    if (!(await this._whenLoggedIn())) { this._duelNote('вызов по коду — после входа через Telegram'); return; }
+    let found = null;
+    const code = await askText({
+      title: 'Вызвать по коду',
+      note: `Код — в профиле у друга (кнопка с аватаркой). Твой код: ${player().code ?? '—'}`,
+      label: 'Код игрока', placeholder: 'например, 7K2FQ', maxLength: 7, upper: true, okText: 'Вызвать',
+      validate: async (v) => {
+        const c = v.replace(/[^A-Z0-9]/gi, '');
+        if (c.length !== 5) return 'код — пять букв и цифр';
+        try {
+          found = await createDuel({ code: c, theyFirst: true });
+          return null;
+        } catch (e) { return e.message; }
+      },
+    });
+    if (code === null || !found) return;
+    trackStep('invite');
+    haptic('win');
+    this.duelsAt = 0;
+    this.showDuels();
+    const name = found.opponent?.name ?? 'Соперник';
+    this._duelNote(found.existing ? `С ${name} дуэль уже идёт — она в списке`
+      : `Вызов ушёл: ${name} ходит первым · бот напишет, когда твой ход`, 6000);
   }
 
   /** Отправить вызов-ссылку: карточкой в Telegram, иначе ссылкой, иначе в буфер. */
@@ -2987,7 +3095,7 @@ export default class MenuScene extends Phaser.Scene {
   showDuels() {
     this.section = this.showDuels;
     this._clear();
-    this._title('Дуэли по переписке', 'ходи, когда удобно · на ход 24 часа · без рейтинга');
+    this._title('Дуэли по переписке', 'ходи, когда удобно · на ход 24 часа · на рейтинг');
     const cx = this.W / 2;
     const note = this.add.text(cx, 150, 'загружаю…', font(this.fs(14), 700, UI.textDim)).setOrigin(0.5, 0);
     this.items.push(note);

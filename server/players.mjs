@@ -2,7 +2,7 @@
  * Игроки: заводятся из Telegram (вход в мини-приложение или /start в
  * боте), id — tg<id>. Здесь же вид игрока наружу и статистика кабинета.
  */
-import { randomBytes } from 'node:crypto';
+import { randomBytes, randomInt } from 'node:crypto';
 import { START_RATING } from './lib/elo.js';
 import { displayName } from './lib/telegram.js';
 
@@ -10,6 +10,8 @@ import { displayName } from './lib/telegram.js';
 export const skinSql = (idCol) => `(select case when json_valid(s.value) then json_extract(s.value, '$.equipped') end
   from save_kv s where s.player_id = ${idCol} and s.key = 'worms.skins.v1')`;
 const SKIN_SQL = skinSql('player.id');
+
+const CODE_ABC = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 
 export function createPlayers({ db, now = () => Date.now(), adminIds = new Set() }) {
   const q = {
@@ -36,6 +38,11 @@ export function createPlayers({ db, now = () => Date.now(), adminIds = new Set()
                         from player where (? = '' or name like ? or cast(tg_id as text) = ? or id = ?)
                         order by seen_at desc limit ?`),
     ban: db.prepare('update player set banned_at = ? where id = ?'),
+    byCode: db.prepare('select * from player where code = ?'),
+    setCode: db.prepare('update player set code = ? where id = ? and code is null'),
+    won: db.prepare(`update player set rating = ?, wins = wins + 1, streak = streak + 1,
+                     best_streak = max(best_streak, streak + 1) where id = ?`),
+    lost: db.prepare('update player set rating = ?, losses = losses + 1, streak = 0 where id = ?'),
     duels: db.prepare(`select * from match where (p1 = ? or p2 = ?) and status in ('confirmed', 'disputed')
                        order by settled_at desc limit ?`),
   };
@@ -64,6 +71,36 @@ export function createPlayers({ db, now = () => Date.now(), adminIds = new Set()
     try { return JSON.parse(p.titles || '[]'); } catch { return []; }
   }
 
+  /**
+   * Код игрока для вызова без чата: пять знаков без похожих (0/O, 1/I).
+   * Выдаётся один раз и больше не меняется.
+   */
+  function codeOf(p) {
+    if (!p) return null;
+    if (p.code) return p.code;
+    for (let i = 0; i < 20; i++) {
+      let c = '';
+      while (c.length < 5) c += CODE_ABC[randomInt(CODE_ABC.length)];
+      if (q.byCode.get(c)) continue;
+      q.setCode.run(c, p.id);
+      const fresh = q.byId.get(p.id)?.code;
+      if (fresh) { p.code = fresh; return fresh; }
+    }
+    return null;
+  }
+
+  /** Игрок по коду (без учёта регистра и пробелов). */
+  function byCode(raw) {
+    const c = String(raw ?? '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+    return c.length === 5 ? q.byCode.get(c) ?? null : null;
+  }
+
+  /** Итог боя на рейтинг: победителю +, проигравшему −, серия и счёт побед. */
+  function rate(winnerId, winnerRating, loserId, loserRating) {
+    q.won.run(winnerRating, winnerId);
+    q.lost.run(loserRating, loserId);
+  }
+
   /** Игрок наружу: без служебных полей, с местом в таблице и статистикой. */
   function view(p, { self = false } = {}) {
     if (!p) return null;
@@ -77,6 +114,7 @@ export function createPlayers({ db, now = () => Date.now(), adminIds = new Set()
       tourneyWins: p.tourney_wins, titles: titles(p),
     };
     if (self && isAdmin(p)) out.admin = true;
+    if (self) out.code = codeOf(p);
     return out;
   }
 
@@ -98,7 +136,7 @@ export function createPlayers({ db, now = () => Date.now(), adminIds = new Set()
   return {
     byId: (id) => q.byId.get(id),
     byTg: (tgId) => q.byTg.get(Number(tgId)),
-    upsertTg, markApp, byLogin, setLogin, view, isAdmin, duelHistory,
+    upsertTg, markApp, byLogin, setLogin, view, isAdmin, duelHistory, codeOf, byCode, rate,
     createWeb: (login, name, passHash) => {
       const id = `u${randomBytes(6).toString('hex')}`;
       const t = now();

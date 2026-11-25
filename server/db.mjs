@@ -297,6 +297,14 @@ const MIGRATIONS = [
   `
   alter table duel add column rules integer not null default 1;
   `,
+  // 15: код игрока — пять знаков, чтобы вызвать на дуэль без общего чата
+  // (назвал голосом, переписал с экрана). Выдаётся при первом показе профиля.
+  // И сдвиг рейтинга за дуэль по переписке: дуэли теперь на рейтинг
+  `
+  alter table player add column code text;
+  create unique index if not exists player_code on player (code);
+  alter table duel add column delta integer;
+  `,
 ];
 
 export function openDb(path) {

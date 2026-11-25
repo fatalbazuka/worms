@@ -46,7 +46,7 @@ import { markDone, MISSION_BY_ID, loadProgress } from '../campaign/missions.js';
 import { ASCENT_BY_ID, ascentStarsFor, ascentStarTurns } from '../campaign/ascent.js';
 import { checkObjective, snapshot, objectiveText } from '../campaign/objectives.js';
 import { player, eloDelta, recordResult } from '../platform/player.js';
-import { reportResult, serverAvailable, track, trackStep, submitDailyTower, createDuel, knockRoom } from '../net/server.js';
+import { reportResult, serverAvailable, track, trackStep, submitDailyTower, createDuel, knockRoom, syncMe } from '../net/server.js';
 import { leagueOf, nextLeague, toNextLeague } from '../platform/league.js';
 import { OffscreenMarkers } from '../ui/OffscreenMarkers.js';
 import { SKIN_BY_ID, rivalSkin } from '../core/skins.js';
@@ -612,6 +612,16 @@ export default class GameScene extends Phaser.Scene {
     return this._slingUses < 2;
   }
 
+  /**
+   * Подпись у круга отмены («отпусти здесь — выстрела не будет»): первые
+   * выстрелы рогаткой. Как отменить выстрел, сам никто не догадывался.
+   */
+  get cancelHint() {
+    if (!this.slingAim) return false;
+    if (this._slingUses == null) void this.slingHint;
+    return (this._slingUses ?? 0) < 6;
+  }
+
   get hookHint() {
     if (this.coach) return this.coach.wantsHookHint;
     if (!this.sling || this.slingHint) return false;
@@ -986,9 +996,20 @@ export default class GameScene extends Phaser.Scene {
   }
 
   /** Свой ход ушёл на сервер (ok) или нет — показать, что дальше. */
+  /** Строка итога дуэли: окончена и что с рейтингом. */
+  _duelRatingText() {
+    const d = this.net?.duel?.delta;
+    if (d == null) return this.net?.duel?.status === 'finished' ? 'дуэль окончена · без рейтинга' : 'дуэль окончена · рейтинг посчитаю после отправки хода';
+    return `дуэль окончена · рейтинг ${d > 0 ? `+${d}` : d}`;
+  }
+
   onDuelSent(ok, error = '') {
     if (this.gameOverUi) {
       if (!ok) this.fx.banner(error || 'ход не отправлен', '#ff9a9a', 2600);
+      else {
+        if (this._duelSub?.active) this._duelSub.setText(this._duelRatingText());
+        syncMe(true);
+      }
       return;
     }
     this._duelPanel(ok ? 'Ход отправлен' : 'Ход не отправлен',
@@ -2689,11 +2710,15 @@ export default class GameScene extends Phaser.Scene {
     if (duel) {
       for (const o of this.duelUi ?? []) o.destroy();
       this.duelUi = null;
-      sub.setText('дуэль окончена');
+      // Дуэли — на рейтинг: сдвиг считает сервер, когда примет последний ход
+      this._duelSub = sub;
+      sub.setText(this._duelRatingText());
       const foe = this.net.opponent;
       this.gameOverUi.push(this._overButton(-140, 'Реванш', () => {
         sub.setText('создаю дуэль…');
         createDuel({ opponent: foe.id }).then((d) => {
+          // С ним уже идёт другая дуэль — она в списке
+          if (d.existing) { this.toMenu('duels'); return; }
           this.registry.set('duel', { ...d, turns: [] });
           this.registry.set('seed', d.seed);
           this.scene.restart();

@@ -423,6 +423,9 @@ export class Hud {
     this.padCancelOn = false;
     this.padPull = null;       // {dx, dy} — палец тянет, экранные пиксели
     this.padGfx = this.fix(this.scene.add.graphics(), DEPTH.HUD);
+    // Подпись под кругом отмены — пока игрок не привык (GameScene.cancelHint)
+    this.cancelLabel = this.fix(this.scene.add.text(0, 0, 'отпусти здесь — отмена', font(18, 800, '#ffe0e0'))
+      .setOrigin(0.5, 0).setStroke('#10131a', 5).setVisible(false), DEPTH.HUD + 1);
   }
 
   /** Попал ли палец в рычаг (с запасом вокруг). */
@@ -482,6 +485,12 @@ export class Hud {
       g.lineStyle(on ? 7 : 4, on ? 0xffffff : 0xff8a8a, a);
       g.lineBetween(c.x - d, c.y - d, c.x + d, c.y + d);
       g.lineBetween(c.x + d, c.y - d, c.x - d, c.y + d);
+    }
+    const hint = Boolean(this.padPull && scene.cancelHint);
+    this.cancelLabel.setVisible(hint);
+    if (hint) {
+      const c = this.padCancel;
+      this.cancelLabel.setPosition(c.x, c.y + c.r + 10).setText(this.padCancelOn ? 'отпусти — выстрела не будет' : 'передумал? веди сюда — отмена');
     }
   }
 

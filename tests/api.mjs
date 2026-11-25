@@ -657,6 +657,14 @@ check('«твой ход» бот не пишет', !calls('sendMessage').some((
   await hook({ message: { from: { id: 6002, first_name: 'Гость' }, chat: { id: 6002, type: 'private' }, text: '/unmute' } });
 
   // Вызов другу через бота: только другу и не чаще раза в 10 минут
+  // Знакомые: друзья друзей — Гостю виден Соперник (он сыграл с Хозяином), через кого — тоже
+  {
+    const fr = (await call('GET', '/api/friends', null, guest.token)).data;
+    const k = fr.known?.find((x) => x.id === foe.player.id);
+    check('знакомые: друг твоего друга виден с пометкой, через кого; сам друг и ты — не в знакомых',
+      Boolean(k) && k.via === 'Хозяин' && !fr.known.some((x) => x.id === host.player.id || x.id === guest.player.id),
+      JSON.stringify(fr.known?.map((x) => [x.name, x.via])));
+  }
   let ch = await call('POST', '/api/friends/challenge', { id: guest.player.id, room: 'ZWFR12' }, host.token);
   const inv = calls('sendMessage').at(-1)?.params;
   check('«Вызвать»: бот пишет другу, кнопка — сразу в комнату башни',
@@ -710,8 +718,23 @@ check('«твой ход» бот не пишет', !calls('sendMessage').some((
   const turn = (n, extra = {}) => ({ turn: n, cmds: [{ k: 'shot', at: 900, cmd: { type: 'shot', turn: n, worm: 0, vx: 300, vy: -200 } }],
     state: { turn: n + 1, team: n % 2, worms: [{ x: 1, y: 2, hp: 100, alive: true }] }, hash: `h${n}`, ...extra });
 
+  // Вызвать можно любого — и не друга (из рейтинга, по коду); одна идущая дуэль на пару
   let r = await call('POST', '/api/duels', { opponent: C.player.id }, A.token);
-  check('дуэль по переписке: не с другом — нельзя', r.status === 403, `${r.status} ${r.data?.error}`);
+  const twice = await call('POST', '/api/duels', { opponent: C.player.id }, A.token);
+  check('дуэль по переписке: и не с другом можно; вторая с тем же — та же дуэль',
+    r.status === 200 && twice.data?.existing === true && twice.data.duel.id === r.data.duel.id, `${r.status} ${JSON.stringify(twice.data)}`);
+  await call('POST', `/api/duels/${r.data.duel.id}/resign`, null, A.token);
+  // Код игрока: в профиле, пять знаков; вызов по коду — без дружбы и без чата
+  const meC = (await call('GET', '/api/me', null, C.token)).data.player;
+  const meC2 = (await call('GET', '/api/me', null, C.token)).data.player;
+  const byCode = await call('POST', '/api/duels', { code: meC.code.toLowerCase(), theyFirst: true }, B.token);
+  const ownCode = await call('POST', '/api/duels', { code: meC.code }, C.token);
+  const noCode = await call('POST', '/api/duels', { code: 'ZZZZZ' }, B.token);
+  check('код игрока: пять знаков, не меняется; по коду — дуэль, свой код и чужой несуществующий — отказ',
+    /^[A-Z2-9]{5}$/.test(meC.code ?? '') && meC2.code === meC.code && byCode.status === 200
+      && byCode.data.duel.opponent?.id === C.player.id && byCode.data.duel.myTurn === false
+      && ownCode.status === 400 && noCode.status === 404, `${meC.code} ${byCode.status} ${ownCode.status} ${noCode.status}`);
+  await call('POST', `/api/duels/${byCode.data.duel.id}/resign`, null, B.token);
   r = await call('POST', '/api/duels', { opponent: B.player.id }, A.token);
   const d1 = r.data?.duel;
   const bView = (await call('GET', '/api/duels', null, B.token)).data;
@@ -786,10 +809,22 @@ check('«твой ход» бот не пишет', !calls('sendMessage').some((
     `${link.code} ${joined.status} ${joinedAgain.status}`);
   // Итог боем: ходивший сообщает победителя — дуэль окончена, обоим итог
   const before = msgsTo(7001).length;
+  const rA0 = ddb.prepare('select rating, wins, losses from player where id = ?').get(A.player.id);
+  const rC0 = ddb.prepare('select rating, wins, losses from player where id = ?').get(C.player.id);
   r = await call('POST', `/api/duels/${link.id}/turn`, { ...turn(2), state: { turn: 2, team: 1, over: true, worms: [] }, over: true, winner: 1 }, C.token);
   check('последний ход с победой — дуэль окончена, проигравшему итог',
     r.data?.duel?.status === 'finished' && r.data.duel.winner === 1 && r.data.duel.reason === 'kill'
       && msgsTo(7001).slice(before).some((m) => /проиграна/.test(m.params.text)), JSON.stringify(r.data?.duel));
+  {
+    const rA1 = ddb.prepare('select rating, wins, losses from player where id = ?').get(A.player.id);
+    const rC1 = ddb.prepare('select rating, wins, losses from player where id = ?').get(C.player.id);
+    const d = r.data.duel;
+    const lostMsg = msgsTo(7001).slice(before).map((m) => m.params.text).join(' | ');
+    check('дуэль по переписке на рейтинг: победителю +, проигравшему −, счёт побед; в итоге и в сообщении',
+      d.delta > 0 && rC1.rating === rC0.rating + d.delta && rA1.rating === rA0.rating - d.delta
+        && rC1.wins === rC0.wins + 1 && rA1.losses === rA0.losses + 1 && /Рейтинг −\d+/.test(lostMsg),
+      `${JSON.stringify(rA0)}→${JSON.stringify(rA1)} ${JSON.stringify(rC0)}→${JSON.stringify(rC1)} δ${d.delta} | ${lostMsg}`);
+  }
   r = await call('POST', '/api/duels', { opponent: C.player.id }, A.token);
   check('с соперником по прошлой дуэли можно реванш, хоть он и не друг', r.status === 200, r.data?.error);
 

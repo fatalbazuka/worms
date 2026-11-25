@@ -248,8 +248,8 @@ let lastSync = 0;
  * Подтянуть свой профиль: рейтинг, победы, место. Не чаще раза в десять
  * секунд; ошибки глотаются — без сервера игра живёт на локальном.
  */
-export async function syncMe() {
-  if (!token || Date.now() - lastSync < 10_000) return null;
+export async function syncMe(force = false) {
+  if (!token || (!force && Date.now() - lastSync < 10_000)) return null;
   lastSync = Date.now();
   try {
     const data = await call('GET', '/me');
@@ -291,7 +291,10 @@ export async function fetchTop(limit = 20, kind = 'rating') {
 export async function fetchFriends() {
   if (!token) return { friends: [], place: null, total: 0 };
   const data = await call('GET', '/friends');
-  return { friends: Array.isArray(data.friends) ? data.friends : [], place: data.place ?? null, total: data.total ?? 0 };
+  return {
+    friends: Array.isArray(data.friends) ? data.friends : [], place: data.place ?? null, total: data.total ?? 0,
+    known: Array.isArray(data.known) ? data.known : [],
+  };
 }
 
 /**
@@ -327,7 +330,8 @@ export async function fetchDuel(id) {
 
 /** Новая дуэль: {opponent: id} — с другом, {link: true} — ссылкой с кодом. */
 export async function createDuel(body) {
-  return (await call('POST', '/duels', body)).duel;
+  const r = await call('POST', '/duels', body);
+  return r.existing ? { ...r.duel, existing: true } : r.duel;
 }
 
 /** Принять дуэль по коду из ссылки. */

@@ -7,6 +7,7 @@ import {
   inTelegram, canOfferHomeScreen, addToHomeScreen, openInvoice, haptic,
 } from '../platform/telegram.js';
 import { el, openOverlay, closeOverlay, closeButton, isOverlayOpen } from './Overlay.js';
+import { copyText } from '../net/transport.js';
 import { music } from '../audio/Music.js';
 import { achState } from '../platform/achievements.js';
 
@@ -126,6 +127,13 @@ function profileView(box, { onTop, onTours, onAch, history }) {
     el('div', { class: 'ov-head' }, avatar(p),
       el('div', {}, el('div', { class: 'acc-name' }, p.name),
         el('div', { class: 'acc-note', style: 'margin:0' }, leagueLabel(p.rating)))),
+    // Код для вызова на дуэль без общего чата: сказал другу — он ввёл
+    p.code ? el('div', { class: 'acc-row' },
+      el('div', { class: 'acc-note', style: 'margin:0' }, 'Мой код для дуэли: ', el('b', { style: 'letter-spacing:2px' }, p.code)),
+      el('button', {
+        class: 'acc-btn', type: 'button',
+        onclick: (e) => { copyText(p.code); e.currentTarget.textContent = 'скопирован'; },
+      }, 'Копировать')) : null,
     el('div', { class: 'acc-stats' },
       stat(p.rating, 'рейтинг'),
       stat(p.rank ? `#${p.rank}` : '—', p.rank ? 'место в таблице' : 'сыграй бой по сети'),

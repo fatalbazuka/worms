@@ -34,6 +34,7 @@
  *   GET  /api/duels                       → {items, myTurn, max}  дуэли по переписке (server/duels.mjs)
  *   POST /api/duels {opponent} | {link}   → {duel}            новая: с другом или ссылкой с кодом
  *        + theyFirst                                          первым ходит позванный, создатель не ждёт
+ *   POST /api/duels {code, theyFirst}     → {duel, existing?} вызов по коду игрока (любого, без дружбы)
  *   POST /api/duels/join {code}           → {duel}            принять по ссылке
  *   GET  /api/duels/:id                   → {duel}            с историей ходов
  *   POST /api/duels/:id/turn {turn, cmds, state, hash, prevHash, prevTurn, over, winner} → {duel}
@@ -358,7 +359,7 @@ export function createApp({
         if (!limits.duel.hit(me.id)) throw new HttpError(429, 'слишком много дуэлей за час');
         const body = await readJson(req);
         const r = path.endsWith('/join') ? duels.join(me, body.code)
-          : duels.create(me, { opponent: body.opponent, link: body.link === true, theyFirst: body.theyFirst === true });
+          : duels.create(me, { opponent: body.opponent, code: body.code ?? null, link: body.link === true, theyFirst: body.theyFirst === true });
         if (r.error) throw new HttpError(r.status ?? 400, r.error);
         return r;
       }
