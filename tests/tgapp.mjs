@@ -278,7 +278,7 @@ check('«вызвать друга» ещё раз — тот же незаня�
   const d1 = db.prepare("select * from duel where p1 = 'tg501' and p2 = 'tg502'").get();
   const toMaga = tgCalls.filter((c) => c.method === 'sendMessage' && c.params.chat_id === 501).map((c) => c.params.text).join(' | ');
   check('знакомые: Тигр видит Магу (оба от Админа) и вызывает его без чата — бот пишет Маге, первым ходит Мага',
-    knownBtn && Boolean(d1) && /Тигр вызывает тебя на дуэль/.test(toMaga), `${knownBtn} ${JSON.stringify(d1)} ${toMaga}`);
+    knownBtn && Boolean(d1) && /Тигр зовёт тебя на шахматную партию/.test(toMaga), `${knownBtn} ${JSON.stringify(d1)} ${toMaga}`);
 
   // По коду: код Админа — из его профиля; вводим в окно «Вызвать по коду»
   // Код выдаётся при первом показе профиля (вход в Telegram его уже показал)

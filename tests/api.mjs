@@ -202,6 +202,9 @@ const hello = calls('sendAnimation').at(-1)?.params;
 check('/start: ролик с боем, приветствие и кнопка «Играть» в мини-приложение',
   hello?.animation === 'https://example.test/worms/assets/promo/welcome.mp4' && hello.caption.includes('Вика')
   && hello.reply_markup?.inline_keyboard?.[0]?.[0]?.web_app?.url === 'https://example.test/worms/');
+check('/start: под «Играть» — «Позвать друга на партию», он открывает выбор чата с @ботом',
+  hello?.reply_markup?.inline_keyboard?.[1]?.[0]?.switch_inline_query === ''
+    && /Позвать друга на партию/.test(hello.reply_markup.inline_keyboard[1][0].text), JSON.stringify(hello?.reply_markup));
 await hook({ message: { from: { id: 4, first_name: 'Ann', language_code: 'en' }, chat: { id: 4, type: 'private' }, text: '/start' } });
 check('/start по-английски: подпись, кнопка Play и своё меню',
   calls('sendAnimation').at(-1)?.params.caption.startsWith('Hi, Ann!')
@@ -310,7 +313,7 @@ check('«твой ход» бот не пишет', !calls('sendMessage').some((
   const note = calls('sendMessage').at(-1)?.params;
   check('новичок по ссылке друга: обоим по коробке, другу — сообщение',
     friendShop.data.owned.boxes === 1 && hostShop.data.owned.boxes === hostBefore + 1
-      && note?.chat_id === 51 && /по твоей ссылке/.test(note.text), `${friendShop.data.owned.boxes}/${hostShop.data.owned.boxes}`);
+      && note?.chat_id === 51 && /по твоему приглашению/.test(note.text), `${friendShop.data.owned.boxes}/${hostShop.data.owned.boxes}`);
   const again = await call('POST', '/api/telegram', { initData: await signInitData({
     query_id: 'q', user: { id: 53, first_name: 'Друг' }, start_param: 'ref_51', auth_date: String(Math.floor(clock / 1000)),
   }, BOT) });
@@ -796,7 +799,7 @@ check('«твой ход» бот не пишет', !calls('sendMessage').some((
   const finA = msgsTo(7001).at(-1)?.params.text ?? '', finB = msgsTo(7002).at(-1)?.params.text ?? '';
   check('три пропуска подряд — поражение; итог бот пишет обоим',
     t3.lost === 1 && d.status === 'finished' && d.winner === 1 && d.reason === 'timeout'
-      && /проиграна/.test(finA) && /Победа в дуэли против Хозяин/.test(finB), `${d.status} ${d.reason} | ${finA} | ${finB}`);
+      && /проиграна/.test(finA) && /Победа в партии против Хозяин/.test(finB), `${d.status} ${d.reason} | ${finA} | ${finB}`);
 
   // Ссылкой: чужой принимает по коду после первого хода; потом с ним можно реванш
   const link = (await call('POST', '/api/duels', { link: true }, A.token)).data.duel;
@@ -854,6 +857,23 @@ check('«твой ход» бот не пишет', !calls('sendMessage').some((
   check('«твой ход» досылается, если игрок ушёл, не увидев ход соперника; один раз',
     quiet && lateTick.late === 1 && /Твой ход против Гость/.test(lateMsg) && lateAgain.late === 0
       && msgsTo(7003).length === toC0 + 1, `${quiet} ${JSON.stringify(lateTick)} ${lateMsg}`);
+
+  // Пришёл в игру по ссылке на шахматную партию — тоже приглашение: обоим по коробке
+  {
+    const inv2 = (await call('POST', '/api/duels', { link: true, theyFirst: true }, B.token)).data.duel;
+    const fresh = (await call('POST', '/api/telegram', { initData: await signInitData({
+      query_id: 'q', user: { id: 7099, first_name: 'Новичок' }, auth_date: String(Math.floor(clock / 1000)), start_param: `duel_${inv2.code}`,
+    }, BOT) })).data;
+    await new Promise((res) => setTimeout(res, 150));   // сообщение позвавшему уходит без ожидания
+    const row = ddb.prepare('select referred_by from player where id = ?').get(fresh.player.id);
+    const gifts = ddb.prepare("select player_id, reason from bonus where ref = ? or player_id = ?").all(fresh.player.id, fresh.player.id);
+    const hostMsg = msgsTo(7002).map((m) => m.params.text).filter((t) => /по твоему приглашению/.test(t)).join(' | ');
+    check('новичок по ссылке на партию — приглашённый: обоим по коробке, позвавшему сообщение',
+      row?.referred_by === B.player.id && gifts.some((g) => g.reason === 'ref-host') && gifts.some((g) => g.reason === 'ref-guest')
+        && /по твоему приглашению/.test(hostMsg), `${JSON.stringify(row)} ${JSON.stringify(gifts)} ${hostMsg}`);
+    await call('POST', '/api/duels/join', { code: inv2.code }, fresh.token);
+    await call('POST', `/api/duels/${inv2.id}/resign`, null, B.token);
+  }
 
   // /duellog: разбор дуэли по ходам — чем стрелял, куда пришёл взрыв, здоровье
   {

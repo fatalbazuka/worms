@@ -129,7 +129,7 @@ function profileView(box, { onTop, onTours, onAch, history }) {
         el('div', { class: 'acc-note', style: 'margin:0' }, leagueLabel(p.rating)))),
     // Код для вызова на дуэль без общего чата: сказал другу — он ввёл
     p.code ? el('div', { class: 'acc-row' },
-      el('div', { class: 'acc-note', style: 'margin:0' }, 'Мой код для дуэли: ', el('b', { style: 'letter-spacing:2px' }, p.code)),
+      el('div', { class: 'acc-note', style: 'margin:0' }, 'Мой код для партии: ', el('b', { style: 'letter-spacing:2px' }, p.code)),
       el('button', {
         class: 'acc-btn', type: 'button',
         onclick: (e) => { copyText(p.code); e.currentTarget.textContent = 'скопирован'; },

@@ -175,9 +175,12 @@ export function createApp({
     if (fresh) players.markApp(p.id);
     // Новичок по ссылке друга — обоим по коробке; другу — сообщение в бот
     if (fresh) {
-      const host = shop.referral(p, v.startParam, players);
+      // Ссылка на шахматную партию (duel_КОД) — приглашение от её создателя
+      const dc = /^duel_([A-Z0-9]{4,10})$/i.exec(String(v.startParam ?? ''))?.[1];
+      const dh = dc ? duels.byCode(dc) : null;
+      const host = shop.referral(p, v.startParam, players, dh && !dh.p2 ? dh.p1 : null);
       if (host) {
-        bot.notify(host, `🎁 ${p.name} пришёл в игру по твоей ссылке — вам обоим по коробке со скином! `
+        bot.notify(host, `🎁 ${p.name} пришёл в игру по твоему приглашению — вам обоим по коробке со скином! `
           + 'Открой игру, коробка уже там.').catch(() => {});
       }
     }
