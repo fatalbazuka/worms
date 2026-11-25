@@ -546,7 +546,11 @@ export class Hud {
     this.moreBtn = more;
     this.setMore(false);
 
-    this.netText = this.fix(s.add.text(16, TOP_H + 10, '', font(13, 800, UI.accent)), DEPTH.HUD + 1);
+    // Строка сети и партии — под рядом оружия, по центру, на подложке:
+    // наверху она ложилась прямо на иконки оружия и не читалась
+    this.netText = this.fix(s.add.text(Math.round(W / 2), TOP_H + 92, '', font(15, 800, UI.accent))
+      .setOrigin(0.5, 0).setPadding(10, 4, 10, 4), DEPTH.HUD + 1);
+    this.netCompact = true;
   }
 
   /** Ряд эмоций под верхней панелью; скрыт, пока не нажали смайлик. */
@@ -1000,6 +1004,8 @@ export class Hud {
 
   setNetStatus(text, color = UI.accent) {
     this.netText?.setText(text).setColor(color);
+    // На телефоне — с подложкой, только когда есть что сказать
+    if (this.netCompact) this.netText?.setBackgroundColor(text ? 'rgba(16,19,26,0.78)' : 'rgba(0,0,0,0)');
   }
 
   /** Снести интерфейс целиком — перед пересборкой под новый размер экрана. */
@@ -1163,6 +1169,8 @@ export class Hud {
             : 'коснись светящейся точки — трос подтянет туда');
       }
       this.hintText.setVisible(!!show);
+      // Подсказка новичку стоит там же — строка партии уходит под неё
+      if (this.netCompact && this.netText) this.netText.setY(TOP_H + (show ? 150 : 92));
     }
   }
 
