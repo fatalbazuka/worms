@@ -95,7 +95,7 @@ export function createBot({ db, api, players, tournaments, analytics = null, adm
     const m = play(en);
     if (!m) return m;
     return { inline_keyboard: [...m.inline_keyboard,
-      [{ text: en ? '♟ Invite a friend to a chess game' : '♟ Позвать друга на партию', switch_inline_query: '' }]] };
+      [{ text: en ? '⚔️ Challenge a friend to a duel' : '⚔️ Позвать друга на дуэль', switch_inline_query: '' }]] };
   };
 
   async function send(chatId, text, markup, { silent = false } = {}) {
@@ -385,8 +385,8 @@ export function createBot({ db, api, players, tournaments, analytics = null, adm
         return send(chat, (en
           ? '/stats — your stats\n/top — top 10\n/tours — tournaments\n/promo CODE — activate a promo code\n/id — your id\n/mute — no reminders, friend or duel messages\n/unmute — turn them back on'
           : '/stats — статистика\n/top — топ-10\n/tours — турниры\n/promo КОД — активировать промокод\n/id — твой id'
-          + '\n/mute — не писать о серии, друзьях и партиях\n/unmute — снова писать'
-          + '\n\n♟ Позвать друга на шахматную партию: в чате с ним напиши @' + (username || 'бот') + ', нажми пробел и выбери карточку.')
+          + '\n/mute — не писать о серии, друзьях и дуэлях\n/unmute — снова писать'
+          + '\n\n⚔️ Позвать друга на дуэль: в чате с ним напиши @' + (username || 'бот') + ', нажми пробел и выбери карточку.')
           + (admin ? `\n\n${ADMIN_HELP}` : ''), playAndInvite(en));
       case '/promo': {
         if (!promos) break;
@@ -403,7 +403,7 @@ export function createBot({ db, api, players, tournaments, analytics = null, adm
         // вызовы на бой от друзей (их игра пошлёт карточкой через выбор чата),
         // «твой ход» в дуэлях по переписке (их видно значком в игре)
         return send(chat, en ? "OK, no more streak reminders, friend or duel messages. /unmute — turn them back on."
-          : 'Хорошо, больше не пишу сам: ни о серии, ни о друзьях, ни о партиях. /unmute — вернуть.');
+          : 'Хорошо, больше не пишу сам: ни о серии, ни о друзьях, ни о дуэлях. /unmute — вернуть.');
       case '/unmute':
         analytics?.setRemind(me.id, true);
         return send(chat, en ? "I'll remind you in the evening if your daily streak is about to burn, and tell you when a friend overtakes you."
@@ -604,19 +604,19 @@ export function createBot({ db, api, players, tournaments, analytics = null, adm
     if (!duel) return api.call('answerInlineQuery', { inline_query_id: iq.id, results: [], cache_time: 0 });
     if (!code) rememberRoom(room, iq.from?.id, name);
     const t = en ? {
-      duelTitle: '♟ Chess-style game', duelDesc: code ? 'Take turns: they move first, you answer whenever' : 'A tower duel — tap to fight',
-      duelText: code ? `♟ ${name} invites you to a chess-style game in Smiles!
+      duelTitle: '⚔️ Duel', duelDesc: code ? 'Take turns: they move first, you answer whenever' : 'A tower duel — tap to fight',
+      duelText: code ? `⚔️ ${name} challenges you to a duel in Smiles!
 Take turns whenever it suits you — your move first. The bot will ping when it's your turn again.`
         : `⚔️ ${name} challenges you to a duel in Smiles!
 Tower, grappling hook, slingshot and smileys. Tap the button — you both land in the same battle.`,
-      duelBtn: '♟ Make my move',
+      duelBtn: '⚔️ Make my move',
     } : {
-      duelTitle: '♟ Шахматная партия', duelDesc: code ? 'Ходите по очереди: он первым, ты — когда удобно' : 'Бой на башне — жми и в бой',
-      duelText: code ? `♟ ${name} зовёт тебя на шахматную партию в Smiles!
+      duelTitle: '⚔️ Дуэль', duelDesc: code ? 'Ходите по очереди: он первым, ты — когда удобно' : 'Бой на башне — жми и в бой',
+      duelText: code ? `⚔️ ${name} зовёт тебя на дуэль в Smiles!
 Ходите по очереди, когда удобно, — твой ход первый. Бот напишет, когда снова твой ход.`
         : `⚔️ ${name} вызывает на дуэль в Smiles!
 Башня, трос, рогатка и смайлики. Жми кнопку — окажетесь в одном бою.`,
-      duelBtn: '♟ Сделать ход',
+      duelBtn: '⚔️ Сделать ход',
     };
     return api.call('answerInlineQuery', {
       inline_query_id: iq.id,
@@ -752,16 +752,16 @@ Tower, grappling hook, slingshot and smileys. Tap the button — you both land i
       result: {
         type: 'article',
         id: `${duel ? 'dl' : 'ch'}-${room}`.slice(0, 64),
-        title: duel ? 'Шахматная партия ♟' : 'Вызов на бой ⚔️',
-        description: duel ? `${player.name} зовёт на шахматную партию` : `${player.name} зовёт на башню`,
+        title: duel ? 'Дуэль ⚔️' : 'Вызов на бой ⚔️',
+        description: duel ? `${player.name} зовёт на дуэль` : `${player.name} зовёт на башню`,
         input_message_content: {
           message_text: duel
-            ? `♟ ${player.name} зовёт тебя на шахматную партию в Smiles!\n`
+            ? `⚔️ ${player.name} зовёт тебя на дуэль в Smiles!\n`
               + 'Ходите по очереди, когда удобно, — твой ход первый. Бот напишет, когда ответят.'
             : `⚔️ ${player.name} вызывает тебя на бой в Smiles!\n`
               + 'Башня, тросы, рогатка и смайлики. Жми кнопку — и сразу в бой.',
         },
-        reply_markup: { inline_keyboard: [[{ text: duel ? '♟ Сделать ход' : '⚔️ Принять вызов', url: link }]] },
+        reply_markup: { inline_keyboard: [[{ text: duel ? '⚔️ Сделать ход' : '⚔️ Принять вызов', url: link }]] },
       },
       allow_user_chats: true,
       allow_group_chats: true,

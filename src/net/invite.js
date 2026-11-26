@@ -7,7 +7,7 @@ import { inTelegram, shareMessage, shareLink, duelLink } from '../platform/teleg
  * открывает карточку когда угодно и ходит первым, бот пишет «твой ход».
  * Новичку по такой ссылке — коробка, как по реферальной (server/shop.mjs).
  */
-export const CHESS_SHARE_TEXT = 'Зову на шахматную партию в Smiles ♟ Ходим по очереди, когда удобно — твой ход первый';
+export const CHESS_SHARE_TEXT = 'Зову на дуэль в Smiles ⚔️ Ходим по очереди, когда удобно — твой ход первый';
 
 /** Отправить вызов-ссылку: карточкой в Telegram, иначе ссылкой, иначе в буфер. @returns {Promise<boolean>} */
 export async function shareChessInvite(code) {

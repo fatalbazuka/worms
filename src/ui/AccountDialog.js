@@ -128,7 +128,7 @@ function profileView(box, { onTop, onTours, onAch, history }) {
         el('div', { class: 'acc-note', style: 'margin:0' }, leagueLabel(p.rating)))),
     el('div', { class: 'acc-stats' },
       stat(p.rating, 'рейтинг'),
-      stat(p.rank ? `#${p.rank}` : '—', p.rank ? 'место в таблице' : 'сыграй партию с другом'),
+      stat(p.rank ? `#${p.rank}` : '—', p.rank ? 'место в таблице' : 'сыграй дуэль с другом'),
       stat(`${p.wins} / ${p.losses}`, 'побед / поражений'),
       stat(winrate, 'процент побед'),
       stat(`${p.streak ?? 0}`, `серия · лучшая ${p.bestStreak ?? 0}`),
@@ -143,7 +143,7 @@ function profileView(box, { onTop, onTours, onAch, history }) {
 
   box.append(el('div', { class: 'ov-sec' }, 'Последние бои'));
   if (history === null) box.append(el('div', { class: 'ov-empty' }, 'загружаю…'));
-  else if (!history.length) box.append(el('div', { class: 'ov-empty' }, 'Пока пусто — позови друга на шахматную партию.'));
+  else if (!history.length) box.append(el('div', { class: 'ov-empty' }, 'Пока пусто — позови друга на дуэль.'));
   else {
     box.append(el('div', { class: 'ov-list' }, ...history.slice(0, 12).map((h) => {
       const pill = h.won === true ? el('span', { class: 'ov-pill ok' }, h.delta != null ? `+${h.delta}` : 'победа')
@@ -151,7 +151,7 @@ function profileView(box, { onTop, onTours, onAch, history }) {
           : el('span', { class: 'ov-pill' }, h.kind === 'chess' ? 'ничья' : 'спор');
       return el('div', { class: 'ov-row' }, avatar(h.opponent, true),
         el('span', { class: 'grow' }, h.opponent?.name ?? 'соперник',
-          el('span', { class: 'sub' }, `${h.kind === 'tournament' ? h.note : h.kind === 'chess' ? '♟ шахматная партия' : 'бой онлайн'} · ${fmtDate(h.at)}`)),
+          el('span', { class: 'sub' }, `${h.kind === 'tournament' ? h.note : h.kind === 'chess' ? '⚔️ дуэль' : 'бой онлайн'} · ${fmtDate(h.at)}`)),
         pill);
     })));
   }

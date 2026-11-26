@@ -202,9 +202,9 @@ const hello = calls('sendAnimation').at(-1)?.params;
 check('/start: ролик с боем, приветствие и кнопка «Играть» в мини-приложение',
   hello?.animation === 'https://example.test/worms/assets/promo/welcome.mp4' && hello.caption.includes('Вика')
   && hello.reply_markup?.inline_keyboard?.[0]?.[0]?.web_app?.url === 'https://example.test/worms/');
-check('/start: под «Играть» — «Позвать друга на партию», он открывает выбор чата с @ботом',
+check('/start: под «Играть» — «Позвать друга на дуэль», он открывает выбор чата с @ботом',
   hello?.reply_markup?.inline_keyboard?.[1]?.[0]?.switch_inline_query === ''
-    && /Позвать друга на партию/.test(hello.reply_markup.inline_keyboard[1][0].text), JSON.stringify(hello?.reply_markup));
+    && /Позвать друга на дуэль/.test(hello.reply_markup.inline_keyboard[1][0].text), JSON.stringify(hello?.reply_markup));
 await hook({ message: { from: { id: 4, first_name: 'Ann', language_code: 'en' }, chat: { id: 4, type: 'private' }, text: '/start' } });
 check('/start по-английски: подпись, кнопка Play и своё меню',
   calls('sendAnimation').at(-1)?.params.caption.startsWith('Hi, Ann!')
@@ -520,7 +520,7 @@ check('«твой ход» бот не пишет', !calls('sendMessage').some((
   const a = calls('answerInlineQuery').at(-1)?.params;
   const duel = a?.results?.[0]?.reply_markup?.inline_keyboard?.[0]?.[0]?.url ?? '';
   const code = /startapp=duel_([A-Z2-9]{6})$/.exec(duel)?.[1];
-  check('инлайн: одна карточка — шахматная партия, ведёт в вызов',
+  check('инлайн: одна карточка — дуэль, ведёт в вызов',
     Boolean(code) && a.results.length === 1 && a.results[0].input_message_content.message_text.includes('Вася'),
     JSON.stringify(a)?.slice(0, 300));
   // Инлайн-запрос летит на каждую букву — вызов тот же, новых дуэлей нет
@@ -799,7 +799,7 @@ check('«твой ход» бот не пишет', !calls('sendMessage').some((
   const finA = msgsTo(7001).at(-1)?.params.text ?? '', finB = msgsTo(7002).at(-1)?.params.text ?? '';
   check('три пропуска подряд — поражение; итог бот пишет обоим',
     t3.lost === 1 && d.status === 'finished' && d.winner === 1 && d.reason === 'timeout'
-      && /проиграна/.test(finA) && /Победа в партии против Хозяин/.test(finB), `${d.status} ${d.reason} | ${finA} | ${finB}`);
+      && /проиграна/.test(finA) && /Победа в дуэли против Хозяин/.test(finB), `${d.status} ${d.reason} | ${finA} | ${finB}`);
 
   // Ссылкой: чужой принимает по коду после первого хода; потом с ним можно реванш
   const link = (await call('POST', '/api/duels', { link: true }, A.token)).data.duel;

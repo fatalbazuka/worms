@@ -194,9 +194,9 @@ export function createDuels({ db, players, friends, analytics, notify, now = () 
     const foe = nameOf(otherOf(d, to));
     const why = skippedBy ? `\n${foe} не успел походить — его ход пропущен.` : '';
     const sent = d.turn === 1 && !skippedBy
-      ? await ping(d, to, `♟ ${foe} зовёт тебя на шахматную партию в Smiles!\n`
-        + 'Ходите по очереди, когда удобно, — твой ход первый. На ход 24 часа.', 'turn', '♟ Сделать ход', { late })
-      : await ping(d, to, `♟ Твой ход против ${foe}!${why}\nШахматная партия: на ход 24 часа.`, 'turn', '♟ Ходить', { late });
+      ? await ping(d, to, `⚔️ ${foe} зовёт тебя на дуэль в Smiles!\n`
+        + 'Ходите по очереди, когда удобно, — твой ход первый. На ход 24 часа.', 'turn', '⚔️ Сделать ход', { late })
+      : await ping(d, to, `⚔️ Твой ход против ${foe}!${why}\nДуэль: на ход 24 часа.`, 'turn', '⚔️ Ходить', { late });
     // Написали — отмечаем; не написали («смотрит») — tick проверит позже
     if (sent || late) q.notified.run(d.id);
     return sent;
@@ -208,10 +208,10 @@ export function createDuels({ db, players, friends, analytics, notify, now = () 
       if (!id || (only && id !== only)) continue;
       const foe = nameOf(otherOf(d, id));
       let text;
-      if (!d.winner) text = `🤝 Партия против ${foe} — ничья.`;
-      else if (d.winner === id) text = `🏆 Победа в партии против ${foe}!${why ? ` Соперник ${why}.` : ''}${d.delta ? ` Рейтинг +${d.delta}.` : ''}`;
-      else text = `Партия против ${foe} проиграна${why ? `: ты ${why}` : ''}.${d.delta ? ` Рейтинг −${d.delta}.` : ''} Реванш?`;
-      await ping(d, id, text, 'result', '🎬 Открыть партию');
+      if (!d.winner) text = `🤝 Дуэль против ${foe} — ничья.`;
+      else if (d.winner === id) text = `🏆 Победа в дуэли против ${foe}!${why ? ` Соперник ${why}.` : ''}${d.delta ? ` Рейтинг +${d.delta}.` : ''}`;
+      else text = `Дуэль против ${foe} проиграна${why ? `: ты ${why}` : ''}.${d.delta ? ` Рейтинг −${d.delta}.` : ''} Реванш?`;
+      await ping(d, id, text, 'result', '🎬 Открыть дуэль');
     }
   }
 
