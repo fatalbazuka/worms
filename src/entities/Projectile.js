@@ -100,6 +100,8 @@ export class Projectile {
     // Сплит по сети: соперник разделил ракету в этот момент полёта
     if (this.splitAt != null && this.age >= this.splitAt) { this.split(); return; }
     if (p.homing && this.age >= p.homeDelay) this._steer(dt, p);
+    // Овца на земле: бежит сама
+    if (this.walking) { this._walkStep(dt, p); return; }
 
     if (this.stuck) {
       // Прилипла. Стену под ней снесли — отваливается и липнет заново
@@ -183,6 +185,24 @@ export class Projectile {
     }
 
     // --- касание земли ---
+    // Овца: приземлилась — побежала туда, куда летела
+    if (p.walker) {
+      this.x = ray.freeX; this.y = ray.freeY;
+      const n = this.terrain.normalAt(ray.x, ray.y, 5);
+      if (n.y < -0.45) {
+        this.walking = true; this.air = false;
+        this.dir = this.dir ?? (this.vx ? Math.sign(this.vx) : (this.owner?.facing ?? 1));
+        this.vx = 0; this.vy = 0;
+        this.scene.fx?.sound('jump');
+      } else {
+        // Ударилась боком о стену — отлетает и разворачивается
+        this.dir = -(Math.sign(this.vx) || 1);
+        this.vx = this.dir * Math.min(Math.abs(this.vx) * 0.3, 80);
+        this.vy = Math.max(this.vy * 0.3, 0);
+        this.x += n.x * 1.5; this.y += n.y * 1.5;
+      }
+      return;
+    }
     // Магнитная мина: легла — стала миной, без взрыва
     if (p.deploy === 'mine') {
       this.x = ray.freeX; this.y = ray.freeY;
@@ -289,6 +309,8 @@ export class Projectile {
    * Не разделил — рвётся при ударе, как обычная.
    */
   split() {
+    // Овца: тот же тап, только взрыв на месте
+    if (this.alive && this.weapon.projectile.tapBoom) { this.detonate(this.x, this.y); return true; }
     if (!this.alive || !this.weapon.projectile.split) return false;
     this.alive = false;
     const child = this.weapon.projectile.split;
@@ -302,6 +324,72 @@ export class Projectile {
     this.scene.fx?.sound('shot');
     this._cleanupView();
     return true;
+  }
+
+  /**
+   * Шаг овцы по земле. Ноги — точка (x, y) в первом свободном пикселе над
+   * поверхностью. Вперёд на шаг: ступенька до CLIMB px — шагает, выше —
+   * прыгает, под ногами пусто — падает (и бежит дальше там, где упала).
+   * Две неудачные попытки перепрыгнуть одну стену — разворот.
+   * Задела бойца (своего — только после первых секунд) — взрыв.
+   */
+  _walkStep(dt, p) {
+    const t = this.terrain, s = this.scene;
+    const CLIMB = 7;
+    for (const w of s.worms) {
+      if (!w.alive || (w === this.owner && this.age < 2)) continue;
+      if (Math.abs(w.x - this.x) < CFG.WORM_W / 2 + 4 && Math.abs(w.centerY - (this.y - 6)) < CFG.WORM_H / 2 + 6) {
+        this.detonate(this.x, this.y - 4);
+        return;
+      }
+    }
+    if (this.air) {
+      this.vy += CFG.GRAVITY * dt;
+      const nx = this.x + this.vx * dt, ny = this.y + this.vy * dt;
+      if (nx < -80 || nx > t.width + 80 || ny > t.height + 120) {
+        if (ny > CFG.WATER_Y && nx > 0 && nx < t.width) s.fx.splash(nx, CFG.WATER_Y);
+        this.destroy();
+        return;
+      }
+      const ray = t.raycast(this.x, this.y, nx, ny);
+      if (!ray.hit) { this.x = nx; this.y = ny; return; }
+      const n = t.normalAt(ray.x, ray.y, 5);
+      this.x = ray.freeX; this.y = ray.freeY;
+      if (n.y < -0.45 && this.vy >= 0) {
+        this.air = false; this.vx = 0; this.vy = 0;
+        // Прыгнула и упала туда же — стена не берётся
+        if (this.hopX != null && Math.abs(this.x - this.hopX) < 6) {
+          this.fails = (this.fails ?? 0) + 1;
+          if (this.fails >= 2) { this.dir = -this.dir; this.fails = 0; }
+        } else this.fails = 0;
+      } else {
+        this.vx = -this.vx * 0.2;
+        this.vy = Math.max(0, this.vy);
+        this.x += n.x * 1.5; this.y += n.y * 1.5;
+      }
+      return;
+    }
+    const nx = this.x + this.dir * (p.walkSpeed ?? 70) * dt;
+    if (nx < 2 || nx > t.width - 2) { this.dir = -this.dir; return; }
+    if (t.solidAt(nx, this.y - CLIMB) || t.solidAt(nx, this.y - CLIMB - 6)) {
+      // Стена выше ступеньки — прыжок вперёд-вверх
+      this.air = true;
+      this.hopX = this.x;
+      this.vx = this.dir * (p.walkSpeed ?? 70) * 1.3;
+      this.vy = -400;
+      this.y -= 1;
+      s.fx?.sound('jump');
+      return;
+    }
+    for (let y = Math.floor(this.y - CLIMB); y <= this.y + CLIMB; y++) {
+      if (t.solidAt(nx, y + 1)) { this.x = nx; this.y = y; return; }
+    }
+    // Обрыв: падаем, сохраняя ход вперёд
+    this.air = true;
+    this.hopX = null;
+    this.x = nx;
+    this.vx = this.dir * (p.walkSpeed ?? 70);
+    this.vy = 0;
   }
 
   /** Самонаводка: доворот курса к ближайшему врагу стрелка, скорость не меньше 380. */
@@ -447,7 +535,13 @@ export class Projectile {
   _syncView() {
     this.view.setPosition(this.x, this.y);
     if (this.weapon.projectile.boomerang) this.view.rotation += 0.45;
-    if (this.own && !this.resting && !this.stuck && (this.vx || this.vy)) {
+    if (this.walking) {
+      // Бежит: смотрит по ходу (эмодзи 🐑 нарисована мордой влево) и
+      // подпрыгивает на каждом шаге
+      this.view.setFlipX(this.dir > 0);
+      this.view.setRotation(this.air ? 0 : Math.sin(this.age * 18) * 0.12);
+      this.view.y -= this.air ? 0 : Math.abs(Math.sin(this.age * 18)) * 2;
+    } else if (this.own && !this.resting && !this.stuck && (this.vx || this.vy)) {
       if (this.pointed) this.view.setRotation(Math.atan2(this.vy, this.vx) + this.tilt);
       else this.view.rotation += (this.vx >= 0 ? 1 : -1) * 0.14;
     }

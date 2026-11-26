@@ -9,6 +9,7 @@ import { Worm } from '../entities/Worm.js';
 import { Crate } from '../entities/Crate.js';
 import { Mine } from '../entities/Mine.js';
 import { Spring } from '../entities/Spring.js';
+import { GasCloud } from '../entities/Gas.js';
 import { Props } from '../entities/Props.js';
 import { Monster, isBoss } from '../entities/Monster.js';
 import { Ambience } from '../ui/Ambience.js';
@@ -150,6 +151,7 @@ export default class GameScene extends Phaser.Scene {
     this.crates = [];
     this.mines = [];
     this.springs = [];
+    this.gas = [];
     this.monsters = [];
     this.followTarget = null;
     this.moveInput = {
@@ -1551,6 +1553,7 @@ export default class GameScene extends Phaser.Scene {
     this.ambience?.update(dt);
     for (const m of this.monsters) m.update(dt);
     if (this.monsters.some((m) => !m.alive)) this.monsters = this.monsters.filter((m) => m.alive);
+    for (const g of this.gas) g.update(dt);
     for (const sp of this.springs) sp.update(dt);
     if (this.springs.some((sp) => !sp.alive)) {
       this.springs = this.springs.filter((sp) => sp.alive);
@@ -2246,13 +2249,33 @@ export default class GameScene extends Phaser.Scene {
    * След мгновенного выстрела: у дробовика и биты снаряда нет, и без
    * линии игрок не понимает, куда вообще пришёлся удар.
    */
-  drawBeam(x0, y0, x1, y1, color = 0xffe066) {
+  drawBeam(x0, y0, x1, y1, color = 0xffe066, duration = 260) {
     const g = this.rig.world(this.add.graphics().setDepth(DEPTH.PROJECTILE));
     g.lineStyle(3, color, 0.9).lineBetween(x0, y0, x1, y1);
     g.lineStyle(9, color, 0.25).lineBetween(x0, y0, x1, y1);
     this.tweens.add({
-      targets: g, alpha: 0, duration: 260, onComplete: () => g.destroy(),
+      targets: g, alpha: 0, duration, ease: 'Cubic.easeIn', onComplete: () => g.destroy(),
     });
+  }
+
+  /** Облако ядовитого газа: живёт в сцене несколько ходов. */
+  addGas(x, y, cfg, owner = null) {
+    this.gas.push(new GasCloud(this, Math.round(x), Math.round(y), cfg, owner));
+    this.fx?.sound?.('thunk');
+  }
+
+  /**
+   * Конец хода: газ травит тех, кто в облаке. Только у того, кто ходил, —
+   * при показе чужого хода итог приносит снимок.
+   * @returns {boolean} задело ли кого-то (тогда ход ждёт, пока все встанут)
+   */
+  tickHazards() {
+    if (this.replaying || !this.gas.length) return false;
+    let hit = 0;
+    for (const g of this.gas) hit += g.tick();
+    this.gas = this.gas.filter((g) => g.alive);
+    if (hit) this.fx.sound?.('hurt');
+    return hit > 0;
   }
 
   /** Поставить мину. Оружие само её не хранит — предмет живёт в сцене. */
@@ -2279,7 +2302,7 @@ export default class GameScene extends Phaser.Scene {
   /** Тап в полёте: своя сплит-ракета делится. @returns {boolean} поймали ли тап */
   trySplit() {
     if (this.replaying || this.isBotTurn() || !this.isLocalTeam(this.turn.currentTeam)) return false;
-    const p = this.projectiles.find((x) => x.alive && x.weapon.projectile.split
+    const p = this.projectiles.find((x) => x.alive && (x.weapon.projectile.split || x.weapon.projectile.tapBoom)
       && x.owner === this.turn.activeWorm);
     if (!p) return false;
     const t = p.age;
@@ -2292,7 +2315,7 @@ export default class GameScene extends Phaser.Scene {
   /** Соперник разделил ракету: делим нашу копию в тот же момент полёта. */
   remoteSplit(msg) {
     if (msg.turn !== this.turn.turnNumber) return;
-    const p = this.projectiles.find((x) => x.alive && x.weapon.projectile.split);
+    const p = this.projectiles.find((x) => x.alive && (x.weapon.projectile.split || x.weapon.projectile.tapBoom));
     if (!p) return;
     if (p.age >= msg.t) p.split();
     else p.splitAt = msg.t;
@@ -3187,6 +3210,7 @@ export default class GameScene extends Phaser.Scene {
     this.mouseFire = false;
     this.mines = [];
     this.springs = [];
+    this.gas = [];
     this.monsters = [];
     this.props = null;
     this.ambience = null;

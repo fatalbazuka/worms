@@ -136,6 +136,85 @@ export class InstantWeapon extends Weapon {
 }
 
 /**
+ * Лазер: луч без полёта и гравитации, отражается от стен.
+ *
+ * Земля не прожигается — луч отскакивает от неё по нормали, до bounces
+ * раз. Каждый рикошет добавляет урона: прямой выстрел — слабый, хитрый
+ * через две стены — самый больной. Бойца можно достать за углом, а можно
+ * и себя самого — после первого отскока свой стрелок уже не защищён.
+ * Всё считается по маске земли без случайности, поэтому у зрителя и в
+ * повторе луч идёт так же.
+ */
+export class LaserWeapon extends InstantWeapon {
+  constructor(cfg) {
+    super(cfg);
+    this.bounces = cfg.bounces ?? 3;
+    this.bounceBonus = cfg.bounceBonus ?? 10;
+  }
+
+  /**
+   * Путь луча. @returns {{segs:number[][], hit:object|null, end:{x,y},
+   * wall:boolean, bounces:number}}
+   */
+  trace(scene, x, y, dx, dy, owner) {
+    const t = scene.terrain;
+    const segs = [];
+    let left = this.range;
+    let cx = x, cy = y, bounces = 0, hit = null, wall = false;
+    while (left > 0) {
+      let hx = cx, hy = cy, d = 2, out = false;
+      wall = false;
+      for (; d <= left; d += 2) {
+        const nx = cx + dx * d, ny = cy + dy * d;
+        if (nx < 0 || nx > t.width || ny > t.height || ny < -1500) { out = true; break; }
+        hit = scene.worms.find((w) => w.alive && (w !== owner || bounces > 0) && w.containsPoint(nx, ny)) ?? null;
+        if (hit) { hx = nx; hy = ny; break; }
+        if (t.solidAt(nx, ny)) { wall = true; break; }
+        hx = nx; hy = ny;
+      }
+      segs.push([cx, cy, hx, hy]);
+      left -= d;
+      if (hit || out || !wall || bounces >= this.bounces) break;
+      // Отражение от стены по её нормали (нормаль смотрит из земли наружу)
+      const n = t.normalAt(hx, hy, 5);
+      const vn = dx * n.x + dy * n.y;
+      if (vn < 0) { dx -= 2 * vn * n.x; dy -= 2 * vn * n.y; } else { dx = -dx; dy = -dy; }
+      const len = Math.hypot(dx, dy) || 1;
+      dx /= len; dy /= len;
+      bounces++;
+      cx = hx; cy = hy;
+    }
+    const last = segs[segs.length - 1];
+    return { segs, hit, end: { x: last[2], y: last[3] }, wall, bounces };
+  }
+
+  fire(scene, x, y, vx, vy, owner) {
+    const len = Math.hypot(vx, vy) || 1;
+    const path = this.trace(scene, x, y, vx / len, vy / len, owner);
+    path.segs.forEach(([x0, y0, x1, y1], i) => {
+      // Луч держится дольше выстрела дробовика: рикошет надо успеть разглядеть
+      scene.drawBeam(x0, y0, x1, y1, this.color, 900);
+      // Искра и подпалина на каждом отскоке
+      if (i > 0) {
+        scene.fx?.dust(x0, y0, 4);
+        scene.explode(x0, y0, { radius: 5, damageRadius: 1, damage: 0, knockback: 0, shake: 0.001 }, owner);
+      }
+    });
+    const bonus = this.bounceBonus * path.bounces;
+    if (path.hit) {
+      // В центр задетого бойца: луч касается края тела, и по спаду урона
+      // от края попадание стоило бы вдвое меньше
+      scene.explode(path.hit.x, path.hit.centerY, { ...this.explosion, damage: this.explosion.damage + bonus }, owner);
+      if (path.bounces > 0 && !scene.replaying) scene.fx?.banner?.(`Рикошет ×${path.bounces}!`, '#ff6b8a', 1100);
+    } else if (path.wall) {
+      scene.explode(path.end.x, path.end.y, { radius: 12, damageRadius: 26, damage: 12 + bonus, knockback: 90, shake: 0.002 }, owner);
+    }
+    scene.fx?.sound('shot');
+    return [];
+  }
+}
+
+/**
  * Бита: земля цела, зато отправляет в полёт.
  *
  * Урон небольшой, весь смысл — в толчке: сбросить соседа в воду стоит
@@ -439,5 +518,32 @@ export class TeleportWeapon extends TargetedWeapon {
     owner.fallStartY = t.y;      // встал на опору — падать неоткуда
     scene.fx?.warp?.(owner.x, owner.centerY, true);
     return [];
+  }
+}
+
+/**
+ * Овца: бросается, а приземлившись — бежит сама в ту сторону, куда
+ * летела. Кочки перешагивает, на стенку прыгает, упёрлась — разворачивается.
+ * Взрывается, когда тапнешь (как сплит-ракета — тот же сетевой «тап»),
+ * когда упрётся в бойца или по фитилю. Вся ходьба — в Projectile (walker).
+ */
+export class SheepWeapon extends Weapon {}
+
+/**
+ * Ядовитый газ: колба лопается почти без взрыва, а на месте остаётся
+ * облако. Облако живёт несколько ходов и в конце каждого хода травит
+ * всех, кто в нём стоит (GameScene.tickHazards). Облако — часть снимка
+ * партии, как мины.
+ */
+export class GasWeapon extends Weapon {
+  constructor(cfg) {
+    super(cfg);
+    this.gas = Object.assign({ radius: 72, turns: 3, damage: 10 }, cfg.gas);
+  }
+
+  onDetonate(scene, projectile, x, y) {
+    scene.explode(x, y, this.explosion, projectile.owner);
+    scene.addGas(x, y - 12, this.gas, projectile.owner);
+    return null;
   }
 }

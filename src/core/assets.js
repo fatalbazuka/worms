@@ -80,7 +80,9 @@ export const EMOJI = ['pine', 'tree', 'palm', 'mushroom', 'rock', 'barrel', 'cac
   // аффиксы: оживлённые эмодзи (entities/Affixes.js)
   'dash', 'warning', 'boom', 'windface', 'storm', 'zap', 'cyclone', 'sparkles',
   // новое оружие: пчёлы, бур, магнит
-  'bee', 'honey', 'nutbolt', 'magnet'];
+  'bee', 'honey', 'nutbolt', 'magnet',
+  // овца, лазер, газ
+  'sheep', 'flashlight', 'testtube'];
 
 /** Текстуры ландшафта: по четыре файла на каждую тему из biomes.js. */
 for (const b of BIOMES) {

@@ -1184,12 +1184,13 @@ export class Hud {
       const spring = scene.slingAim && scene.turn.weapon?.id === 'spring';
       // На тренировке своя панель с шагами — строка подсказки не нужна
       const splitting = !scene.replaying && !scene.isBotTurn?.() && scene.isLocalTeam?.(scene.turn.currentTeam)
-        && scene.projectiles?.some((p) => p.alive && p.weapon.projectile.split);
+        && scene.projectiles?.find((p) => p.alive && (p.weapon.projectile.split || p.weapon.projectile.tapBoom));
       const bannerUp = (scene.fx?.bannerUntil ?? 0) > scene.time.now;
       const show = splitting || (!this.helpVisible && !bannerUp && scene.canPlayerAct() && !scene.coach
         && (spring || sling || (scene.hookHint && scene.hooksLeft > 0)));
       if (show) {
-        this.hintText.setText(splitting ? 'тапни по экрану — ракета разделится на три' : spring
+        this.hintText.setText(splitting ? (splitting.weapon.projectile.tapBoom ? 'тапни по экрану — овца взорвётся'
+          : 'тапни по экрану — ракета разделится на три') : spring
           ? 'батут: тяни рычаг — полетишь сам по дуге, пружина останется'
           : sling
             ? (scene.aimAnywhere ? 'тяни пальцем где угодно ОТ цели и отпусти' : 'тяни жёлтый рычаг от цели и отпусти')

@@ -102,6 +102,7 @@ export class TurnManager {
     this.activeWorm = worm;
     this.turnNumber++;
     this.monstersActed = false;
+    this.hazardsActed = false;
     this.timeLeft = this.scene.turnTime ?? CFG.TURN_TIME;
     this.state = STATE.AIM;
     this.retreating = false;
@@ -159,6 +160,7 @@ export class TurnManager {
     this.teamCursor = info.cursors ? info.cursors.slice() : this.teamCursor;
     this.timeLeft = this.scene.turnTime ?? CFG.TURN_TIME;
     this.holdTimer = 0;
+    this.hazardsActed = false;
     this.state = STATE.AIM;
     this.retreating = false;
 
@@ -317,6 +319,11 @@ export class TurnManager {
         if ((quiet && this.resolveTimer >= CFG.RESOLVE_SETTLE)
           || this.resolveTimer >= CFG.RESOLVE_TIMEOUT) {
           if (this._holding(dt)) break;   // очередь передаст тот, кто ходил
+          // Ядовитый газ травит стоящих в облаке — раз в конце каждого хода
+          if (!this.hazardsActed) {
+            this.hazardsActed = true;
+            if (scene.tickHazards?.()) { this.resolveTimer = 0; break; }
+          }
           // Ход монстров: раз после каждого хода бойца, пока все затихли
           if (!this.monstersActed) {
             this.monstersActed = true;
