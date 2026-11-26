@@ -386,7 +386,7 @@ export function createBot({ db, api, players, tournaments, analytics = null, adm
           ? '/stats — your stats\n/top — top 10\n/tours — tournaments\n/promo CODE — activate a promo code\n/id — your id\n/mute — no reminders, friend or duel messages\n/unmute — turn them back on'
           : '/stats — статистика\n/top — топ-10\n/tours — турниры\n/promo КОД — активировать промокод\n/id — твой id'
           + '\n/mute — не писать о серии, друзьях и партиях\n/unmute — снова писать'
-          + '\n\n♟ Позвать друга на шахматную партию: в чате с ним напиши @' + (username || 'бот') + ' и нажми карточку.')
+          + '\n\n♟ Позвать друга на шахматную партию: в чате с ним напиши @' + (username || 'бот') + ', нажми пробел и выбери карточку.')
           + (admin ? `\n\n${ADMIN_HELP}` : ''), playAndInvite(en));
       case '/promo': {
         if (!promos) break;
