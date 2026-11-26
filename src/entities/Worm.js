@@ -149,8 +149,10 @@ export class Worm {
       .setOrigin(0, 0.5).setDepth(DEPTH.WORM + 3);
     s.rig.world(this.bar);
 
+    // Нарисованные стрелки — только красная и синяя; зелёным и жёлтым
+    // (вечеринка на 3–4) — простой треугольник своего цвета
     const markerKey = `marker_${this.team % 2}`;
-    if (has(s, markerKey)) {
+    if (this.team < 2 && has(s, markerKey)) {
       this.marker = s.add.sprite(this.x, this.y - CFG.WORM_H - 40, markerKey)
         .setDepth(DEPTH.WORM + 2).setVisible(false);
       s.rig.world(this.marker);

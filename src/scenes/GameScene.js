@@ -46,7 +46,8 @@ import { markDone, MISSION_BY_ID, loadProgress } from '../campaign/missions.js';
 import { ASCENT_BY_ID, ascentStarsFor, ascentStarTurns } from '../campaign/ascent.js';
 import { checkObjective, snapshot, objectiveText } from '../campaign/objectives.js';
 import { player, eloDelta, recordResult } from '../platform/player.js';
-import { reportResult, serverAvailable, track, trackStep, submitDailyTower, createDuel, knockRoom } from '../net/server.js';
+import { reportResult, serverAvailable, track, trackStep, submitDailyTower, createDuel, knockRoom, syncMe, loggedIn } from '../net/server.js';
+import { inviteToChess } from '../net/invite.js';
 import { leagueOf, nextLeague, toNextLeague } from '../platform/league.js';
 import { OffscreenMarkers } from '../ui/OffscreenMarkers.js';
 import { SKIN_BY_ID, rivalSkin } from '../core/skins.js';
@@ -88,6 +89,9 @@ export default class GameScene extends Phaser.Scene {
     // Что за партия — решает меню. Прямой заход по адресу описания не даёт,
     // и тогда игра ведёт себя как раньше: обычный хотсит на одном устройстве.
     this.match = this.registry.get('match') ?? HOTSEAT;
+    // Команд обычно две; «Вечеринка» (partyMatch) — три-четыре. Число
+    // ставится заново на каждую партию, чтобы одна не протекала в другую
+    CFG.TEAMS = Math.max(2, Math.min(4, this.match.teams?.length ?? 2));
     this.overButtons = null;
     this.myTurns = 0;            // своих ходов — для звёзд испытаний
     // Счётчики боя для ежедневных заданий: только за свою команду
@@ -612,6 +616,16 @@ export default class GameScene extends Phaser.Scene {
     return this._slingUses < 2;
   }
 
+  /**
+   * Подпись у круга отмены («отпусти здесь — выстрела не будет»): первые
+   * выстрелы рогаткой. Как отменить выстрел, сам никто не догадывался.
+   */
+  get cancelHint() {
+    if (!this.slingAim) return false;
+    if (this._slingUses == null) void this.slingHint;
+    return (this._slingUses ?? 0) < 6;
+  }
+
   get hookHint() {
     if (this.coach) return this.coach.wantsHookHint;
     if (!this.sling || this.slingHint) return false;
@@ -850,7 +864,7 @@ export default class GameScene extends Phaser.Scene {
     this.net = new DuelSession(duel);
     this.myTeam = this.net.myTeam;
     this.net.attach(this);
-    this._netStatus(`дуэль с ${this.net.opponent.name} · восстанавливаю ходы…`);
+    this._netStatus(`♟ ${this.net.opponent.name} · восстанавливаю ходы…`);
     // «Пересмотреть ход» — внизу посередине, между стиком и рычагом
     const x = CFG.VIEW_W / 2, y = CFG.VIEW_H - 34;
     this.rewatchBtn = this.rig.ui(this.add.text(x, y, '↺ Пересмотреть ход', font(20, 800, '#1a1408'))
@@ -964,7 +978,7 @@ export default class GameScene extends Phaser.Scene {
     ui.push(this._overButton(tour ? 0 : 140, 'В меню', () => this.toMenu('root'), 'wait-menu', -60));
     if (long && !tour) {
       ui.push(this._overButton(-140, 'С ботом', () => this.leaveRoomForBot(), 'wait-bot', 24));
-      ui.push(this._overButton(140, 'По переписке', () => this.toMenu('duels'), 'wait-duel', 24));
+      ui.push(this._overButton(140, '♟ Партия', () => this.toMenu('duels'), 'wait-duel', 24));
     }
     this.waitUi = ui;
   }
@@ -986,9 +1000,20 @@ export default class GameScene extends Phaser.Scene {
   }
 
   /** Свой ход ушёл на сервер (ok) или нет — показать, что дальше. */
+  /** Строка итога дуэли: окончена и что с рейтингом. */
+  _duelRatingText() {
+    const d = this.net?.duel?.delta;
+    if (d == null) return this.net?.duel?.status === 'finished' ? 'партия окончена · без рейтинга' : 'партия окончена · рейтинг посчитаю после отправки хода';
+    return `партия окончена · рейтинг ${d > 0 ? `+${d}` : d}`;
+  }
+
   onDuelSent(ok, error = '') {
     if (this.gameOverUi) {
       if (!ok) this.fx.banner(error || 'ход не отправлен', '#ff9a9a', 2600);
+      else {
+        if (this._duelSub?.active) this._duelSub.setText(this._duelRatingText());
+        syncMe(true);
+      }
       return;
     }
     this._duelPanel(ok ? 'Ход отправлен' : 'Ход не отправлен',
@@ -1017,7 +1042,7 @@ export default class GameScene extends Phaser.Scene {
     ui.push(this.rig.ui(this.add.text(CFG.VIEW_W / 2, CFG.VIEW_H / 2 + 22, sub, font(18, 700, UI.textDim))
       .setOrigin(0.5).setScrollFactor(0).setDepth(DEPTH.HUD + 11).setAlign('center')
       .setWordWrapWidth(Math.min(CFG.VIEW_W - 60, 640))));
-    ui.push(this._overButton(-140, 'Мои дуэли', () => this.toMenu('duels'), 'duels'));
+    ui.push(this._overButton(-140, 'Мои партии', () => this.toMenu('duels'), 'duels'));
     ui.push(this._overButton(140, 'В меню', () => this.toMenu('root'), 'menu'));
     ui.push(this._overButton(0, '↺ Пересмотреть ход', () => this.rewatchDuel(), 'rewatch', 96));
     this.duelUi = ui;
@@ -1027,12 +1052,14 @@ export default class GameScene extends Phaser.Scene {
   /** Строка над полем в дуэли: с кем, чей ход и сколько у него времени. */
   _duelStatus() {
     const n = this.net;
-    const who = `дуэль с ${n.opponent.name}`;
+    // Имя без предлога: «партия с Атаман» не склоняется
+    const who = `♟ ${n.opponent.name}`;
     if (n.phase === 'replay') return [`${who} · повтор хода соперника`, '#ffd166'];
     if (n.phase === 'play') return [`${who} · твой ход${n.started ? '' : ' · часы пойдут, когда начнёшь'}`, '#8ef0a0'];
-    if (n.phase === 'over') return [`${who} · окончена`, '#ffd166'];
+    if (n.phase === 'over') return [`${who} · партия окончена`, '#ffd166'];
     const left = n.duel.deadline ? Math.max(0, n.duel.deadline - Date.now()) : null;
-    const h = left === null ? null : Math.floor(left / 3600_000);
+    // Вверх: только что начатый ход — «24 ч», как в сообщении бота
+    const h = left === null ? null : left < 3600_000 ? 0 : Math.ceil(left / 3600_000);
     return [`${who} · ход соперника${h === null ? '' : ` · у него ${h > 0 ? `${h} ч` : 'меньше часа'}`}`, '#ffd166'];
   }
 
@@ -1514,8 +1541,12 @@ export default class GameScene extends Phaser.Scene {
     this.props?.update(dt);
     this._scrollBg();
     if (this.coach) {
-      this.coach.update();
-      if (this.coach.finished) this.coach = null;
+      // Бой кончился — плашка обучения не должна просвечивать сквозь итог
+      if (this.gameOverUi) { this.coach.destroy(); this.coach = null; }
+      else {
+        this.coach.update();
+        if (this.coach.finished) this.coach = null;
+      }
     }
     this.ambience?.update(dt);
     for (const m of this.monsters) m.update(dt);
@@ -2092,10 +2123,15 @@ export default class GameScene extends Phaser.Scene {
     let ouch = null, ouchDmg = 0;
     const shooter = owner?.team ?? this.turn.currentTeam;
     let foesHit = 0;
+    // Для истории хода дуэли: кого и на сколько задел этот взрыв, а если
+    // никого — как далеко был ближайший (разбор «попал, а урона нет»)
+    const boomHits = [];
+    let boomNear = Infinity;
     for (const w of this.worms) {
       if (!w.alive) continue;
       const wx = w.x, wy = w.centerY;
       const d = Math.hypot(wx - x, wy - y);
+      if (w.team !== shooter) boomNear = Math.min(boomNear, d);
       // Мимо, но рядом — подпрыгнул от испуга
       if (d > cfg.damageRadius && d < cfg.damageRadius + 130) w.startle();
       if (d > cfg.damageRadius) continue;
@@ -2108,6 +2144,7 @@ export default class GameScene extends Phaser.Scene {
       w.applyImpulse(nx * cfg.knockback * f, ny * cfg.knockback * f - 70 * f);
 
       w.damage(dmg, 'взрыв');
+      if (dmg > 0) boomHits.push([this.worms.indexOf(w), dmg]);
       if (dmg > 0) felt = Math.max(felt, this.isLocalTeam(w.team) ? 2 : 1);
       if (dmg > 0) this._countHit(w, dmg);
       if (dmg > 0 && w.team !== shooter) {
@@ -2118,6 +2155,7 @@ export default class GameScene extends Phaser.Scene {
     }
     this._blastBy = undefined;
     this._blastCfg = undefined;
+    this.net?.noteBoom?.({ x: ix, y: iy, r: cfg.damageRadius, hits: boomHits, near: Number.isFinite(boomNear) ? Math.round(boomNear) : null });
     this._impact(x, y, ouchDmg, foesHit);
     // Сильно досталось — боец вскрикивает. Царапины молча, иначе «ой» на каждый чих
     if (ouch && ouchDmg >= 25 && !this.gameOverUi) voice.say('hurt', { team: ouch.team });
@@ -2519,6 +2557,9 @@ export default class GameScene extends Phaser.Scene {
     const mine = this.myTeamIndex;
     let text;
     if (winner < 0) text = 'Ничья';
+    // Вечеринка: команд много, и людей может быть несколько — победителя
+    // называем по цвету (и честно говорим, если это бот)
+    else if (this.match.party) text = `Победа: ${TEAM_NAMES[winner]}${this.match.teams[winner]?.control === 'bot' ? ' (бот)' : ''}!`;
     else if (solo) text = winner === mine ? 'Победа!' : 'Поражение';
     else text = `Победа: ${TEAM_NAMES[winner]}!`;
     const color = winner >= 0 ? TEAM_COLORS[winner] : 0xffffff;
@@ -2571,12 +2612,13 @@ export default class GameScene extends Phaser.Scene {
     // Бой без рейтинга: рейтинг не трогаем ни здесь, ни на сервере
     const casual = isCasualRoom(this.room);
     const tourney = isTournamentRoom(this.room);
-    // Дуэль по переписке — без рейтинга, но монеты, опыт и задания как за бой
-    // с человеком. Открыть доигранную дуэль можно не раз — награда одна
+    // Шахматная партия — на рейтинг (его считает сервер, строка ниже из
+    // _duelRatingText), монеты, опыт и задания как за бой с человеком.
+    // Открыть доигранную партию можно не раз — награда одна
     const duel = Boolean(this.net?.isDuel);
     const reward = !duel || this.net.claimReward();
     if (duel) {
-      ratingLine = 'дуэль по переписке · без рейтинга';
+      ratingLine = 'шахматная партия · на рейтинг';
     } else if (this.net?.connected && winner >= 0 && casual) {
       ratingLine = 'бой без рейтинга';
     } else if (this.net?.connected && winner >= 0 && tourney) {
@@ -2682,17 +2724,21 @@ export default class GameScene extends Phaser.Scene {
     if (duel) {
       for (const o of this.duelUi ?? []) o.destroy();
       this.duelUi = null;
-      sub.setText('дуэль окончена');
+      // Дуэли — на рейтинг: сдвиг считает сервер, когда примет последний ход
+      this._duelSub = sub;
+      sub.setText(this._duelRatingText());
       const foe = this.net.opponent;
       this.gameOverUi.push(this._overButton(-140, 'Реванш', () => {
-        sub.setText('создаю дуэль…');
+        sub.setText('создаю партию…');
         createDuel({ opponent: foe.id }).then((d) => {
+          // С ним уже идёт другая дуэль — она в списке
+          if (d.existing) { this.toMenu('duels'); return; }
           this.registry.set('duel', { ...d, turns: [] });
           this.registry.set('seed', d.seed);
           this.scene.restart();
         }).catch((e) => sub.setText(e.message));
       }, 'rematch'));
-      this.gameOverUi.push(this._overButton(140, 'Мои дуэли', () => this.toMenu('duels'), 'duels'));
+      this.gameOverUi.push(this._overButton(140, 'Мои партии', () => this.toMenu('duels'), 'duels'));
       // Чем кончилось — посмотреть ещё раз
       if (this.net?.isDuel && (this.net.duel.turns ?? []).length) {
         this.gameOverUi.push(this._overButton(0, '↺ Пересмотреть ход', () => this.rewatchDuel(), 'rewatch', 96));
@@ -2749,7 +2795,13 @@ export default class GameScene extends Phaser.Scene {
           shareLink(link, this._dailyShareText());
         }, 'share', 92));
       } else if (link && this.match.mode !== 'hotseat' && solo) {
-        this.gameOverUi.push(this._overButton(story ? 140 : 0, 'Позвать друга', () => {
+        this.gameOverUi.push(this._overButton(story ? 140 : 0, '♟ Позвать друга', () => {
+          // Приглашение — всегда на шахматную партию; без входа — ссылка в игру
+          if (loggedIn()) {
+            inviteToChess().then((r) => { if (r && !r.shared) this.fx.banner('ссылка на партию скопирована', '#ffd166', 1800); })
+              .catch((e) => this.fx.banner(e.message, '#ff9a9a', 2200));
+            return;
+          }
           trackStep('invite');
           shareLink(link, won
             ? 'Только что победил в «Башне» 💥 Залетай — по этой ссылке нам обоим по коробке со скином!'

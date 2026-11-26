@@ -85,10 +85,12 @@ export function createShop({ db, now = () => Date.now() }) {
    * для только что созданного игрока.
    * @returns {string|null} id пригласившего, если подарок выдан
    */
-  function referral(newcomer, startParam, players) {
+  function referral(newcomer, startParam, players, duelHost = null) {
+    // Приглашение на шахматную партию — тоже приглашение: пришёл по ссылке
+    // на партию (duel_КОД) — подарок тому, кто её создал (duelHost)
     const m = /^ref_(\d{1,15})$/.exec(String(startParam ?? ''));
-    if (!m) return null;
-    const host = players.byId(`tg${m[1]}`);
+    if (!m && !duelHost) return null;
+    const host = m ? players.byId(`tg${m[1]}`) : players.byId(duelHost);
     if (!host || host.id === newcomer.id) return null;
     if (q.refCount.get(host.id).n >= REF_LIMIT) return null;
     if (q.referred.run(host.id, newcomer.id).changes === 0) return null;

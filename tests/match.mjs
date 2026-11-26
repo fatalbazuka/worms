@@ -423,6 +423,51 @@ check('один в лобби никого не находит', findMatch(p('a'
       && !loadoutApplies(ascentMatch('up-1')));
 }
 
+// --- авиаудар на башне: бьёт в этаж под прицелом, этажи выше пролетает ---
+{
+  const { WEAPONS } = await import('../src/weapons/index.js');
+  const { CFG } = await import('../src/config.js');
+  const air = WEAPONS.find((w) => w.id === 'airstrike');
+  // Два этажа: верхний на y 300..330, нижний на 900..930, по всей ширине
+  const floors = [[300, 330], [900, 930]];
+  const solidAt = (x, y) => floors.some(([a, b]) => y >= a && y <= b);
+  const terrain = (width, height) => ({
+    width, height, solidAt,
+    surfaceYAt: (x, from = 0) => { for (let y = Math.max(0, from | 0); y < height; y++) if (solidAt(x, y)) return y; return null; },
+  });
+  const tower = { terrain: terrain(720, 1560) };
+  const me = { x: 100, y: 290, centerY: 280 };
+  // Целимся в точку (500, 880) — над нижним этажом, под верхним
+  const dx = 400, dy = 600, dist = Math.hypot(dx, dy);
+  const speed = (dist / air.reachOf(tower)) * CFG.AIM_MAX_POWER;
+  const plan = air.plan(tower, me, (dx / dist) * speed, (dy / dist) * speed);
+  check('авиаудар на башне: точка — этаж под прицелом, а не верхний',
+    plan.t.tall && Math.abs(plan.t.x - 500) < 2 && plan.t.y === 900, JSON.stringify(plan.t));
+  check('авиаудар на башне: ракеты взводятся ниже верхнего этажа и накрывают полосу у цели',
+    plan.missiles.length === 5 && plan.missiles.every((m) => m.armY > 330 && m.armY < 900 && m.y < m.armY)
+      && Math.abs(plan.missiles[2].landX - 500) < 2 && plan.missiles[4].landX - plan.missiles[0].landX === 4 * air.spacing,
+    JSON.stringify(plan.missiles.map((m) => [Math.round(m.x), Math.round(m.y), Math.round(m.armY), Math.round(m.landX)])));
+  check('авиаудар на башне: полная сила достаёт через всю карту, но не дальше её',
+    air.reachOf(tower) < air.reach && air.reachOf(tower) > 1000, String(air.reachOf(tower)));
+  // Широкая карта — как было: с неба, без «взвода»
+  const wide = { terrain: terrain(2400, 720) };
+  const old = air.plan(wide, me, 600, -600);
+  check('авиаудар на широкой карте — по-прежнему с неба',
+    !old.t.tall && old.missiles.every((m) => m.armY === null && m.y < 0) && air.reachOf(wide) === air.reach, JSON.stringify(old.t));
+}
+
+// --- секретная «Вечеринка»: 3–4 команды, люди и боты, вода позже ---
+{
+  const { partyMatch, towerMatch } = await import('../src/core/match.js');
+  const p3 = partyMatch(['human', 'human', 'rookie']);
+  const p4 = partyMatch(['human', 'fighter', 'rookie', 'human', 'human']);
+  check('вечеринка: 3 и 4 команды (не больше), боты где просили, вода позже обычного',
+    p3.party && p3.teams.length === 3 && p3.teams[2].control === 'bot' && p3.teams[2].level === 'rookie'
+      && p4.teams.length === 4 && p4.teams[1].level === 'fighter'
+      && p4.rules.flood.after > towerMatch(null).rules.flood.after && !towerMatch(null).party,
+    JSON.stringify(p4.teams));
+}
+
 // --- «Что дальше»: одна ближайшая цель по порядку важности ---
 {
   const { nextGoal } = await import('../src/core/nextgoal.js');

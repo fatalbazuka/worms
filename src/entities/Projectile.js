@@ -138,6 +138,21 @@ export class Projectile {
     }
     if (ny < -3000) { this.destroy(); return; }
 
+    // Ракета авиаудара на башне: пока не дошла до своей высоты (armY),
+    // она «высоко» — этажи и бойцов выше точки прицела пролетает насквозь
+    if (this.armY != null) {
+      if (ny < this.armY) {
+        this.x = nx; this.y = ny;
+        if (this.view && this.view.alpha !== 0.5) this.view.setAlpha(0.5);
+        this._pushTrail();
+        return;
+      }
+      this.armY = null;
+      this.view?.setAlpha(1);
+      // Взвелась внутри перекрытия — подождёт, пока выйдет из него
+      this.insideGround = this.terrain.solidAt(nx, ny);
+    }
+
     // Прямое попадание в бойца — по всему отрезку, а не по его концу.
     // Землю мы и так трассируем попиксельно, а бойца проверяли одной
     // точкой: на большой скорости подшаг длиннее бойца, и снаряд проходил

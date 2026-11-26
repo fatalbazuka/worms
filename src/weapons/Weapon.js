@@ -300,10 +300,18 @@ export class TargetedWeapon extends Weapon {
 }
 
 /**
- * Авиаудар: самолёт сбрасывает ракеты на точку впереди. Направление — в
- * какую сторону смотрит ствол, дальность — сила заряда; угол не важен.
- * Ракеты падают почти отвесно, поэтому за холмом от них не спрятаться —
- * в этом и смысл.
+ * Авиаудар: самолёт сбрасывает ракеты на точку прицела.
+ *
+ * На широкой карте (одна поверхность) — как было: сторона — куда смотрит
+ * ствол, дальность — сила заряда, угол не важен; ракеты падают с неба
+ * почти отвесно, и за холмом от них не спрятаться.
+ *
+ * На башне так не работает: этажи друг над другом, и удар с неба всегда
+ * приходился бы в самый верхний, а дальность в полторы тысячи px при
+ * ширине башни в семьсот уводила его в край карты от любого сильного
+ * натяжения. Поэтому там точка удара — куда показывает прицел (направление
+ * и сила, как у телепорта), а ракеты «взводятся» только над этой точкой:
+ * этажи выше пролетают насквозь и рвутся на том, в который целились.
  */
 export class AirstrikeWeapon extends TargetedWeapon {
   constructor(cfg) {
@@ -311,19 +319,71 @@ export class AirstrikeWeapon extends TargetedWeapon {
     this.missiles = cfg.missiles ?? 5;
     this.spacing = cfg.spacing ?? 26;
     this.missileWeapon = cfg.missileWeapon;
+    this.drop = cfg.drop ?? 520;        // с какой высоты над целью идут ракеты на башне
+    this.armAbove = cfg.armAbove ?? 90; // за сколько px до этажа ракета взводится
+  }
+
+  /** Высокая карта: этажи друг над другом (башня). */
+  tall(scene) {
+    return scene.terrain.height > scene.terrain.width;
+  }
+
+  /** Дальность при полной силе: на башне — по размеру карты. */
+  reachOf(scene) {
+    if (!this.tall(scene)) return this.reach;
+    return Math.min(this.reach, Math.hypot(scene.terrain.width, scene.terrain.height) * 0.7);
+  }
+
+  targetPoint(scene, owner, vx, vy) {
+    if (!this.tall(scene)) return super.targetPoint(scene, owner, vx, vy);
+    const terrain = scene.terrain;
+    const p = this.powerOf(vx, vy, scene);
+    const len = Math.hypot(vx, vy) || 1;
+    const reach = this.reachOf(scene);
+    const ox = owner?.x ?? 0, oy = owner?.centerY ?? owner?.y ?? 0;
+    const x = Math.max(40, Math.min(terrain.width - 40, ox + (vx / len) * p * reach));
+    let aimY = Math.max(30, Math.min(terrain.height - 2, oy + (vy / len) * p * reach));
+    // Прицел в толще этажа — бьём по нему сверху: поднимаемся до воздуха
+    for (let i = 0; i < 400 && aimY > 2 && terrain.solidAt(x, aimY); i++) aimY -= 2;
+    const y = terrain.surfaceYAt(Math.round(x), Math.round(aimY)) ?? terrain.height;
+    return { x, y, aimY, tall: true };
+  }
+
+  /**
+   * План удара: точка и ракеты — откуда, с какой скоростью, где взводятся
+   * и куда придут. Один расчёт для выстрела, прицела и бота.
+   */
+  plan(scene, owner, vx, vy) {
+    const t = this.targetPoint(scene, owner, vx, vy);
+    const side = vx >= 0 ? 1 : -1;
+    const half = (this.missiles - 1) / 2;
+    const g = CFG.GRAVITY * (this.missileWeapon.projectile.gravityScale ?? 1);
+    const missiles = [];
+    for (let i = 0; i < this.missiles; i++) {
+      const landX = t.x + (i - half) * this.spacing;
+      if (!t.tall) {
+        // Ракеты идут лесенкой по высоте: падают не залпом, а одна за другой
+        missiles.push({ x: landX - side * 40, y: -40 - i * 26, vx: side * 60, vy: 420, armY: null, landX });
+        continue;
+      }
+      // На башне — с высоты drop над этажом; снос за время падения учтён,
+      // чтобы ракета пришла туда, где нарисована полоса накрытия
+      const h = this.drop + i * 26;
+      const time = (-420 + Math.sqrt(420 * 420 + 2 * g * h)) / g;
+      missiles.push({
+        x: landX - side * 60 * time, y: t.y - h, vx: side * 60, vy: 420,
+        armY: Math.min(t.aimY, t.y - this.armAbove), landX,
+      });
+    }
+    return { t, side, missiles };
   }
 
   fire(scene, x, y, vx, vy, owner) {
-    const t = this.targetPoint(scene, owner, vx, vy);
-    const side = vx >= 0 ? 1 : -1;
     const out = [];
-    const half = (this.missiles - 1) / 2;
-    for (let i = 0; i < this.missiles; i++) {
-      const k = i - half;
-      // Ракеты идут лесенкой по высоте: падают не залпом, а одна за другой
-      const mx = t.x + k * this.spacing - side * 40;
-      const my = -40 - i * 26;
-      out.push(new Projectile(scene, mx, my, side * 60, 420, this.missileWeapon, owner));
+    for (const m of this.plan(scene, owner, vx, vy).missiles) {
+      const pr = new Projectile(scene, m.x, m.y, m.vx, m.vy, this.missileWeapon, owner);
+      if (m.armY !== null) pr.armY = m.armY;
+      out.push(pr);
     }
     scene.fx?.banner?.('Авиаудар!', '#9fd2ff', 900);
     return out;

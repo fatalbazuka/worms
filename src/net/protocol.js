@@ -223,6 +223,19 @@ export function applyState(scene, state) {
       if (w.alive) w.kill('сеть');
       return;
     }
+    // Показ чужого хода урона не считает (взрыв только рисуется), а итог
+    // приходит снимком — молча. Со стороны выглядело, будто попадание не
+    // нанесло урона. Показываем его так же, как при своём выстреле: цифрой
+    // и вспышкой. Не при мгновенной сборке партии из истории (fastForward)
+    const lost = w.health - s.hp;
+    // и не при досинхронизации живой партии (там показа выстрела не было)
+    if (lost > 0 && w.alive && !scene.fastForward && (scene.replaying || scene.net?.isDuel) && scene.fx?.damageNumber) {
+      scene.fx.damageNumber(s.x, s.y - CFG.WORM_H / 2 - 10, lost);
+      w.hurtPose = 'worm_hurt';
+      w.hurtUntil = scene.time.now + 1300;
+      w.flashUntil = scene.time.now + 110;
+      w.squash = 0.8;
+    }
     w.health = s.hp;
     w.grounded = w.supported(w.x, w.y);
     w.zip = null;

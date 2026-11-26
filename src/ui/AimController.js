@@ -1,4 +1,5 @@
 import { CFG, DEPTH } from '../config.js';
+import { font } from './theme.js';
 import { has } from '../core/assets.js';
 import { isDesktop } from '../platform/device.js';
 import { SPRING_LAUNCH } from '../entities/Spring.js';
@@ -365,6 +366,9 @@ export class AimController {
 
   update() {
     this.gfx.clear();
+    // Подпись отмены живёт кадр: её снова поставит _drawSwipe, пока тянут
+    if (this._cancelShown) this._cancelShown = false;
+    else this.cancelText?.setVisible(false);
     const w = this.worm;
     const scene = this.scene;
     // Ход соперника по сети: его прицел и заряд приходят живьём и рисуются
@@ -569,6 +573,18 @@ export class AimController {
     }
   }
 
+  /** Подпись у круга отмены рогатки (в мире, над бойцом). */
+  _cancelLabel(x, y, on) {
+    const s = this.scene;
+    if (!this.cancelText) {
+      this.cancelText = s.rig.world(s.add.text(0, 0, '', font(14, 800, '#ffd0d0'))
+        .setOrigin(0.5, 1).setStroke('#10131a', 5).setDepth(DEPTH.AIM + 1));
+    }
+    this.cancelText.setText(on ? 'отпусти — выстрела не будет' : 'передумал? верни палец в круг')
+      .setPosition(x, y).setScale(1 / s.rig.zoom).setVisible(true);
+    this._cancelShown = true;
+  }
+
   _ensureCrosshair() {
     const s = this.scene;
     const team = s.turn.currentTeam % 2;
@@ -611,7 +627,8 @@ export class AimController {
       return;
     }
     // Авиаудар: пунктир сверху до земли и полоса накрытия
-    const top = Math.max(0, this.scene.rig.viewTop);
+    // На башне ракеты идут с высоты drop над этажом — оттуда и пунктир
+    const top = Math.max(0, this.scene.rig.viewTop, t.tall ? t.y - (weapon.drop ?? 520) : 0);
     for (let y = top; y < t.y - 8; y += 18) {
       g.fillStyle(c, 0.55);
       g.fillRect(t.x - 1, y, 2, 10);
@@ -637,6 +654,8 @@ export class AimController {
       // первого касания красное кольцо под пальцем пугало и прятало прицел
       const cancel = inside && this.wasOut;
       this.gfx.lineStyle(3, cancel ? 0xff8a8a : 0xffffff, cancel ? 0.85 : 0.22).strokeCircle(o.x, o.y, r);
+      // Первые выстрелы — подпись: как отменить, никто не догадывался сам
+      if (this.scene.cancelHint && !this.pad) this._cancelLabel(o.x, o.y - r - 8, cancel);
       if (inside && this.wasOut) {
         this.gfx.lineStyle(4, 0xff8a8a, 0.9);
         this.gfx.lineBetween(o.x - 9, o.y - 9, o.x + 9, o.y + 9);

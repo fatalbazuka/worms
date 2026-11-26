@@ -240,8 +240,15 @@ export class Coach {
         // Промах на добивании: ход ушёл к мишени и вернулся — подбодрить и поправить
         if (this.current.id === 'finish' && s.turn.turnNumber > (this.shotTurn ?? s.turn.turnNumber)) {
           this.misses++;
-          this.bodyText.setText('Мимо — не беда! Повтори за пальцем: тяни рычаг так же далеко и отпусти');
+          // Задел, но не добил — так и сказать: «мимо» при минус 34 у мишени
+          // сбивало с толку
+          const foe = s.worms.find((f) => f.team !== 0);
+          const hit = foe && this.foeHp != null && foe.health < this.foeHp;
+          this.bodyText.setText(hit
+            ? 'Попал! Мишень ещё стоит — стреляй ещё раз так же'
+            : 'Мимо — не беда! Повтори за пальцем: тяни рычаг так же далеко и отпусти');
         }
+        if (this.shotTurn !== s.turn.turnNumber) this.foeHp = s.worms.find((f) => f.team !== 0)?.health ?? null;
         this.shotTurn = s.turn.turnNumber;
         break;
       }

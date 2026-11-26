@@ -30,6 +30,7 @@ import { skinSql } from './players.mjs';
 import { SKIN_IDS } from './shop.mjs';
 
 export const FRIENDS_MAX = 100;          // столько друзей в списке, сам игрок — всегда
+export const KNOWN_MAX = 30;            // знакомых (друзей друзей) в списке
 export const OVERTAKE_PER_DAY = 3;
 export const DUEL_GAP = 10 * 60_000;
 export const DUEL_PAIR_PER_DAY = 3;
@@ -61,6 +62,21 @@ export function createFriends({ db, players, analytics, notify, invite, now = ()
       or exists (select 1 from player where id = $a and referred_by = $b)
       or exists (select 1 from match where p1 = $a and p2 = $b and status = 'confirmed')
       or exists (select 1 from match where p1 = $b and p2 = $a and status = 'confirmed')) as yes`),
+    // Знакомые: друзья твоих друзей, которые тебе ещё не друзья, — пришли
+    // по той же ссылке, позвали друга, сыграли с ним. Самые недавние сверху.
+    // Позвать их на дуэль можно без общего чата: бот напишет сам
+    known: db.prepare(`with ${FRIENDS_CTE},
+      ff(id, via) as (
+        select p.id, p.referred_by from player p where p.referred_by in (select id from f)
+        union select p.referred_by, p.id from player p where p.id in (select id from f) and p.referred_by is not null
+        union select m.p2, m.p1 from match m where m.p1 in (select id from f) and m.status = 'confirmed'
+        union select m.p1, m.p2 from match m where m.p2 in (select id from f) and m.status = 'confirmed'
+      )
+      select player.id, player.name, player.photo, player.rating, player.wins, player.losses, player.seen_at,
+             ${skinSql('player.id')} as skin, min(via.name) as via
+      from ff join player on player.id = ff.id join player via on via.id = ff.via
+      where player.id != $me and player.id not in (select id from f) and player.banned_at is null
+      group by player.id order by player.seen_at desc limit $max`),
     // Кого обогнал: друг был выше до боя и стал ниже после
     passed: db.prepare(`with ${FRIENDS_CTE}
       select id, name, rating from player
@@ -93,6 +109,10 @@ export function createFriends({ db, players, analytics, notify, invite, now = ()
       })),
       place: me?.place ?? null,
       total: rows[0]?.total ?? 0,
+      known: q.known.all({ me: meId, max: KNOWN_MAX }).map((r) => ({
+        id: r.id, name: r.name, photo: r.photo ?? null, rating: r.rating, wins: r.wins, losses: r.losses,
+        skin: SKIN_IDS.includes(r.skin) ? r.skin : 'classic', seenAt: r.seen_at, via: r.via,
+      })),
     };
   }
 

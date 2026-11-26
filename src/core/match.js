@@ -69,6 +69,26 @@ export function towerMatch(botLevel = null) {
 }
 
 /**
+ * Секретный режим «Вечеринка»: 3–4 команды на одной башне, каждая —
+ * человек (по очереди на одном телефоне) или бот. Спрятан от обычного
+ * меню (вход — пять тапов по заголовку «Режимы»), рейтинг не трогает.
+ * seats — по месту на команду: 'human' или уровень бота ('rookie'…).
+ * Вода поднимается позже: на круг уходит больше ходов, чем вдвоём.
+ */
+export function partyMatch(seats = ['human', 'human', 'human']) {
+  const n = Math.max(3, Math.min(4, seats.length));
+  const m = towerMatch(null);
+  return {
+    ...m,
+    party: true,
+    teams: seats.slice(0, n).map((s) => (s === 'human'
+      ? { worms: 2, control: 'human' }
+      : { worms: 2, control: 'bot', level: s })),
+    rules: { ...m.rules, flood: { after: 4 * n, step: 85 } },
+  };
+}
+
+/**
  * Первые бои новичка: спокойная классическая башня, вода поднимается
  * позже обычного. Случайный вариант
  * (лава с извержением, лёд, ветер) в первом же бою путал: победа приходила

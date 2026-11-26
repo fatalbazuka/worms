@@ -5,6 +5,7 @@ import { UI, font, ensureButton, ensureRoundButton, ensureIcon, setTextColor } f
 import { Inventory } from './Inventory.js';
 import { isDesktop } from '../platform/device.js';
 import { sfx } from '../audio/Sfx.js';
+import { music } from '../audio/Music.js';
 import { EMOTES } from '../core/emotes.js';
 
 export const TOP_H = 62;
@@ -116,16 +117,22 @@ export class Hud {
     // Здоровье команд сходится к таймеру: слева красные, справа синие
     this.teamBars = [];
     const barW = 190, gap = 52;
+    // Вечеринка (3–4 команды): по две полосы на сторону — тоньше, без имён
+    const many = CFG.TEAMS > 2;
     for (let t = 0; t < CFG.TEAMS; t++) {
       const right = t % 2 === 1;
       const x = right ? this.timerCx + gap : this.timerCx - gap - barW;
-      this.fix(s.add.text(right ? x : x + barW, 8, TEAM_NAMES[t],
-        font(13, 800, hex(TEAM_COLORS[t]))).setOrigin(right ? 0 : 1, 0));
-      const cnt = this.fix(s.add.text(right ? x + barW : x, 8, '',
-        font(12, 700, UI.textDim)).setOrigin(right ? 1 : 0, 0));
-      this.fix(this._barImage(x, 36, barW, 12));
-      const bar = this.fix(s.add.rectangle(right ? x + 2 : x + barW - 2, 36,
-        barW - 4, 8, TEAM_COLORS[t]).setOrigin(right ? 0 : 1, 0.5), DEPTH.HUD + 1);
+      const row = many ? Math.floor(t / 2) : 0;
+      if (!many) {
+        this.fix(s.add.text(right ? x : x + barW, 8, TEAM_NAMES[t],
+          font(13, 800, hex(TEAM_COLORS[t]))).setOrigin(right ? 0 : 1, 0));
+      }
+      const cnt = this.fix(s.add.text(right ? x + barW : x, many ? 6 + row * 24 : 8, '',
+        font(12, 700, many ? hex(TEAM_COLORS[t]) : UI.textDim)).setOrigin(right ? 1 : 0, 0));
+      const by = many ? 26 + row * 24 : 36;
+      this.fix(this._barImage(x, by, barW, many ? 8 : 12));
+      const bar = this.fix(s.add.rectangle(right ? x + 2 : x + barW - 2, by,
+        barW - 4, many ? 5 : 8, TEAM_COLORS[t]).setOrigin(right ? 0 : 1, 0.5), DEPTH.HUD + 1);
       this.teamBars.push({ bar, cnt, width: barW - 4 });
     }
 
@@ -155,16 +162,22 @@ export class Hud {
     this.teamBars = [];
     const gap = 46;
     const barW = Math.round(Math.max(90, Math.min(190, W / 2 - gap - 126 - pad)));
+    // Вечеринка (3–4 команды): по две полосы на сторону — тоньше, без имён
+    const many = CFG.TEAMS > 2;
     for (let t = 0; t < CFG.TEAMS; t++) {
       const right = t % 2 === 1;
       const x = right ? this.timerCx + gap : this.timerCx - gap - barW;
-      this.fix(s.add.text(right ? x : x + barW, 4, TEAM_NAMES[t],
-        font(17, 800, hex(TEAM_COLORS[t]))).setOrigin(right ? 0 : 1, 0));
-      const cnt = this.fix(s.add.text(right ? x + barW : x, 5, '',
-        font(15, 700, UI.textDim)).setOrigin(right ? 1 : 0, 0));
-      this.fix(this._barImage(x, 40, barW, 14));
-      const bar = this.fix(s.add.rectangle(right ? x + 2 : x + barW - 2, 40,
-        barW - 4, 10, TEAM_COLORS[t]).setOrigin(right ? 0 : 1, 0.5), DEPTH.HUD + 1);
+      const row = many ? Math.floor(t / 2) : 0;
+      if (!many) {
+        this.fix(s.add.text(right ? x : x + barW, 4, TEAM_NAMES[t],
+          font(17, 800, hex(TEAM_COLORS[t]))).setOrigin(right ? 0 : 1, 0));
+      }
+      const cnt = this.fix(s.add.text(right ? x + barW : x, many ? 4 + row * 28 : 5, '',
+        font(many ? 13 : 15, 700, many ? hex(TEAM_COLORS[t]) : UI.textDim)).setOrigin(right ? 1 : 0, 0));
+      const by = many ? 24 + row * 28 : 40;
+      this.fix(this._barImage(x, by, barW, many ? 10 : 14));
+      const bar = this.fix(s.add.rectangle(right ? x + 2 : x + barW - 2, by,
+        barW - 4, many ? 6 : 10, TEAM_COLORS[t]).setOrigin(right ? 0 : 1, 0.5), DEPTH.HUD + 1);
       this.teamBars.push({ bar, cnt, width: barW - 4 });
     }
 
@@ -423,6 +436,9 @@ export class Hud {
     this.padCancelOn = false;
     this.padPull = null;       // {dx, dy} — палец тянет, экранные пиксели
     this.padGfx = this.fix(this.scene.add.graphics(), DEPTH.HUD);
+    // Подпись под кругом отмены — пока игрок не привык (GameScene.cancelHint)
+    this.cancelLabel = this.fix(this.scene.add.text(0, 0, 'отпусти здесь — отмена', font(18, 800, '#ffe0e0'))
+      .setOrigin(0.5, 0).setStroke('#10131a', 5).setVisible(false), DEPTH.HUD + 1);
   }
 
   /** Попал ли палец в рычаг (с запасом вокруг). */
@@ -483,6 +499,12 @@ export class Hud {
       g.lineBetween(c.x - d, c.y - d, c.x + d, c.y + d);
       g.lineBetween(c.x + d, c.y - d, c.x - d, c.y + d);
     }
+    const hint = Boolean(this.padPull && scene.cancelHint);
+    this.cancelLabel.setVisible(hint);
+    if (hint) {
+      const c = this.padCancel;
+      this.cancelLabel.setPosition(c.x, c.y + c.r + 10).setText(this.padCancelOn ? 'отпусти — выстрела не будет' : 'передумал? веди сюда — отмена');
+    }
   }
 
   /**
@@ -505,7 +527,11 @@ export class Hud {
     const service = (icon, onTap) => {
       y += step;
       const from = this.uiRects.length;
-      const img = this._tap(x, y, SB, icon, () => { onTap(); if (icon !== 'sound' && icon !== 'mute') this.setMore(false); });
+      const img = this._tap(x, y, SB, icon, () => {
+        onTap();
+        // Переключатели звука и музыки меню не закрывают — видно, что стало
+        if (!['sound', 'mute', 'music', 'music-off', 'home'].includes(icon)) this.setMore(false);
+      });
       // Спрятанная кнопка не должна ловить касания поля: её прямоугольник
       // включается вместе с ней
       this.moreItems.push({ img, rect: this.uiRects[from], y });
@@ -513,8 +539,13 @@ export class Hud {
     };
     service('help', () => this.toggleHelp());
     this.soundBtn = service(sfx.muted ? 'mute' : 'sound', () => this.toggleSound());
+    // Музыка — отдельно от звуков, как на главном экране: «выключить
+    // музыку, оставив звуки» в бою иначе было не сделать
+    this.musicBtn = service(music.enabled ? 'music' : 'music-off', () => this.toggleMusic());
     service('overview', () => s.rig.toggleOverview());
-    service('home', () => s.toMenu());
+    // Домой — двумя касаниями: первое спрашивает, второе выходит. Одно
+    // касание посреди хода бросало бой без вопроса
+    this.homeBtn = service('home', () => this.askHome());
     if (s.scale.fullscreen.available) {
       service('fullscreen', () => {
         if (s.scale.isFullscreen) s.scale.stopFullscreen();
@@ -525,7 +556,11 @@ export class Hud {
     this.moreBtn = more;
     this.setMore(false);
 
-    this.netText = this.fix(s.add.text(16, TOP_H + 10, '', font(13, 800, UI.accent)), DEPTH.HUD + 1);
+    // Строка сети и партии — под рядом оружия, по центру, на подложке:
+    // наверху она ложилась прямо на иконки оружия и не читалась
+    this.netText = this.fix(s.add.text(Math.round(W / 2), TOP_H + 92, '', font(15, 800, UI.accent))
+      .setOrigin(0.5, 0).setPadding(10, 4, 10, 4), DEPTH.HUD + 1);
+    this.netCompact = true;
   }
 
   /** Ряд эмоций под верхней панелью; скрыт, пока не нажали смайлик. */
@@ -629,12 +664,29 @@ export class Hud {
   }
 
   /** Переключить звук; иконка на кнопке меняется вместе с ним. */
+  toggleMusic() {
+    music.toggle();
+    if (!this.musicBtn) return;
+    const key = ensureIcon(this.scene, music.enabled ? 'music' : 'music-off', Math.round(this.musicBtn.plateSize * 0.62));
+    this.musicBtn.iconImage?.setTexture(key);
+    this.scene.fx?.banner(music.enabled ? 'музыка включена' : 'музыка выключена · звуки остались', '#ffd166', 1200);
+  }
+
+  /** «Домой» в бою: первое касание — вопрос, второе в течение 3 с — выход. */
+  askHome() {
+    const s = this.scene;
+    if (this.homeAskAt && Date.now() - this.homeAskAt < 3000) { this.homeAskAt = 0; s.toMenu(); return; }
+    this.homeAskAt = Date.now();
+    s.fx?.banner('выйти из боя? нажми ещё раз', '#ffd166', 2600);
+  }
+
   toggleSound() {
     sfx.setMuted(!sfx.muted);
     if (!this.soundBtn) return;
     const size = this.soundBtn.plateSize;
     const key = ensureIcon(this.scene, sfx.muted ? 'mute' : 'sound', Math.round(size * 0.62));
     this.soundBtn.iconImage?.setTexture(key);
+    this.scene.fx?.banner(sfx.muted ? 'звук выключен' : 'звук включён', '#ffd166', 1000);
     if (this.tip?.visible) this.tip.setText(sfx.muted ? 'Включить звук · M' : 'Выключить звук · M');
   }
 
@@ -979,6 +1031,8 @@ export class Hud {
 
   setNetStatus(text, color = UI.accent) {
     this.netText?.setText(text).setColor(color);
+    // На телефоне — с подложкой, только когда есть что сказать
+    if (this.netCompact) this.netText?.setBackgroundColor(text ? 'rgba(16,19,26,0.78)' : 'rgba(0,0,0,0)');
   }
 
   /** Снести интерфейс целиком — перед пересборкой под новый размер экрана. */
@@ -1142,6 +1196,8 @@ export class Hud {
             : 'коснись светящейся точки — трос подтянет туда');
       }
       this.hintText.setVisible(!!show);
+      // Подсказка новичку стоит там же — строка партии уходит под неё
+      if (this.netCompact && this.netText) this.netText.setY(TOP_H + (show ? 150 : 92));
     }
   }
 

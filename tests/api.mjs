@@ -202,6 +202,9 @@ const hello = calls('sendAnimation').at(-1)?.params;
 check('/start: ролик с боем, приветствие и кнопка «Играть» в мини-приложение',
   hello?.animation === 'https://example.test/worms/assets/promo/welcome.mp4' && hello.caption.includes('Вика')
   && hello.reply_markup?.inline_keyboard?.[0]?.[0]?.web_app?.url === 'https://example.test/worms/');
+check('/start: под «Играть» — «Позвать друга на партию», он открывает выбор чата с @ботом',
+  hello?.reply_markup?.inline_keyboard?.[1]?.[0]?.switch_inline_query === ''
+    && /Позвать друга на партию/.test(hello.reply_markup.inline_keyboard[1][0].text), JSON.stringify(hello?.reply_markup));
 await hook({ message: { from: { id: 4, first_name: 'Ann', language_code: 'en' }, chat: { id: 4, type: 'private' }, text: '/start' } });
 check('/start по-английски: подпись, кнопка Play и своё меню',
   calls('sendAnimation').at(-1)?.params.caption.startsWith('Hi, Ann!')
@@ -310,7 +313,7 @@ check('«твой ход» бот не пишет', !calls('sendMessage').some((
   const note = calls('sendMessage').at(-1)?.params;
   check('новичок по ссылке друга: обоим по коробке, другу — сообщение',
     friendShop.data.owned.boxes === 1 && hostShop.data.owned.boxes === hostBefore + 1
-      && note?.chat_id === 51 && /по твоей ссылке/.test(note.text), `${friendShop.data.owned.boxes}/${hostShop.data.owned.boxes}`);
+      && note?.chat_id === 51 && /по твоему приглашению/.test(note.text), `${friendShop.data.owned.boxes}/${hostShop.data.owned.boxes}`);
   const again = await call('POST', '/api/telegram', { initData: await signInitData({
     query_id: 'q', user: { id: 53, first_name: 'Друг' }, start_param: 'ref_51', auth_date: String(Math.floor(clock / 1000)),
   }, BOT) });
@@ -657,6 +660,14 @@ check('«твой ход» бот не пишет', !calls('sendMessage').some((
   await hook({ message: { from: { id: 6002, first_name: 'Гость' }, chat: { id: 6002, type: 'private' }, text: '/unmute' } });
 
   // Вызов другу через бота: только другу и не чаще раза в 10 минут
+  // Знакомые: друзья друзей — Гостю виден Соперник (он сыграл с Хозяином), через кого — тоже
+  {
+    const fr = (await call('GET', '/api/friends', null, guest.token)).data;
+    const k = fr.known?.find((x) => x.id === foe.player.id);
+    check('знакомые: друг твоего друга виден с пометкой, через кого; сам друг и ты — не в знакомых',
+      Boolean(k) && k.via === 'Хозяин' && !fr.known.some((x) => x.id === host.player.id || x.id === guest.player.id),
+      JSON.stringify(fr.known?.map((x) => [x.name, x.via])));
+  }
   let ch = await call('POST', '/api/friends/challenge', { id: guest.player.id, room: 'ZWFR12' }, host.token);
   const inv = calls('sendMessage').at(-1)?.params;
   check('«Вызвать»: бот пишет другу, кнопка — сразу в комнату башни',
@@ -669,7 +680,8 @@ check('«твой ход» бот не пишет', !calls('sendMessage').some((
 
   // Друг открыл вызов, когда позвавшего уже нет: бот пишет позвавшему «заходи»
   const knock = await call('POST', '/api/room/knock', { room: 'ZWFR12' }, guest.token);
-  const kn = calls('sendMessage').at(-1)?.params;
+  // Последнее сообщение Хозяину (рядом могут лететь чужие, отправленные без ожидания)
+  const kn = calls('sendMessage').filter((c) => c.params.chat_id === 6001).at(-1)?.params;
   check('друг ждёт в комнате вызова — позвавшему сообщение с кнопкой в ту же комнату',
     knock.data?.sent === true && knock.data.owner === 'Хозяин' && kn?.chat_id === 6001
       && kn.reply_markup.inline_keyboard[0][0].web_app.url.endsWith('?room=ZWFR12'), JSON.stringify(knock.data));
@@ -689,7 +701,7 @@ check('«твой ход» бот не пишет', !calls('sendMessage').some((
   const ddb = openDb(':memory:');
   const warns = [];
   const dapp = createApp({
-    db: ddb, botToken: BOT, mediaDir, publicUrl: 'https://example.test/worms',
+    db: ddb, botToken: BOT, mediaDir, adminIds: [7001], publicUrl: 'https://example.test/worms',
     telegramApiBase: `http://127.0.0.1:${fakeTg.address().port}`, now: () => clock,
     log: { warn: (m) => warns.push(String(m)), log() {}, error: console.error },
   });
@@ -710,8 +722,23 @@ check('«твой ход» бот не пишет', !calls('sendMessage').some((
   const turn = (n, extra = {}) => ({ turn: n, cmds: [{ k: 'shot', at: 900, cmd: { type: 'shot', turn: n, worm: 0, vx: 300, vy: -200 } }],
     state: { turn: n + 1, team: n % 2, worms: [{ x: 1, y: 2, hp: 100, alive: true }] }, hash: `h${n}`, ...extra });
 
+  // Вызвать можно любого — и не друга (из рейтинга, по коду); одна идущая дуэль на пару
   let r = await call('POST', '/api/duels', { opponent: C.player.id }, A.token);
-  check('дуэль по переписке: не с другом — нельзя', r.status === 403, `${r.status} ${r.data?.error}`);
+  const twice = await call('POST', '/api/duels', { opponent: C.player.id }, A.token);
+  check('дуэль по переписке: и не с другом можно; вторая с тем же — та же дуэль',
+    r.status === 200 && twice.data?.existing === true && twice.data.duel.id === r.data.duel.id, `${r.status} ${JSON.stringify(twice.data)}`);
+  await call('POST', `/api/duels/${r.data.duel.id}/resign`, null, A.token);
+  // Код игрока: в профиле, пять знаков; вызов по коду — без дружбы и без чата
+  const meC = (await call('GET', '/api/me', null, C.token)).data.player;
+  const meC2 = (await call('GET', '/api/me', null, C.token)).data.player;
+  const byCode = await call('POST', '/api/duels', { code: meC.code.toLowerCase(), theyFirst: true }, B.token);
+  const ownCode = await call('POST', '/api/duels', { code: meC.code }, C.token);
+  const noCode = await call('POST', '/api/duels', { code: 'ZZZZZ' }, B.token);
+  check('код игрока: пять знаков, не меняется; по коду — дуэль, свой код и чужой несуществующий — отказ',
+    /^[A-Z2-9]{5}$/.test(meC.code ?? '') && meC2.code === meC.code && byCode.status === 200
+      && byCode.data.duel.opponent?.id === C.player.id && byCode.data.duel.myTurn === false
+      && ownCode.status === 400 && noCode.status === 404, `${meC.code} ${byCode.status} ${ownCode.status} ${noCode.status}`);
+  await call('POST', `/api/duels/${byCode.data.duel.id}/resign`, null, B.token);
   r = await call('POST', '/api/duels', { opponent: B.player.id }, A.token);
   const d1 = r.data?.duel;
   const bView = (await call('GET', '/api/duels', null, B.token)).data;
@@ -773,7 +800,7 @@ check('«твой ход» бот не пишет', !calls('sendMessage').some((
   const finA = msgsTo(7001).at(-1)?.params.text ?? '', finB = msgsTo(7002).at(-1)?.params.text ?? '';
   check('три пропуска подряд — поражение; итог бот пишет обоим',
     t3.lost === 1 && d.status === 'finished' && d.winner === 1 && d.reason === 'timeout'
-      && /проиграна/.test(finA) && /Победа в дуэли против Хозяин/.test(finB), `${d.status} ${d.reason} | ${finA} | ${finB}`);
+      && /проиграна/.test(finA) && /Победа в партии против Хозяин/.test(finB), `${d.status} ${d.reason} | ${finA} | ${finB}`);
 
   // Ссылкой: чужой принимает по коду после первого хода; потом с ним можно реванш
   const link = (await call('POST', '/api/duels', { link: true }, A.token)).data.duel;
@@ -786,10 +813,26 @@ check('«твой ход» бот не пишет', !calls('sendMessage').some((
     `${link.code} ${joined.status} ${joinedAgain.status}`);
   // Итог боем: ходивший сообщает победителя — дуэль окончена, обоим итог
   const before = msgsTo(7001).length;
+  const rA0 = ddb.prepare('select rating, wins, losses from player where id = ?').get(A.player.id);
+  const rC0 = ddb.prepare('select rating, wins, losses from player where id = ?').get(C.player.id);
   r = await call('POST', `/api/duels/${link.id}/turn`, { ...turn(2), state: { turn: 2, team: 1, over: true, worms: [] }, over: true, winner: 1 }, C.token);
   check('последний ход с победой — дуэль окончена, проигравшему итог',
     r.data?.duel?.status === 'finished' && r.data.duel.winner === 1 && r.data.duel.reason === 'kill'
       && msgsTo(7001).slice(before).some((m) => /проиграна/.test(m.params.text)), JSON.stringify(r.data?.duel));
+  {
+    const rA1 = ddb.prepare('select rating, wins, losses from player where id = ?').get(A.player.id);
+    const rC1 = ddb.prepare('select rating, wins, losses from player where id = ?').get(C.player.id);
+    const d = r.data.duel;
+    const lostMsg = msgsTo(7001).slice(before).map((m) => m.params.text).join(' | ');
+    check('дуэль по переписке на рейтинг: победителю +, проигравшему −, счёт побед; в итоге и в сообщении',
+      d.delta > 0 && rC1.rating === rC0.rating + d.delta && rA1.rating === rA0.rating - d.delta
+        && rC1.wins === rC0.wins + 1 && rA1.losses === rA0.losses + 1 && /Рейтинг −\d+/.test(lostMsg),
+      `${JSON.stringify(rA0)}→${JSON.stringify(rA1)} ${JSON.stringify(rC0)}→${JSON.stringify(rC1)} δ${d.delta} | ${lostMsg}`);
+    const hist = (await call('GET', '/api/me/history', null, C.token)).data.items ?? [];
+    const chess = hist.find((x) => x.kind === 'chess');
+    check('профиль: доигранная шахматная партия в «Последних боях» — с соперником и сдвигом рейтинга',
+      chess && chess.won === true && chess.delta === d.delta && chess.opponent?.name === 'Хозяин', JSON.stringify(hist.slice(0, 3)));
+  }
   r = await call('POST', '/api/duels', { opponent: C.player.id }, A.token);
   check('с соперником по прошлой дуэли можно реванш, хоть он и не друг', r.status === 200, r.data?.error);
 
@@ -819,6 +862,45 @@ check('«твой ход» бот не пишет', !calls('sendMessage').some((
   check('«твой ход» досылается, если игрок ушёл, не увидев ход соперника; один раз',
     quiet && lateTick.late === 1 && /Твой ход против Гость/.test(lateMsg) && lateAgain.late === 0
       && msgsTo(7003).length === toC0 + 1, `${quiet} ${JSON.stringify(lateTick)} ${lateMsg}`);
+
+  // Пришёл в игру по ссылке на шахматную партию — тоже приглашение: обоим по коробке
+  {
+    const inv2 = (await call('POST', '/api/duels', { link: true, theyFirst: true }, B.token)).data.duel;
+    const fresh = (await call('POST', '/api/telegram', { initData: await signInitData({
+      query_id: 'q', user: { id: 7099, first_name: 'Новичок' }, auth_date: String(Math.floor(clock / 1000)), start_param: `duel_${inv2.code}`,
+    }, BOT) })).data;
+    await new Promise((res) => setTimeout(res, 150));   // сообщение позвавшему уходит без ожидания
+    const row = ddb.prepare('select referred_by from player where id = ?').get(fresh.player.id);
+    const gifts = ddb.prepare("select player_id, reason from bonus where ref = ? or player_id = ?").all(fresh.player.id, fresh.player.id);
+    const hostMsg = msgsTo(7002).map((m) => m.params.text).filter((t) => /по твоему приглашению/.test(t)).join(' | ');
+    check('новичок по ссылке на партию — приглашённый: обоим по коробке, позвавшему сообщение',
+      row?.referred_by === B.player.id && gifts.some((g) => g.reason === 'ref-host') && gifts.some((g) => g.reason === 'ref-guest')
+        && /по твоему приглашению/.test(hostMsg), `${JSON.stringify(row)} ${JSON.stringify(gifts)} ${hostMsg}`);
+    await call('POST', '/api/duels/join', { code: inv2.code }, fresh.token);
+    await call('POST', `/api/duels/${inv2.id}/resign`, null, B.token);
+  }
+
+  // /duellog: разбор дуэли по ходам — чем стрелял, куда пришёл взрыв, здоровье
+  {
+    const lg = (await call('POST', '/api/duels', { link: true, theyFirst: true }, A.token)).data.duel;
+    await call('POST', '/api/duels/join', { code: lg.code }, C.token);
+    const st = (n, hp) => ({ turn: n + 1, team: n % 2, worms: [{ x: 1, y: 2, hp: hp[0], alive: true }, { x: 5, y: 2, hp: hp[1], alive: true }] });
+    await call('POST', `/api/duels/${lg.id}/turn`, { turn: 1, hash: 'a', state: st(1, [100, 64]), cmds: [
+      { k: 'shot', at: 100, cmd: { type: 'shot', turn: 1, worm: 0, vx: 1, vy: 1, weapon: 0 } },
+      { k: 'boom', at: 900, x: 5, y: 2, r: 72, hits: [[1, 36]], near: 12 }] }, C.token);
+    await call('POST', `/api/duels/${lg.id}/turn`, { turn: 2, hash: 'b', state: st(2, [100, 64]), cmds: [
+      { k: 'shot', at: 100, cmd: { type: 'shot', turn: 2, worm: 1, vx: 1, vy: 1, weapon: 17 } },
+      { k: 'boom', at: 900, x: 300, y: 2, r: 72, hits: [], near: 140 }] }, A.token);
+    await hook({ message: { from: { id: 7001, first_name: 'Хозяин' }, chat: { id: 7001, type: 'private' }, text: `/duellog ${lg.id}` } });
+    const text = msgsTo(7001).at(-1)?.params.text ?? '';
+    check('/duellog: по ходам — оружие, взрыв (задел или мимо) и здоровье с разницей',
+      /1\. Чужой: базука → задел #1 −36/.test(text) && /HP 100\/64/.test(text)
+        && /2\. Хозяин: самонаводка → мимо \(до бойца 140px, радиус 72\)/.test(text), text);
+    const stranger = msgsTo(7003).length;
+    await hook({ message: { from: { id: 7003, first_name: 'Чужой' }, chat: { id: 7003, type: 'private' }, text: `/duellog ${lg.id}` } });
+    check('/duellog — только админу', !/Дуэль \d+:/.test(msgsTo(7003).slice(stranger).map((m) => m.params.text).join()));
+    await call('POST', `/api/duels/${lg.id}/resign`, null, A.token);
+  }
 
   // Сдаться: дуэль соперника, пишем только ему. Ночью — без звука
   clock = Date.UTC(2026, 10, 27, 21, 30);           // 00:30 МСК

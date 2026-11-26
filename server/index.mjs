@@ -34,6 +34,7 @@
  *   GET  /api/duels                       → {items, myTurn, max}  дуэли по переписке (server/duels.mjs)
  *   POST /api/duels {opponent} | {link}   → {duel}            новая: с другом или ссылкой с кодом
  *        + theyFirst                                          первым ходит позванный, создатель не ждёт
+ *   POST /api/duels {code, theyFirst}     → {duel, existing?} вызов по коду игрока (любого, без дружбы)
  *   POST /api/duels/join {code}           → {duel}            принять по ссылке
  *   GET  /api/duels/:id                   → {duel}            с историей ходов
  *   POST /api/duels/:id/turn {turn, cmds, state, hash, prevHash, prevTurn, over, winner} → {duel}
@@ -174,9 +175,12 @@ export function createApp({
     if (fresh) players.markApp(p.id);
     // Новичок по ссылке друга — обоим по коробке; другу — сообщение в бот
     if (fresh) {
-      const host = shop.referral(p, v.startParam, players);
+      // Ссылка на шахматную партию (duel_КОД) — приглашение от её создателя
+      const dc = /^duel_([A-Z0-9]{4,10})$/i.exec(String(v.startParam ?? ''))?.[1];
+      const dh = dc ? duels.byCode(dc) : null;
+      const host = shop.referral(p, v.startParam, players, dh && !dh.p2 ? dh.p1 : null);
       if (host) {
-        bot.notify(host, `🎁 ${p.name} пришёл в игру по твоей ссылке — вам обоим по коробке со скином! `
+        bot.notify(host, `🎁 ${p.name} пришёл в игру по твоему приглашению — вам обоим по коробке со скином! `
           + 'Открой игру, коробка уже там.').catch(() => {});
       }
     }
@@ -244,7 +248,7 @@ export function createApp({
   }
 
   function history(me) {
-    const items = [...players.duelHistory(me.id, 20), ...tournaments.historyFor(me.id, 20)]
+    const items = [...players.duelHistory(me.id, 20), ...tournaments.historyFor(me.id, 20), ...duels.history(me.id, 20)]
       .sort((a, b) => (b.at ?? 0) - (a.at ?? 0))
       .slice(0, 20);
     return { items };
@@ -358,7 +362,7 @@ export function createApp({
         if (!limits.duel.hit(me.id)) throw new HttpError(429, 'слишком много дуэлей за час');
         const body = await readJson(req);
         const r = path.endsWith('/join') ? duels.join(me, body.code)
-          : duels.create(me, { opponent: body.opponent, link: body.link === true, theyFirst: body.theyFirst === true });
+          : duels.create(me, { opponent: body.opponent, code: body.code ?? null, link: body.link === true, theyFirst: body.theyFirst === true });
         if (r.error) throw new HttpError(r.status ?? 400, r.error);
         return r;
       }

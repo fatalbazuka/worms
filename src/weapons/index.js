@@ -54,7 +54,9 @@ const AIR_MISSILE = new Weapon({
   spriteKey: 'proj_airmissile',
   rotational: true,
   projectile: { radius: 4, windScale: 0.2, gravityScale: 0.6 },
-  explosion: { radius: 30, damageRadius: 56, damage: 26, knockback: 240, shake: 0.005 },
+  // Отброс небольшой: иначе первая ракета выносила бойца из-под остальных
+  // четырёх, и залп «эпика» бил слабее одной базуки
+  explosion: { radius: 30, damageRadius: 58, damage: 30, knockback: 150, shake: 0.005 },
 });
 
 export const WEAPONS = [
@@ -230,8 +232,9 @@ export const WEAPONS = [
     explosion: { radius: 0, damageRadius: 46, damage: 24, knockback: 700, shake: 0.004 },
   }),
 
-  // Авиаудар: пять ракет почти отвесно на точку впереди. Сторона — куда
-  // смотрит ствол, дальность — сила заряда. За холмом от него не укрыться.
+  // Авиаудар: пять ракет почти отвесно на точку прицела. На широкой карте
+  // сторона — куда смотрит ствол, дальность — сила заряда; на башне точка —
+  // куда показывает прицел, этажи выше ракеты пролетают (AirstrikeWeapon).
   new AirstrikeWeapon({
     id: 'airstrike',
     rarity: 'epic',    name: 'Авиаудар',

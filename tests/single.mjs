@@ -131,16 +131,16 @@ await page.evaluate(() => {
 });
 const rootButtons = await page.evaluate(
   () => Object.keys(window.__WORMS__.scene.getScene('Menu').buttons));
-check('на главном экране «Играть», соперник, режимы, «С друзьями» и вкладки без турниров',
-  ['play', 'tower', 'modes', 'social', 'top', 'account'].every((k) => rootButtons.includes(k))
+check('на главном экране «Играть», «Позвать друга», соперник, режимы, «С друзьями» и вкладки без турниров',
+  ['play', 'friend', 'tower', 'modes', 'social', 'top', 'account'].every((k) => rootButtons.includes(k))
     && !rootButtons.includes('tournaments') && !rootButtons.includes('aim-mode'),
   rootButtons.join(', '));
 await menuTap('modes');
 const modeButtons = await page.evaluate(
   () => Object.keys(window.__WORMS__.scene.getScene('Menu').buttons));
-check('в режимах четыре: Подъём, Башня дня, С друзьями, Испытания',
-  ['ascent', 'daily', 'social', 'challenges'].every((k) => modeButtons.includes(k))
-    && !modeButtons.includes('campaign') && !modeButtons.includes('quick'),
+check('в режимах три: Подъём, Башня дня, Испытания (с друзьями — на главном)',
+  ['ascent', 'daily', 'challenges'].every((k) => modeButtons.includes(k))
+    && !modeButtons.includes('social') && !modeButtons.includes('campaign') && !modeButtons.includes('quick'),
   modeButtons.join(', '));
 
 // --- кампания: миссия «Пристрелка» (из списка убрана, экран остался) ---

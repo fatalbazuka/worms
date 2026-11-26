@@ -293,7 +293,7 @@ check('числа сервера стали главными', srv.me.rating ===
 await page.evaluate(() => window.__WORMS__.scene.getScene('Menu').showTop());
 const top = await page.waitForFunction(() => {
   const m = window.__WORMS__.scene.getScene('Menu');
-  return m.topRows?.length === 3 && m.items.some((o) => o.text === 'Оля') && m.items.some((o) => o.text === 'ты на 2 месте');
+  return m.topRows?.length === 3 && m.items.some((o) => o.text === 'Оля') && m.items.some((o) => typeof o.text === 'string' && o.text.startsWith('ты на 2 месте'));
 }, null, { timeout: 8000 }).then(() => true).catch(() => false);
 check('таблица лидеров показывает игроков и моё место', top);
 

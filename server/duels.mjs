@@ -38,6 +38,7 @@ import { randomInt } from 'node:crypto';
 import { tx } from './db.mjs';
 import { skinSql } from './players.mjs';
 import { SKIN_IDS } from './shop.mjs';
+import { settle } from './lib/elo.js';
 
 /** Версия правил новых дуэлей: 2 — с «арсеналом боя» (клиент: net/duel.js duelMatch). */
 export const RULES = 2;
@@ -63,8 +64,6 @@ export function createDuels({ db, players, friends, analytics, notify, now = () 
     mine: db.prepare(`select * from duel where (p1 = $p or p2 = $p)
                         and (status in ('open', 'active') or coalesce(finished_at, 0) > $since)
                       order by case when status in ('open', 'active') then 0 else 1 end, updated_at desc limit 30`),
-    pastDuel: db.prepare(`select 1 from duel where status = 'finished'
-                            and ((p1 = $a and p2 = $b) or (p1 = $b and p2 = $a)) limit 1`),
     pub: db.prepare(`select id, name, photo, ${skinSql('player.id')} as skin from player where id = ?`),
     turns: db.prepare('select * from duel_turn where duel_id = ? order by n'),
     turn: db.prepare('select * from duel_turn where duel_id = ? and n = ?'),
@@ -89,6 +88,11 @@ export function createDuels({ db, players, friends, analytics, notify, now = () 
     seen2: db.prepare('update duel set seen2 = ? where id = ?'),
     reminded: db.prepare('update duel set reminded_turn = turn where id = ?'),
     notified: db.prepare('update duel set notified_turn = turn where id = ?'),
+    setDelta: db.prepare('update duel set delta = ? where id = ? and delta is null'),
+    done: db.prepare(`select * from duel where (p1 = $p or p2 = $p) and status = 'finished' and p2 is not null
+                        order by finished_at desc limit $limit`),
+    between: db.prepare(`select * from duel where status in ('open', 'active')
+                           and ((p1 = $a and p2 = $b) or (p1 = $b and p2 = $a)) limit 1`),
     unnotified: db.prepare(`select * from duel where status = 'active' and deadline is not null
                               and coalesce(notified_turn, 0) != turn and updated_at <= ? limit 200`),
     due: db.prepare(`select * from duel where status = 'active' and deadline is not null and deadline <= ? limit 200`),
@@ -132,6 +136,8 @@ export function createDuels({ db, players, friends, analytics, notify, now = () 
     const invite = isInvite(d);
     const out = {
       id: d.id, seed: d.seed, status: d.status, turn: d.turn, deadline: d.deadline, rules: d.rules ?? 1,
+      // Сдвиг рейтинга для этого игрока: + победителю, − проигравшему
+      delta: d.delta == null ? null : (d.winner === meId ? d.delta : -d.delta),
       winner: d.winner ? (d.winner === d.p1 ? 0 : 1) : null, reason: d.reason ?? null,
       me: team, p1: pub(d.p1), p2: pub(d.p2), opponent: pub(team === 0 ? d.p2 : d.p1),
       myTurn: !invite && (d.status === 'active' || d.status === 'open') && mover === meId,
@@ -188,9 +194,9 @@ export function createDuels({ db, players, friends, analytics, notify, now = () 
     const foe = nameOf(otherOf(d, to));
     const why = skippedBy ? `\n${foe} не успел походить — его ход пропущен.` : '';
     const sent = d.turn === 1 && !skippedBy
-      ? await ping(d, to, `⚔️ ${foe} вызывает тебя на дуэль в Smiles!\n`
-        + 'Ходите по очереди, когда удобно, — твой ход первый. На ход 24 часа.', 'turn', '⚔️ Принять и ходить', { late })
-      : await ping(d, to, `⚔️ Твой ход против ${foe}!${why}\nДуэль по переписке: на ход 24 часа.`, 'turn', '⚔️ Ходить', { late });
+      ? await ping(d, to, `♟ ${foe} зовёт тебя на шахматную партию в Smiles!\n`
+        + 'Ходите по очереди, когда удобно, — твой ход первый. На ход 24 часа.', 'turn', '♟ Сделать ход', { late })
+      : await ping(d, to, `♟ Твой ход против ${foe}!${why}\nШахматная партия: на ход 24 часа.`, 'turn', '♟ Ходить', { late });
     // Написали — отмечаем; не написали («смотрит») — tick проверит позже
     if (sent || late) q.notified.run(d.id);
     return sent;
@@ -202,14 +208,50 @@ export function createDuels({ db, players, friends, analytics, notify, now = () 
       if (!id || (only && id !== only)) continue;
       const foe = nameOf(otherOf(d, id));
       let text;
-      if (!d.winner) text = `🤝 Дуэль против ${foe} — ничья.`;
-      else if (d.winner === id) text = `🏆 Победа в дуэли против ${foe}!${why ? ` Соперник ${why}.` : ''}`;
-      else text = `Дуэль против ${foe} проиграна${why ? `: ты ${why}` : ''}. Реванш?`;
-      await ping(d, id, text, 'result', '🎬 Открыть дуэль');
+      if (!d.winner) text = `🤝 Партия против ${foe} — ничья.`;
+      else if (d.winner === id) text = `🏆 Победа в партии против ${foe}!${why ? ` Соперник ${why}.` : ''}${d.delta ? ` Рейтинг +${d.delta}.` : ''}`;
+      else text = `Партия против ${foe} проиграна${why ? `: ты ${why}` : ''}.${d.delta ? ` Рейтинг −${d.delta}.` : ''} Реванш?`;
+      await ping(d, id, text, 'result', '🎬 Открыть партию');
     }
   }
 
   // ------------------------------------------------------------- действия
+
+  /**
+   * Дуэль окончена с победителем — рейтинг обоим, как за бой по сети (Эло,
+   * одно число на двоих). Ничья и отменённая — без рейтинга. Раз на дуэль:
+   * delta пишется один раз. Зовётся внутри той же транзакции, что и finish.
+   * @returns {{winnerId, loserId, before, after} | null} для «обогнал друга»
+   */
+  function rateDuel(id) {
+    const d = q.byId.get(id);
+    if (!d || d.status !== 'finished' || !d.winner || !d.p1 || !d.p2 || d.delta != null) return null;
+    const loserId = d.winner === d.p1 ? d.p2 : d.p1;
+    const w = players.byId(d.winner), l = players.byId(loserId);
+    if (!w || !l) return null;
+    const r = settle(w.rating, l.rating);
+    players.rate(w.id, r.winner, l.id, r.loser);
+    q.setDelta.run(r.delta, d.id);
+    return { winnerId: w.id, loserId: l.id, before: w.rating, after: r.winner };
+  }
+
+  /** Победитель мог обогнать друзей — им напишет бот (server/friends.mjs). */
+  function afterRated(rated) {
+    if (rated) friends.onRated?.(rated)?.catch?.((e) => log.warn?.('[duels] обогнал', e.message));
+  }
+
+  /** Доигранные партии с победителем — для «Последних боёв» в профиле. */
+  function history(meId, limit = 20) {
+    return q.done.all({ p: meId, limit }).map((d) => {
+      const foe = pub(d.p1 === meId ? d.p2 : d.p1);
+      const won = d.winner ? d.winner === meId : null;
+      return {
+        kind: 'chess', at: d.finished_at, won, status: d.winner ? 'confirmed' : 'draw',
+        delta: d.delta == null ? null : (won ? d.delta : -d.delta),
+        opponent: foe ? { id: foe.id, name: foe.name, photo: foe.photo } : null,
+      };
+    });
+  }
 
   /** Список моих дуэлей: идущие и доигранные за неделю. */
   function list(meId) {
@@ -227,7 +269,7 @@ export function createDuels({ db, players, friends, analytics, notify, now = () 
    * у игрока один: карточку шлют в разные чаты — дуэль та же, кто первым
    * принял, тот и соперник. Ждать никому не надо: о ходе пишет бот.
    */
-  function create(me, { opponent = null, link = false, theyFirst = false } = {}) {
+  function create(me, { opponent = null, code: playerCode = null, link = false, theyFirst = false } = {}) {
     const t = now();
     if (link && theyFirst) {
       const open = q.openInvite.get(me.id, t - OPEN_TTL);
@@ -239,11 +281,14 @@ export function createDuels({ db, players, friends, analytics, notify, now = () 
       const id = q.add.run(me.id, null, code(), seed, 'open', theyFirst ? null : t + TURN_MS, t, t).lastInsertRowid;
       return { duel: view(q.byId.get(id), me.id) };
     }
-    const f = players.byId(String(opponent ?? ''));
-    if (!f || f.id === me.id || f.banned_at) return { status: 404, error: 'нет такого игрока' };
-    if (!friends.isFriend(me.id, f.id) && !q.pastDuel.get({ a: me.id, b: f.id })) {
-      return { status: 403, error: 'это не твой друг' };
-    }
+    // Вызвать можно любого: друга, знакомого, игрока из рейтинга или по
+    // коду. От потока вызовов держат лимит на создание (index.mjs), не
+    // больше MAX_ACTIVE дуэлей у каждого, одна идущая дуэль на пару и /mute
+    const f = playerCode ? players.byCode(playerCode) : players.byId(String(opponent ?? ''));
+    if (!f || f.banned_at) return { status: 404, error: playerCode ? 'нет игрока с таким кодом' : 'нет такого игрока' };
+    if (f.id === me.id) return { status: 400, error: playerCode ? 'это твой собственный код' : 'нельзя вызвать себя' };
+    const going = q.between.get({ a: me.id, b: f.id });
+    if (going) return { duel: view(going, me.id), existing: true };
     if (activeCount(f.id) >= MAX_ACTIVE) return { status: 409, error: `у ${f.name} уже ${MAX_ACTIVE} дуэлей` };
     const [p1, p2] = theyFirst ? [f.id, me.id] : [me.id, f.id];
     const id = q.add.run(p1, p2, null, seed, 'active', t + TURN_MS, t, t).lastInsertRowid;
@@ -307,6 +352,7 @@ export function createDuels({ db, players, friends, analytics, notify, now = () 
     }
     const hash = typeof body.hash === 'string' ? body.hash.slice(0, 32) : null;
     const t = now();
+    let rated = null;
     const fin = tx(db, () => {
       q.addTurn.run(d.id, n, me.id, 'move', JSON.stringify(cmds), JSON.stringify(state), hash, t);
       // Как у меня сошёлся последний восстановленный ход (prevTurn; за
@@ -323,6 +369,7 @@ export function createDuels({ db, players, friends, analytics, notify, now = () 
       if (over) {
         const w = winner === -1 ? null : (winner === 0 ? d.p1 : d.p2);
         q.finish.run(w, winner === -1 ? 'draw' : 'kill', t, t, d.id);
+        rated = rateDuel(d.id);
         return true;
       }
       // Ходить дальше некому (ссылку ещё не приняли) — часы стоят
@@ -331,6 +378,7 @@ export function createDuels({ db, players, friends, analytics, notify, now = () 
       return false;
     });
     const fresh = q.byId.get(d.id);
+    afterRated(rated);
     if (fin) await resultNotice(fresh);
     else await turnNotice(fresh);
     return { duel: view(fresh, me.id) };
@@ -346,7 +394,11 @@ export function createDuels({ db, players, friends, analytics, notify, now = () 
       q.cancel.run(t, t, d.id);
       return { duel: view(q.byId.get(d.id), me.id) };
     }
-    q.finish.run(otherOf(d, me.id), 'resign', t, t, d.id);
+    const rated = tx(db, () => {
+      q.finish.run(otherOf(d, me.id), 'resign', t, t, d.id);
+      return rateDuel(d.id);
+    });
+    afterRated(rated);
     const fresh = q.byId.get(d.id);
     await resultNotice(fresh, { only: otherOf(d, me.id) });
     return { duel: view(fresh, me.id) };
@@ -376,6 +428,7 @@ export function createDuels({ db, players, friends, analytics, notify, now = () 
           if (Math.max(s1, s2) >= MAX_SKIPS) {
             q.next.run(d.turn + 1, null, s1, s2, t, d.id);
             q.finish.run(otherOf(d, mover), 'timeout', t, t, d.id);
+            afterRated(rateDuel(d.id));
             return true;
           }
           q.next.run(d.turn + 1, t + TURN_MS, s1, s2, t, d.id);
@@ -407,7 +460,7 @@ export function createDuels({ db, players, friends, analytics, notify, now = () 
   }
 
   return {
-    list, create, join, get, submit, resign, tick, view,
+    list, create, join, get, submit, resign, tick, view, history,
     byId: (id) => q.byId.get(Number(id)),
     byCode: (c) => q.byCode.get(String(c ?? '').toUpperCase()) ?? null,
   };
