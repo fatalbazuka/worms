@@ -514,15 +514,14 @@ check('«твой ход» бот не пишет', !calls('sendMessage').some((
     res.status === 200 && buf.subarray(0, 15).toString() === 'SQLite format 3' && noAuth.status === 401, `${res.status} ${buf.length} байт`);
 }
 
-// @бот в любом чате: карточка — дуэль по переписке (первым ходит принявший), вторая — «позвать» по рефералке
+// @бот в любом чате: одна карточка — шахматная партия (первым ходит принявший)
 {
   await hook({ update_id: 9001, inline_query: { id: 'iq1', from: { id: 555, first_name: 'Вася', language_code: 'ru' }, query: '' } });
   const a = calls('answerInlineQuery').at(-1)?.params;
   const duel = a?.results?.[0]?.reply_markup?.inline_keyboard?.[0]?.[0]?.url ?? '';
-  const ref = a?.results?.[1]?.reply_markup?.inline_keyboard?.[0]?.[0]?.url ?? '';
   const code = /startapp=duel_([A-Z2-9]{6})$/.exec(duel)?.[1];
-  check('инлайн: карточка ведёт в дуэль-вызов по переписке, вторая — по рефералке',
-    Boolean(code) && ref.endsWith('startapp=ref_555') && a.results[0].input_message_content.message_text.includes('Вася'),
+  check('инлайн: одна карточка — шахматная партия, ведёт в вызов',
+    Boolean(code) && a.results.length === 1 && a.results[0].input_message_content.message_text.includes('Вася'),
     JSON.stringify(a)?.slice(0, 300));
   // Инлайн-запрос летит на каждую букву — вызов тот же, новых дуэлей нет
   await hook({ update_id: 9002, inline_query: { id: 'iq2', from: { id: 555, first_name: 'Вася', language_code: 'ru' }, query: 'а' } });

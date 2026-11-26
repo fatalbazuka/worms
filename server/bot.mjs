@@ -601,7 +601,6 @@ export function createBot({ db, api, players, tournaments, analytics = null, adm
     try { code = startLink('x') ? inlineDuel(iq.from) : null; } catch (e) { log.warn?.('[bot] дуэль для карточки', e.message); }
     const room = code ?? towerRoom();
     const duel = startLink(code ? `duel_${code}` : room);
-    const ref = startLink(`ref_${iq.from?.id}`);
     if (!duel) return api.call('answerInlineQuery', { inline_query_id: iq.id, results: [], cache_time: 0 });
     if (!code) rememberRoom(room, iq.from?.id, name);
     const t = en ? {
@@ -611,10 +610,6 @@ Take turns whenever it suits you — your move first. The bot will ping when it'
         : `⚔️ ${name} challenges you to a duel in Smiles!
 Tower, grappling hook, slingshot and smileys. Tap the button — you both land in the same battle.`,
       duelBtn: '♟ Make my move',
-      inviteTitle: '🎮 Invite to Smiles', inviteDesc: 'You both get a skin box',
-      inviteText: `🎮 ${name} invites you to Smiles — smiley artillery in Telegram.
-Join via this link and you both get a skin box 🎁`,
-      inviteBtn: '🎮 Play',
     } : {
       duelTitle: '♟ Шахматная партия', duelDesc: code ? 'Ходите по очереди: он первым, ты — когда удобно' : 'Бой на башне — жми и в бой',
       duelText: code ? `♟ ${name} зовёт тебя на шахматную партию в Smiles!
@@ -622,10 +617,6 @@ Join via this link and you both get a skin box 🎁`,
         : `⚔️ ${name} вызывает на дуэль в Smiles!
 Башня, трос, рогатка и смайлики. Жми кнопку — окажетесь в одном бою.`,
       duelBtn: '♟ Сделать ход',
-      inviteTitle: '🎮 Позвать в Smiles', inviteDesc: 'Обоим — коробка со скином',
-      inviteText: `🎮 ${name} зовёт в Smiles — артиллерию смайликов в Telegram.
-По этой ссылке вам обоим по коробке со скином 🎁`,
-      inviteBtn: '🎮 Играть',
     };
     return api.call('answerInlineQuery', {
       inline_query_id: iq.id,
@@ -637,11 +628,8 @@ Join via this link and you both get a skin box 🎁`,
           input_message_content: { message_text: t.duelText },
           reply_markup: { inline_keyboard: [[{ text: t.duelBtn, url: duel }]] },
         },
-        {
-          type: 'article', id: `ref-${iq.from?.id}`.slice(0, 64), title: t.inviteTitle, description: t.inviteDesc,
-          input_message_content: { message_text: t.inviteText },
-          reply_markup: { inline_keyboard: [[{ text: t.inviteBtn, url: ref }]] },
-        },
+        // Одна карточка — шахматная партия: вторая («позвать в Smiles»)
+        // путала, а новичку по ссылке на партию коробка и так положена
       ],
     });
   }
