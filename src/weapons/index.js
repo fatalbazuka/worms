@@ -1,6 +1,6 @@
 import {
   Weapon, ClusterWeapon, PlacedWeapon, InstantWeapon, BatWeapon, MineWeapon,
-  AirstrikeWeapon, TeleportWeapon, SpringWeapon,
+  AirstrikeWeapon, TeleportWeapon, SpringWeapon, LaserWeapon, SheepWeapon, GasWeapon,
 } from './Weapon.js';
 
 /**
@@ -401,6 +401,50 @@ WEAPONS.push(new Weapon({
   crateAmmo: 1,
   projectile: { radius: 6, windScale: 0.6 },
   explosion: { radius: 0, damageRadius: 150, damage: 6, knockback: -520, pull: true, shake: 0.004 },
+}));
+
+// Оружие со своей механикой, а не «летит и рвётся»
+WEAPONS.push(new SheepWeapon({
+  id: 'sheep',
+  rarity: 'epic', name: 'Овца',
+  icon: '🐑',
+  emojiIcon: '🐑',
+  iconKey: 'emoji_sheep', shotKey: 'emoji_sheep',
+  color: 0xf4f1e8,
+  startAmmo: 0,
+  crateAmmo: 1,
+  projectile: { radius: 7, windScale: 0.4, walker: true, walkSpeed: 75, tapBoom: true, fuse: 7, trail: false },
+  explosion: { radius: 46, damageRadius: 78, damage: 52, knockback: 340, shake: 0.009 },
+}));
+
+WEAPONS.push(new LaserWeapon({
+  id: 'laser',
+  rarity: 'rare', name: 'Лазер',
+  icon: '🔦',
+  emojiIcon: '🔦',
+  iconKey: 'emoji_flashlight',
+  color: 0xff3b6b,
+  category: 'стрелковое',
+  startAmmo: 0,
+  crateAmmo: 1,
+  range: 1500,
+  bounces: 3,
+  bounceBonus: 10,
+  explosion: { radius: 8, damageRadius: 22, damage: 28, knockback: 150, shake: 0.003 },
+}));
+
+WEAPONS.push(new GasWeapon({
+  id: 'gas',
+  rarity: 'rare', name: 'Ядовитый газ',
+  icon: '☠️',
+  emojiIcon: '🧪',
+  iconKey: 'emoji_testtube', shotKey: 'emoji_testtube',
+  color: 0x8fdc4a,
+  startAmmo: 0,
+  crateAmmo: 1,
+  projectile: { radius: 6, windScale: 0.8 },
+  explosion: { radius: 8, damageRadius: 24, damage: 4, knockback: 40, shake: 0.002 },
+  gas: { radius: 72, turns: 3, damage: 10 },
 }));
 
 export const WEAPONS_BY_ID = Object.fromEntries(WEAPONS.map((w) => [w.id, w]));

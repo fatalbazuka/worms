@@ -2,6 +2,7 @@ import { CFG } from '../config.js';
 import { Crate } from '../entities/Crate.js';
 import { Mine } from '../entities/Mine.js';
 import { Spring } from '../entities/Spring.js';
+import { GasCloud } from '../entities/Gas.js';
 import { WEAPONS, WEAPONS_BY_ID } from '../weapons/index.js';
 
 /**
@@ -191,6 +192,10 @@ export function captureState(scene) {
         x: Math.round(sp.x), y: Math.round(sp.y), uses: sp.uses,
         launch: sp.launch ? { vx: Math.round(sp.launch.vx), vy: Math.round(sp.launch.vy) } : null,
       })),
+    // Облака газа — тоже между ходами
+    gas: (scene.gas ?? [])
+      .filter((g) => g.alive)
+      .map((g) => ({ x: Math.round(g.x), y: Math.round(g.y), r: g.r, turns: g.turns, dmg: g.dmg, owner: scene.worms.indexOf(g.owner) })),
   };
 }
 
@@ -279,6 +284,13 @@ export function applyState(scene, state) {
     return spring;
   });
 
+  // Газ — так же. Старый снимок без поля облака не трогает
+  if (state.gas || scene.gas?.length) {
+    for (const g of scene.gas ?? []) g.destroy();
+    scene.gas = (state.gas ?? []).map((g) => new GasCloud(scene, g.x, g.y,
+      { radius: g.r, turns: g.turns, damage: g.dmg }, scene.worms[g.owner] ?? null));
+  }
+
   scene.replaying = false;
   scene.explosionLog = [];
 
@@ -292,7 +304,7 @@ export function applyState(scene, state) {
   }
 }
 
-/** Сколько оружий было до новых стволов (пчёлы, бур, магнит). */
+/** Сколько оружий было до новых стволов (пчёлы, бур, магнит, овца, лазер, газ). */
 export const LEGACY_WEAPONS = 18;
 
 /**
@@ -320,6 +332,7 @@ export function stateHash(state) {
   mix(state.wind);
   for (const w of state.worms) { mix(w.x); mix(w.y); mix(w.hp); mix(w.alive ? 1 : 0); }
   for (const row of state.ammo) mixAmmo(mix, row);
+  for (const g of state.gas ?? []) { mix(g.x); mix(g.y); mix(g.turns); }
   // Журнал взрывов в свёртку не идёт: у принявшего он уже пуст. Сверяется
   // результат — то, во что земля превратилась.
   for (const ch of state.terrain ?? '') mix(ch.charCodeAt(0));

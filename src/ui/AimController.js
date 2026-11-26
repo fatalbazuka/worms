@@ -550,6 +550,7 @@ export class AimController {
     this._ensureCrosshair();
     this.crosshair.setVisible(true);
     this.crosshair.setPosition(o.x + d.x * CFG.AIM_RAY_LEN, o.y + d.y * CFG.AIM_RAY_LEN);
+    if (weapon.trace) this._drawLaserPath(o, d.x, d.y, weapon);
 
     if (!(charge > 0)) return;
     // Пошёл заряд — стрелка «чей ход» своё сказала, убираем её
@@ -705,6 +706,27 @@ export class AimController {
     }
     const weapon = this.scene.turn.weapon;
     if (weapon.targeted) this._drawTarget(shot.vx, shot.vy, weapon);
+    if (weapon.trace) this._drawLaserPath(o, d.x, d.y, weapon);
+  }
+
+  /**
+   * Лазер: пунктир луча до первой стены и начало отскока — куда отразится,
+   * видно, а дальше уже расчёт игрока.
+   */
+  _drawLaserPath(o, dx, dy, weapon) {
+    const s = this.scene;
+    const ray = s.terrain.raycast(o.x, o.y, o.x + dx * CFG.MUZZLE_OFFSET, o.y + dy * CFG.MUZZLE_OFFSET);
+    const sx = ray.hit ? ray.freeX : ray.x, sy = ray.hit ? ray.freeY : ray.y;
+    const path = weapon.trace(s, sx, sy, dx, dy, this.worm);
+    const zoom = s.rig.zoom || 1;
+    this.gfx.fillStyle(weapon.color, 0.8);
+    path.segs.slice(0, 2).forEach(([x0, y0, x1, y1], i) => {
+      const len = Math.hypot(x1 - x0, y1 - y0) || 1;
+      const max = i === 0 ? len : Math.min(len, 140);
+      for (let t = i === 0 ? 24 : 0; t < max; t += 10) {
+        this.gfx.fillCircle(x0 + ((x1 - x0) * t) / len, y0 + ((y1 - y0) * t) / len, (i === 0 ? 2.2 : 1.8) / Math.min(1, zoom));
+      }
+    });
   }
 
   destroy() {

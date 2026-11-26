@@ -572,6 +572,52 @@ for (const id of ['bazooka', 'grenade', 'cluster', 'mole', 'banana', 'holy', 'mo
   check('бур: проходит больше одного перекрытия и рвётся', nw.drill.pierced >= 2 && nw.drill.exploded, JSON.stringify(nw.drill));
   check('магнит: тянет врага к точке, урон маленький', nw.magnet.vx < 0 && nw.magnet.hit <= 10, JSON.stringify(nw.magnet));
   check('пчёлы: рой из шести, пчёлы доворачивают к врагу', nw.bees === 6 && nw.closer >= 4, JSON.stringify(nw));
+  // Овца, лазер, газ — оружие со своей механикой
+  const mx = await tp.evaluate(async () => {
+    const s = window.__WORMS__.scene.getScene('Game');
+    const { WEAPONS_BY_ID } = await import('/src/weapons/index.js');
+    const { Projectile } = await import('/src/entities/Projectile.js');
+    const { captureState, applyState } = await import('/src/net/protocol.js');
+    const w = s.turn.activeWorm;
+    const foe = s.worms.find((o) => o.alive && o.team !== w.team);
+    // Овца: падает на пол и бежит по нему сама, тап — взрыв
+    const spot = s.terrain.standSpots().find((q) => !s.terrain.solidInRect(q.x - 10, q.y - 120, q.x + 10, q.y - 20)
+      && s.worms.every((o) => Math.abs(o.x - q.x) > 80));
+    const sh = new Projectile(s, spot.x, spot.y - 60, 40, 0, WEAPONS_BY_ID.sheep, null);
+    let landedAt = null, walked = 0;
+    for (let i = 0; i < 150 && sh.alive; i++) {
+      sh.update(1 / 60);
+      if (sh.walking && landedAt === null) landedAt = sh.x;
+      if (landedAt !== null) walked = Math.max(walked, Math.abs(sh.x - landedAt));
+    }
+    const tapped = sh.alive && sh.split();
+    const sheep = { walking: Boolean(sh.walking), walked: Math.round(walked), tapped, gone: !sh.alive };
+    // Лазер: в пол под углом — отскакивает; рикошет бьёт сильнее прямого
+    const L = WEAPONS_BY_ID.laser;
+    const down = L.trace(s, w.x, w.centerY - 20, 0.6, 0.8, w);
+    const laser = { bounces: down.bounces, segs: down.segs.length, max: L.bounces };
+    // Газ: травит стоящего в облаке в конце хода, живёт 3 хода, едет в снимке
+    for (const g of s.gas) g.destroy();
+    s.gas = [];
+    const hp0 = foe.health;
+    s.addGas(foe.x, foe.centerY, WEAPONS_BY_ID.gas.gas, w);
+    const t1 = s.tickHazards();
+    const lost = hp0 - foe.health;
+    const snap = captureState(s);
+    s.gas[0].destroy(); s.gas = [];
+    const restore = JSON.parse(JSON.stringify(snap));
+    restore.over = true;          // очередь не трогаем — нужен только газ
+    applyState(s, restore);
+    const back = s.gas.length === 1 && s.gas[0].turns === 2;
+    s.tickHazards(); s.tickHazards();
+    const gas = { t1, lost, inSnap: snap.gas.length, back, after: s.gas.length };
+    return { sheep, laser, gas };
+  });
+  check('овца: приземлилась и бежит по полу, тап — взрыв',
+    mx.sheep.walking && mx.sheep.walked > 30 && mx.sheep.tapped && mx.sheep.gone, JSON.stringify(mx.sheep));
+  check('лазер: отражается от пола', mx.laser.bounces >= 1 && mx.laser.segs === mx.laser.bounces + 1, JSON.stringify(mx.laser));
+  check('газ: травит в облаке, едет в снимке, через три хода рассеивается',
+    mx.gas.t1 && mx.gas.lost === 10 && mx.gas.inSnap === 1 && mx.gas.back && mx.gas.after === 0, JSON.stringify(mx.gas));
   await tp.close();
 }
 

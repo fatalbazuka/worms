@@ -77,6 +77,7 @@ export function turnHash(scene) {
   for (const c of s.crates) { mix(c.x); mix(c.y); mix(c.weapon ?? -1); }
   for (const m of s.mines) { mix(m.x); mix(m.y); mix(m.armed ? 1 : 0); }
   for (const sp of s.springs) { mix(sp.x); mix(sp.y); mix(sp.uses ?? -1); }
+  for (const g of s.gas ?? []) { mix(g.x); mix(g.y); mix(g.turns); }
   const t = scene.terrain;
   for (let x = 4; x < t.width; x += 8) {
     let was = 0, flips = 0;
