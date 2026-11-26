@@ -17,6 +17,11 @@ export class Weapon {
     this.color = cfg.color ?? 0xffffff;
     this.spriteKey = cfg.spriteKey ?? null;
     this.iconKey = cfg.iconKey ?? null;
+    // Эмодзи-значок: пока нет нарисованной иконки, BootScene рисует её из
+    // эмодзи (icon_<id>), а снаряд — shot_<id>
+    this.emojiIcon = cfg.emojiIcon ?? null;
+    // Картинка снаряда, если не shot_<id> (новое оружие летит эмодзи)
+    this.shotKey = cfg.shotKey ?? null;
     // null = бесконечно (базука), число = стартовый запас на команду
     this.startAmmo = cfg.startAmmo ?? null;
     this.crateAmmo = cfg.crateAmmo ?? 2;   // сколько даёт ящик

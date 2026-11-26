@@ -2063,7 +2063,7 @@ export default class GameScene extends Phaser.Scene {
     // Во время показа чужого хода взрыв только рисуется: землю и урон
     // принесёт авторитетный снимок состояния, иначе применится дважды.
     if (this.replaying) {
-      this.fx.explosion(x, y, cfg.radius);
+      if (cfg.radius > 0) this.fx.explosion(x, y, cfg.radius); else this._pullFx(x, y, cfg.damageRadius);
       this.rig.shake(220, cfg.shake ?? 0.006);
       this.props?.hit(x, y, cfg.damageRadius * 0.9, false);
       return;
@@ -2072,13 +2072,16 @@ export default class GameScene extends Phaser.Scene {
     // журнала, а он целочисленный — на дробных координатах края круга
     // разъезжались бы на пиксель, и земля переставала совпадать.
     const ix = Math.round(x), iy = Math.round(y);
-    this.explosionLog.push({ x: ix, y: iy, r: cfg.radius });
-    this.explosionHistory.push({ x: ix, y: iy, r: cfg.radius });
-    this.terrain.destroyCircle(ix, iy, cfg.radius);
-    this.fx.explosion(x, y, cfg.radius);
+    // Магнит (pull) землю не трогает: воронки нет — только тяга к точке
+    if (cfg.radius > 0) {
+      this.explosionLog.push({ x: ix, y: iy, r: cfg.radius });
+      this.explosionHistory.push({ x: ix, y: iy, r: cfg.radius });
+      this.terrain.destroyCircle(ix, iy, cfg.radius);
+      this.fx.explosion(x, y, cfg.radius);
+    } else this._pullFx(x, y, cfg.damageRadius);
     this.rig.shake(220, cfg.shake ?? 0.006);
 
-    for (const c of this.crates) {
+    for (const c of cfg.pull ? [] : this.crates) {
       if (c.alive && Math.hypot(c.x - x, c.y - c.h / 2 - y) <= cfg.damageRadius) c.destroy();
     }
 
@@ -2100,17 +2103,17 @@ export default class GameScene extends Phaser.Scene {
     }
 
     // Эмодзи-предметы на этажах ломаются, бочки взрываются следом
-    this.props?.hit(x, y, cfg.damageRadius * 0.9, true);
+    if (!cfg.pull) this.props?.hit(x, y, cfg.damageRadius * 0.9, true);
 
     // Батут взрыв ломает
-    for (const sp of this.springs) {
+    for (const sp of cfg.pull ? [] : this.springs) {
       if (sp.alive && Math.hypot(sp.x - x, sp.y - 8 - y) <= cfg.damageRadius * 0.8) sp.destroy();
     }
 
     // Мина рядом со взрывом детонирует — так получаются цепочки.
     // Подрываем через таймер, а не тут же: рекурсия из explode в explode
     // на длинной цепочке ушла бы в стек.
-    for (const m of this.mines) {
+    for (const m of cfg.pull ? [] : this.mines) {
       if (!m.alive || Math.hypot(m.x - x, m.y - y) > cfg.damageRadius) continue;
       m.fuse = 0.12;
       m.armed = true;
@@ -2141,7 +2144,10 @@ export default class GameScene extends Phaser.Scene {
 
       let nx, ny;
       if (d < 1) { nx = 0; ny = -1; } else { nx = (wx - x) / d; ny = (wy - y) / d; }
-      w.applyImpulse(nx * cfg.knockback * f, ny * cfg.knockback * f - 70 * f);
+      // Магнит тянет и с края круга заметно: иначе в 140 px от точки
+      // боец едва шевелился
+      const kf = cfg.pull ? Math.max(0.45, f) : f;
+      w.applyImpulse(nx * cfg.knockback * kf, ny * cfg.knockback * kf - 70 * kf);
 
       w.damage(dmg, 'взрыв');
       if (dmg > 0) boomHits.push([this.worms.indexOf(w), dmg]);
@@ -2163,6 +2169,18 @@ export default class GameScene extends Phaser.Scene {
     if (felt === 2) haptic('hurt');
     else if (felt === 1) haptic('hit');
     if (felt) this._botReact(felt === 2);
+  }
+
+  /** Магнит: кольца сходятся к точке — видно, куда потянуло. */
+  _pullFx(x, y, r) {
+    for (let i = 0; i < 3; i++) {
+      const ring = this.rig.world(this.add.circle(x, y, r, 0xff5a6e, 0).setStrokeStyle(4, 0xff8a9a, 0.9).setDepth(DEPTH.FX ?? 50));
+      this.tweens.add({
+        targets: ring, scale: 0.08, alpha: 0, delay: i * 120, duration: 420, ease: 'Cubic.easeIn',
+        onComplete: () => ring.destroy(),
+      });
+    }
+    this.fx.sound?.('thunk');
   }
 
   /**

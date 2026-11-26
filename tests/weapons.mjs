@@ -541,6 +541,37 @@ for (const id of ['bazooka', 'grenade', 'cluster', 'mole', 'banana', 'holy', 'mo
   check('магнитная мина: ползёт к врагу', m.crawled > 5, `${m.crawled} px`);
   check('ящики: редкость по шансам, оружие той же редкости',
     m.match && m.tally.common > m.tally.rare && m.tally.rare > m.tally.epic && m.tally.legendary > 0, JSON.stringify(m.tally));
+  // Пчёлы, бур, магнит — тоже шагами вручную
+  const nw = await tp.evaluate(async () => {
+    const s = window.__WORMS__.scene.getScene('Game');
+    const { WEAPONS_BY_ID } = await import('/src/weapons/index.js');
+    const { Projectile } = await import('/src/entities/Projectile.js');
+    const w = s.turn.activeWorm;
+    const foe = s.worms.find((o) => o.alive && o.team !== w.team);
+    const step = (p, n, f) => { for (let i = 0; i < n && p.alive; i++) { p.update(1 / 60); f?.(p); } };
+    // Бур сверху: проходит несколько перекрытий и только потом рвётся
+    const dr = new Projectile(s, w.x + 60, w.y - 400, 0, 0, WEAPONS_BY_ID.drill, null);
+    let pierced = 0;
+    step(dr, 900, (p) => { pierced = Math.max(pierced, p.pierced ?? 0); });
+    const drill = { pierced, exploded: !dr.alive };
+    // Магнит: без воронки тянет врага к точке взрыва
+    foe.x = w.x + 110; foe.y = w.y; foe.vx = 0; foe.vy = 0;
+    const hp0 = foe.health;
+    s.explode(w.x, w.centerY, WEAPONS_BY_ID.magnet.explosion, null);
+    const magnet = { vx: Math.round(foe.vx), hit: hp0 - foe.health };
+    // Пчёлы: горшок рассыпается на рой, пчёлы летят к врагу
+    foe.x = w.x + 260; foe.y = w.y - 200;
+    const swarm = WEAPONS_BY_ID.bees.onDetonate(s, { owner: w, vx: 0, vy: 0 }, w.x, w.y - 260)
+      .filter((p) => p.weapon.id === 'bee');
+    const d0 = swarm.map((b) => Math.hypot(b.x - foe.x, b.y - foe.centerY));
+    for (const b of swarm) { b.insideGround = false; step(b, 50); }
+    const closer = swarm.filter((b, i) => !b.alive || Math.hypot(b.x - foe.x, b.y - foe.centerY) < d0[i]).length;
+    for (const b of swarm) b.destroy?.();
+    return { drill, magnet, bees: swarm.length, closer };
+  });
+  check('бур: проходит больше одного перекрытия и рвётся', nw.drill.pierced >= 2 && nw.drill.exploded, JSON.stringify(nw.drill));
+  check('магнит: тянет врага к точке, урон маленький', nw.magnet.vx < 0 && nw.magnet.hit <= 10, JSON.stringify(nw.magnet));
+  check('пчёлы: рой из шести, пчёлы доворачивают к врагу', nw.bees === 6 && nw.closer >= 4, JSON.stringify(nw));
   await tp.close();
 }
 

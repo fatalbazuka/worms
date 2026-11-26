@@ -78,7 +78,9 @@ export const EMOJI = ['pine', 'tree', 'palm', 'mushroom', 'rock', 'barrel', 'cac
   'snowflake', 'fire', 'snowman', 'blossom', 'headstone', 'skull', 'crown',
   'planet', 'rocket', 'satellite', 'moon', 'star', 'comet', 'ufo', 'gem',
   // аффиксы: оживлённые эмодзи (entities/Affixes.js)
-  'dash', 'warning', 'boom', 'windface', 'storm', 'zap', 'cyclone', 'sparkles'];
+  'dash', 'warning', 'boom', 'windface', 'storm', 'zap', 'cyclone', 'sparkles',
+  // новое оружие: пчёлы, бур, магнит
+  'bee', 'honey', 'nutbolt', 'magnet'];
 
 /** Текстуры ландшафта: по четыре файла на каждую тему из biomes.js. */
 for (const b of BIOMES) {

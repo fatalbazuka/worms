@@ -1,4 +1,4 @@
-import { captureState, applyState, applyCommand, applyMove } from './protocol.js';
+import { captureState, applyState, applyCommand, applyMove, mixAmmo } from './protocol.js';
 import { towerMatch } from '../core/match.js';
 import { STATE } from '../core/TurnManager.js';
 import { CFG } from '../config.js';
@@ -73,7 +73,7 @@ export function turnHash(scene) {
   const mix = (n) => { h ^= n | 0; h = Math.imul(h, 16777619); };
   mix(s.turn); mix(s.team); mix(s.worm); mix(s.wind); mix(s.over ? 1 : 0);
   for (const w of s.worms) { mix(w.x); mix(w.y); mix(w.hp); mix(w.alive ? 1 : 0); }
-  for (const row of s.ammo) for (const n of row) mix(n === null ? -1 : n);
+  for (const row of s.ammo) mixAmmo(mix, row);
   for (const c of s.crates) { mix(c.x); mix(c.y); mix(c.weapon ?? -1); }
   for (const m of s.mines) { mix(m.x); mix(m.y); mix(m.armed ? 1 : 0); }
   for (const sp of s.springs) { mix(sp.x); mix(sp.y); mix(sp.uses ?? -1); }

@@ -42,7 +42,7 @@ export class Projectile {
     this.sprited = Boolean(key) && has(s, key);
     // Своя картинка снаряда: одна на все повороты. Ракеты и мины смотрят
     // носом по курсу, остальное кувыркается в полёте
-    const own = `shot_${this.weapon.id}`;
+    const own = this.weapon.shotKey ?? `shot_${this.weapon.id}`;
     if (has(s, own)) {
       this.own = true;
       this.sprited = false;
@@ -203,8 +203,9 @@ export class Projectile {
 
     // Гиря: первый пол проламывает насквозь и летит дальше вниз. Пролом
     // считается одинаково и при показе хода сопернику — как ходы крота
-    if (p.pierce > 0 && !this.pierced) {
-      this.pierced = true;
+    // Бур (pierceTimes) — так несколько перекрытий подряд
+    if (p.pierce > 0 && (this.pierced ?? 0) < (p.pierceTimes ?? 1)) {
+      this.pierced = (this.pierced ?? 0) + 1;
       const r = 13;
       for (let d = 0; d <= p.pierce; d += 6) {
         const cx = Math.round(ray.x), cy = Math.round(ray.y + d);
@@ -313,7 +314,7 @@ export class Projectile {
     while (d > Math.PI) d -= Math.PI * 2;
     while (d < -Math.PI) d += Math.PI * 2;
     const turn = Math.max(-p.homing * dt, Math.min(p.homing * dt, d));
-    const speed = Math.max(380, Math.hypot(this.vx, this.vy));
+    const speed = Math.max(p.homeSpeed ?? 380, Math.hypot(this.vx, this.vy));
     this.vx = Math.cos(cur + turn) * speed;
     this.vy = Math.sin(cur + turn) * speed;
   }
