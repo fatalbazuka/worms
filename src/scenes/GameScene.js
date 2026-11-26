@@ -864,7 +864,7 @@ export default class GameScene extends Phaser.Scene {
     this.net = new DuelSession(duel);
     this.myTeam = this.net.myTeam;
     this.net.attach(this);
-    this._netStatus(`♟ ${this.net.opponent.name} · восстанавливаю ходы…`);
+    this._netStatus(`⚔️ ${this.net.opponent.name} · восстанавливаю ходы…`);
     // «Пересмотреть ход» — внизу посередине, между стиком и рычагом
     const x = CFG.VIEW_W / 2, y = CFG.VIEW_H - 34;
     this.rewatchBtn = this.rig.ui(this.add.text(x, y, '↺ Пересмотреть ход', font(20, 800, '#1a1408'))
@@ -978,7 +978,7 @@ export default class GameScene extends Phaser.Scene {
     ui.push(this._overButton(tour ? 0 : 140, 'В меню', () => this.toMenu('root'), 'wait-menu', -60));
     if (long && !tour) {
       ui.push(this._overButton(-140, 'С ботом', () => this.leaveRoomForBot(), 'wait-bot', 24));
-      ui.push(this._overButton(140, '♟ Партия', () => this.toMenu('duels'), 'wait-duel', 24));
+      ui.push(this._overButton(140, '⚔️ Дуэль', () => this.toMenu('duels'), 'wait-duel', 24));
     }
     this.waitUi = ui;
   }
@@ -1003,8 +1003,8 @@ export default class GameScene extends Phaser.Scene {
   /** Строка итога дуэли: окончена и что с рейтингом. */
   _duelRatingText() {
     const d = this.net?.duel?.delta;
-    if (d == null) return this.net?.duel?.status === 'finished' ? 'партия окончена · без рейтинга' : 'партия окончена · рейтинг посчитаю после отправки хода';
-    return `партия окончена · рейтинг ${d > 0 ? `+${d}` : d}`;
+    if (d == null) return this.net?.duel?.status === 'finished' ? 'дуэль окончена · без рейтинга' : 'дуэль окончена · рейтинг посчитаю после отправки хода';
+    return `дуэль окончена · рейтинг ${d > 0 ? `+${d}` : d}`;
   }
 
   onDuelSent(ok, error = '') {
@@ -1042,7 +1042,7 @@ export default class GameScene extends Phaser.Scene {
     ui.push(this.rig.ui(this.add.text(CFG.VIEW_W / 2, CFG.VIEW_H / 2 + 22, sub, font(18, 700, UI.textDim))
       .setOrigin(0.5).setScrollFactor(0).setDepth(DEPTH.HUD + 11).setAlign('center')
       .setWordWrapWidth(Math.min(CFG.VIEW_W - 60, 640))));
-    ui.push(this._overButton(-140, 'Мои партии', () => this.toMenu('duels'), 'duels'));
+    ui.push(this._overButton(-140, 'Мои дуэли', () => this.toMenu('duels'), 'duels'));
     ui.push(this._overButton(140, 'В меню', () => this.toMenu('root'), 'menu'));
     ui.push(this._overButton(0, '↺ Пересмотреть ход', () => this.rewatchDuel(), 'rewatch', 96));
     this.duelUi = ui;
@@ -1053,10 +1053,10 @@ export default class GameScene extends Phaser.Scene {
   _duelStatus() {
     const n = this.net;
     // Имя без предлога: «партия с Атаман» не склоняется
-    const who = `♟ ${n.opponent.name}`;
+    const who = `⚔️ ${n.opponent.name}`;
     if (n.phase === 'replay') return [`${who} · повтор хода соперника`, '#ffd166'];
     if (n.phase === 'play') return [`${who} · твой ход${n.started ? '' : ' · часы пойдут, когда начнёшь'}`, '#8ef0a0'];
-    if (n.phase === 'over') return [`${who} · партия окончена`, '#ffd166'];
+    if (n.phase === 'over') return [`${who} · дуэль окончена`, '#ffd166'];
     const left = n.duel.deadline ? Math.max(0, n.duel.deadline - Date.now()) : null;
     // Вверх: только что начатый ход — «24 ч», как в сообщении бота
     const h = left === null ? null : left < 3600_000 ? 0 : Math.ceil(left / 3600_000);
@@ -2063,7 +2063,7 @@ export default class GameScene extends Phaser.Scene {
     // Во время показа чужого хода взрыв только рисуется: землю и урон
     // принесёт авторитетный снимок состояния, иначе применится дважды.
     if (this.replaying) {
-      this.fx.explosion(x, y, cfg.radius);
+      if (cfg.radius > 0) this.fx.explosion(x, y, cfg.radius); else this._pullFx(x, y, cfg.damageRadius);
       this.rig.shake(220, cfg.shake ?? 0.006);
       this.props?.hit(x, y, cfg.damageRadius * 0.9, false);
       return;
@@ -2072,13 +2072,16 @@ export default class GameScene extends Phaser.Scene {
     // журнала, а он целочисленный — на дробных координатах края круга
     // разъезжались бы на пиксель, и земля переставала совпадать.
     const ix = Math.round(x), iy = Math.round(y);
-    this.explosionLog.push({ x: ix, y: iy, r: cfg.radius });
-    this.explosionHistory.push({ x: ix, y: iy, r: cfg.radius });
-    this.terrain.destroyCircle(ix, iy, cfg.radius);
-    this.fx.explosion(x, y, cfg.radius);
+    // Магнит (pull) землю не трогает: воронки нет — только тяга к точке
+    if (cfg.radius > 0) {
+      this.explosionLog.push({ x: ix, y: iy, r: cfg.radius });
+      this.explosionHistory.push({ x: ix, y: iy, r: cfg.radius });
+      this.terrain.destroyCircle(ix, iy, cfg.radius);
+      this.fx.explosion(x, y, cfg.radius);
+    } else this._pullFx(x, y, cfg.damageRadius);
     this.rig.shake(220, cfg.shake ?? 0.006);
 
-    for (const c of this.crates) {
+    for (const c of cfg.pull ? [] : this.crates) {
       if (c.alive && Math.hypot(c.x - x, c.y - c.h / 2 - y) <= cfg.damageRadius) c.destroy();
     }
 
@@ -2100,17 +2103,17 @@ export default class GameScene extends Phaser.Scene {
     }
 
     // Эмодзи-предметы на этажах ломаются, бочки взрываются следом
-    this.props?.hit(x, y, cfg.damageRadius * 0.9, true);
+    if (!cfg.pull) this.props?.hit(x, y, cfg.damageRadius * 0.9, true);
 
     // Батут взрыв ломает
-    for (const sp of this.springs) {
+    for (const sp of cfg.pull ? [] : this.springs) {
       if (sp.alive && Math.hypot(sp.x - x, sp.y - 8 - y) <= cfg.damageRadius * 0.8) sp.destroy();
     }
 
     // Мина рядом со взрывом детонирует — так получаются цепочки.
     // Подрываем через таймер, а не тут же: рекурсия из explode в explode
     // на длинной цепочке ушла бы в стек.
-    for (const m of this.mines) {
+    for (const m of cfg.pull ? [] : this.mines) {
       if (!m.alive || Math.hypot(m.x - x, m.y - y) > cfg.damageRadius) continue;
       m.fuse = 0.12;
       m.armed = true;
@@ -2141,7 +2144,10 @@ export default class GameScene extends Phaser.Scene {
 
       let nx, ny;
       if (d < 1) { nx = 0; ny = -1; } else { nx = (wx - x) / d; ny = (wy - y) / d; }
-      w.applyImpulse(nx * cfg.knockback * f, ny * cfg.knockback * f - 70 * f);
+      // Магнит тянет и с края круга заметно: иначе в 140 px от точки
+      // боец едва шевелился
+      const kf = cfg.pull ? Math.max(0.45, f) : f;
+      w.applyImpulse(nx * cfg.knockback * kf, ny * cfg.knockback * kf - 70 * kf);
 
       w.damage(dmg, 'взрыв');
       if (dmg > 0) boomHits.push([this.worms.indexOf(w), dmg]);
@@ -2163,6 +2169,18 @@ export default class GameScene extends Phaser.Scene {
     if (felt === 2) haptic('hurt');
     else if (felt === 1) haptic('hit');
     if (felt) this._botReact(felt === 2);
+  }
+
+  /** Магнит: кольца сходятся к точке — видно, куда потянуло. */
+  _pullFx(x, y, r) {
+    for (let i = 0; i < 3; i++) {
+      const ring = this.rig.world(this.add.circle(x, y, r, 0xff5a6e, 0).setStrokeStyle(4, 0xff8a9a, 0.9).setDepth(DEPTH.FX ?? 50));
+      this.tweens.add({
+        targets: ring, scale: 0.08, alpha: 0, delay: i * 120, duration: 420, ease: 'Cubic.easeIn',
+        onComplete: () => ring.destroy(),
+      });
+    }
+    this.fx.sound?.('thunk');
   }
 
   /**
@@ -2618,7 +2636,7 @@ export default class GameScene extends Phaser.Scene {
     const duel = Boolean(this.net?.isDuel);
     const reward = !duel || this.net.claimReward();
     if (duel) {
-      ratingLine = 'шахматная партия · на рейтинг';
+      ratingLine = 'дуэль · на рейтинг';
     } else if (this.net?.connected && winner >= 0 && casual) {
       ratingLine = 'бой без рейтинга';
     } else if (this.net?.connected && winner >= 0 && tourney) {
@@ -2729,7 +2747,7 @@ export default class GameScene extends Phaser.Scene {
       sub.setText(this._duelRatingText());
       const foe = this.net.opponent;
       this.gameOverUi.push(this._overButton(-140, 'Реванш', () => {
-        sub.setText('создаю партию…');
+        sub.setText('создаю дуэль…');
         createDuel({ opponent: foe.id }).then((d) => {
           // С ним уже идёт другая дуэль — она в списке
           if (d.existing) { this.toMenu('duels'); return; }
@@ -2738,7 +2756,7 @@ export default class GameScene extends Phaser.Scene {
           this.scene.restart();
         }).catch((e) => sub.setText(e.message));
       }, 'rematch'));
-      this.gameOverUi.push(this._overButton(140, 'Мои партии', () => this.toMenu('duels'), 'duels'));
+      this.gameOverUi.push(this._overButton(140, 'Мои дуэли', () => this.toMenu('duels'), 'duels'));
       // Чем кончилось — посмотреть ещё раз
       if (this.net?.isDuel && (this.net.duel.turns ?? []).length) {
         this.gameOverUi.push(this._overButton(0, '↺ Пересмотреть ход', () => this.rewatchDuel(), 'rewatch', 96));
@@ -2795,10 +2813,10 @@ export default class GameScene extends Phaser.Scene {
           shareLink(link, this._dailyShareText());
         }, 'share', 92));
       } else if (link && this.match.mode !== 'hotseat' && solo) {
-        this.gameOverUi.push(this._overButton(story ? 140 : 0, '♟ Позвать друга', () => {
+        this.gameOverUi.push(this._overButton(story ? 140 : 0, '⚔️ Позвать друга', () => {
           // Приглашение — всегда на шахматную партию; без входа — ссылка в игру
           if (loggedIn()) {
-            inviteToChess().then((r) => { if (r && !r.shared) this.fx.banner('ссылка на партию скопирована', '#ffd166', 1800); })
+            inviteToChess().then((r) => { if (r && !r.shared) this.fx.banner('ссылка на дуэль скопирована', '#ffd166', 1800); })
               .catch((e) => this.fx.banner(e.message, '#ff9a9a', 2200));
             return;
           }

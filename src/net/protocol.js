@@ -2,7 +2,7 @@ import { CFG } from '../config.js';
 import { Crate } from '../entities/Crate.js';
 import { Mine } from '../entities/Mine.js';
 import { Spring } from '../entities/Spring.js';
-import { WEAPONS_BY_ID } from '../weapons/index.js';
+import { WEAPONS, WEAPONS_BY_ID } from '../weapons/index.js';
 
 /**
  * Формат обмена для сетевой игры.
@@ -244,7 +244,13 @@ export function applyState(scene, state) {
     if (w.grounded && w.parachuting) w.foldChute();
   });
 
-  scene.turn.ammo = state.ammo.map((row) => row.slice());
+  // Снимок старого клиента короче (оружия добавляются в конец): недостающие
+  // стволы — по нулям, а не undefined
+  scene.turn.ammo = state.ammo.map((row) => {
+    const r = row.slice();
+    while (r.length < WEAPONS.length) r.push(0);
+    return r;
+  });
   scene.setWind(state.wind);
 
   // Ящики пересоздаём: они появляются и исчезают по ходу партии
@@ -286,6 +292,18 @@ export function applyState(scene, state) {
   }
 }
 
+/** Сколько оружий было до новых стволов (пчёлы, бур, магнит). */
+export const LEGACY_WEAPONS = 18;
+
+/**
+ * Патроны в свёртку: старые стволы — все, новые — только если они есть.
+ * Иначе у клиента с новыми стволами (нули в хвосте) свёртка расходилась
+ * со старой на тех же патронах — и ходы старых дуэлей «не сходились».
+ */
+export function mixAmmo(mix, row) {
+  row.forEach((n, i) => { if (i < LEGACY_WEAPONS || n) mix(n === null ? -1 : n); });
+}
+
 /**
  * Короткая свёртка состояния — чтобы замечать расхождение раньше, чем оно
  * станет заметным игроку.
@@ -301,7 +319,7 @@ export function stateHash(state) {
   mix(state.worm);
   mix(state.wind);
   for (const w of state.worms) { mix(w.x); mix(w.y); mix(w.hp); mix(w.alive ? 1 : 0); }
-  for (const row of state.ammo) for (const n of row) mix(n === null ? -1 : n);
+  for (const row of state.ammo) mixAmmo(mix, row);
   // Журнал взрывов в свёртку не идёт: у принявшего он уже пуст. Сверяется
   // результат — то, во что земля превратилась.
   for (const ch of state.terrain ?? '') mix(ch.charCodeAt(0));

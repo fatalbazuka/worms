@@ -1,4 +1,4 @@
-import { captureState, applyState, applyCommand, applyMove } from './protocol.js';
+import { captureState, applyState, applyCommand, applyMove, mixAmmo } from './protocol.js';
 import { towerMatch } from '../core/match.js';
 import { STATE } from '../core/TurnManager.js';
 import { CFG } from '../config.js';
@@ -73,7 +73,7 @@ export function turnHash(scene) {
   const mix = (n) => { h ^= n | 0; h = Math.imul(h, 16777619); };
   mix(s.turn); mix(s.team); mix(s.worm); mix(s.wind); mix(s.over ? 1 : 0);
   for (const w of s.worms) { mix(w.x); mix(w.y); mix(w.hp); mix(w.alive ? 1 : 0); }
-  for (const row of s.ammo) for (const n of row) mix(n === null ? -1 : n);
+  for (const row of s.ammo) mixAmmo(mix, row);
   for (const c of s.crates) { mix(c.x); mix(c.y); mix(c.weapon ?? -1); }
   for (const m of s.mines) { mix(m.x); mix(m.y); mix(m.armed ? 1 : 0); }
   for (const sp of s.springs) { mix(sp.x); mix(sp.y); mix(sp.uses ?? -1); }
@@ -287,7 +287,7 @@ export class DuelSession {
       : own ? 'Повтор твоего хода' : 'Повтор хода соперника', '#ffd166', 1800);
     s.followTarget = s.turn.activeWorm;
     this.showing = true;
-    await this._pause(t.kind === 'skip' ? 1400 : 1100);
+    await this._pause(t.kind === 'skip' ? 1400 : 700);
     if (t.kind === 'skip') { this.showing = false; this._pass(); return; }
     const cmds = (t.cmds ?? []).slice().sort((a, b) => (a.at ?? 0) - (b.at ?? 0));
     let at = cmds[0]?.at ?? 0;
@@ -298,14 +298,28 @@ export class DuelSession {
     const firstShot = cmds.findIndex((c) => c.k === 'shot');
     const walk = gaps.slice(0, firstShot < 0 ? gaps.length : firstShot + 1).reduce((a, b) => a + b, 0);
     const speed = walk > SHOW_MAX ? SHOW_MAX / walk : 1;
+    let last = null;     // последний показанный шаг: от него ведём к следующему
     for (const [i, c] of cmds.entries()) {
       if (this.dead) return;
       if (this.skip) break;
       const gap = gaps[i] * (firstShot < 0 || i <= firstShot ? speed : 1);
       at = c.at ?? at;
-      if (gap > 16) await this._pause(gap);
+      if (c.k === 'move' && last && gap > 40 && smoothable(last, c.m)) {
+        // Шаги записаны раз в 150 мс: показывать их как есть — боец прыгал
+        // рывками. Ведём его между записями кадр за кадром (~30 в секунду)
+        // По настоящим часам: на медленном телефоне кадров меньше, но
+        // длительность та же — повтор не растягивается
+        const t0 = performance.now();
+        for (;;) {
+          await this._pause(16);
+          if (this.skip || this.dead) break;
+          const k = (performance.now() - t0) / gap;
+          if (k >= 1) break;
+          applyMove(s, lerpMove(last, c.m, k));
+        }
+      } else if (gap > 16) await this._pause(gap);
       if (this.skip) break;
-      if (c.k === 'move') applyMove(s, c.m);
+      if (c.k === 'move') { applyMove(s, c.m); last = c.m; }
       else if (c.k === 'shot') shot = applyCommand(s, c.cmd) || shot;
       else if (c.k === 'split') s.remoteSplit?.({ turn: c.turn, t: c.t });
     }
@@ -369,9 +383,10 @@ export class DuelSession {
     const r = this.rec;
     const t = this._at();
     const prev = r.cmds.findLast?.((c) => c.k === 'move')?.m;
-    // Раз в 150 мс, но смена троса, оружия или повиса — сразу
+    // Раз в 100 мс (показ доводит между ними плавно), но смена троса,
+    // оружия или повиса — сразу
     const sharp = prev && (String(prev.zip) !== String(m.zip) || prev.hang !== m.hang || prev.weapon !== m.weapon);
-    if (t - r.lastMove < 150 && !sharp) return;
+    if (t - r.lastMove < 100 && !sharp) return;
     r.lastMove = t;
     r.cmds.push({ k: 'move', at: t, m });
   }
@@ -485,6 +500,28 @@ export class DuelSession {
     st.stats[this.duel.id] = { ...this.scene.battleStats };
     writeStore(st);
   }
+}
+
+/**
+ * Можно ли вести бойца плавно между двумя записями: тот же боец и ход, оба
+ * на земле или оба висят на одном и том же (полёт по тросу доводит сам
+ * applyMove — его не трогаем).
+ */
+function smoothable(a, b) {
+  return a.worm === b.worm && a.turn === b.turn && !a.zip && !b.zip && (a.hang ?? null) === (b.hang ?? null)
+    && Math.hypot(b.x - a.x, b.y - a.y) < 160;
+}
+
+/** Промежуточный шаг между записями a и b: позиция, прицел и заряд — по прямой. */
+function lerpMove(a, b, k) {
+  const mix = (x, y) => x + (y - x) * k;
+  return {
+    ...b,
+    x: Math.round(mix(a.x, b.x)), y: Math.round(mix(a.y, b.y)),
+    aim: mix(a.aim ?? 0, b.aim ?? 0), charge: mix(a.charge ?? 0, b.charge ?? 0),
+    timeLeft: Math.round(mix(a.timeLeft ?? 0, b.timeLeft ?? 0)),
+    weapon: k < 1 ? a.weapon : b.weapon,
+  };
 }
 
 /** Шагов слишком много — оставляем каждый k-й, выстрелы и деления ракеты — все. */

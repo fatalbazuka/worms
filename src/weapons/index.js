@@ -339,8 +339,72 @@ WEAPONS.push(new Weapon({
   explosion: { radius: 40, damageRadius: 72, damage: 45, knockback: 300, shake: 0.007 },
 }));
 
+// ---------------------------------------------------------- новые стволы
+// Добавляются только в конец: номер оружия едет в ходах по сети и в
+// истории дуэлей, сдвинуть старые — значит сломать начатые партии.
+
+/** Пчела: летит к ближайшему сопернику и жалит — немного, но их рой. */
+const BEE = new Weapon({
+  id: 'bee',
+  name: 'Пчела',
+  icon: '🐝',
+  emojiIcon: '🐝',
+  shotKey: 'emoji_bee',
+  color: 0xffd23f,
+  projectile: { radius: 3, windScale: 0.15, gravityScale: 0.35, homing: 4.2, homeDelay: 0.25, homeSpeed: 240, trail: false },
+  explosion: { radius: 7, damageRadius: 26, damage: 9, knockback: 70, shake: 0.002 },
+});
+
+// Пчёлы: улей разбивается — и шесть пчёл сами летят к соперникам рядом.
+// За укрытием не спрятаться, но каждая жалит слабо: хорошо добивать.
+WEAPONS.push(new ClusterWeapon({
+  id: 'bees',
+  rarity: 'rare', name: 'Пчёлы',
+  icon: '🐝',
+  emojiIcon: '🍯',
+  iconKey: 'emoji_honey', shotKey: 'emoji_honey',
+  color: 0xffc23a,
+  startAmmo: 0,
+  crateAmmo: 1,
+  projectile: { radius: 6, windScale: 0.7 },
+  explosion: { radius: 14, damageRadius: 30, damage: 8, knockback: 90, shake: 0.003 },
+  clusterCount: 6,
+  clusterSpeed: 230,
+  bombletWeapon: BEE,
+}));
+
+// Бур: падает и прошивает до трёх перекрытий насквозь, взрывается ниже.
+// Достать того, кто засел под потолком этажом ниже.
+WEAPONS.push(new Weapon({
+  id: 'drill',
+  rarity: 'epic', name: 'Бур',
+  icon: '⛏',
+  emojiIcon: '🔩',
+  iconKey: 'emoji_nutbolt', shotKey: 'emoji_nutbolt',
+  color: 0xb9c2d0,
+  startAmmo: 0,
+  crateAmmo: 1,
+  projectile: { radius: 6, windScale: 0.1, gravityScale: 1.3, pierce: 44, pierceTimes: 3, trail: false },
+  explosion: { radius: 40, damageRadius: 68, damage: 44, knockback: 260, shake: 0.008 },
+}));
+
+// Магнит: не взрывает землю, а тянет бойцов к точке падения. Попал над
+// краем этажа — соперник сам съезжает вниз, в воду или под удар.
+WEAPONS.push(new Weapon({
+  id: 'magnet',
+  rarity: 'rare', name: 'Магнит',
+  icon: '🧲',
+  emojiIcon: '🧲',
+  iconKey: 'emoji_magnet', shotKey: 'emoji_magnet',
+  color: 0xff5a6e,
+  startAmmo: 0,
+  crateAmmo: 1,
+  projectile: { radius: 6, windScale: 0.6 },
+  explosion: { radius: 0, damageRadius: 150, damage: 6, knockback: -520, pull: true, shake: 0.004 },
+}));
+
 export const WEAPONS_BY_ID = Object.fromEntries(WEAPONS.map((w) => [w.id, w]));
-export { BOMBLET, AIR_MISSILE, SPLITLET };
+export { BOMBLET, AIR_MISSILE, SPLITLET, BEE };
 
 /** Редкость оружия: шанс в ящике (%), цвет ящика и надписи. */
 export const WEAPON_RARITY = {

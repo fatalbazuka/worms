@@ -140,7 +140,7 @@ export function simulateFlight(scene, x0, y0, vx, vy, weapon, owner = null, opts
 
   let x = x0, y = y0;
   let fuse = p.fuse || 0;
-  let bounces = 0, pierced = false, touched = false;
+  let bounces = 0, pierced = 0, touched = false;
 
   for (let t = 0; t < maxTime; t += DT) {
     // Коснулся земли — со следующего кадра мелкий шаг, как в игре
@@ -222,8 +222,8 @@ export function simulateFlight(scene, x0, y0, vx, vy, weapon, owner = null, opts
 
       if (p.deploy === 'mine') return { kind: 'mine', x: fx, y: fy, worm: null, time: age };
       if (p.sticky) return { kind: 'terrain', x: fx, y: fy, worm: null, time: age + (fuse > 0 ? fuse : (p.stickFuse || 3)) };
-      if (p.pierce > 0 && !pierced) {
-        pierced = true;
+      if (p.pierce > 0 && pierced < (p.pierceTimes ?? 1)) {
+        pierced++;
         tubeX = Math.round(hx); tubeY0 = Math.round(hy) - 13; tubeY1 = Math.round(hy) + p.pierce + 13;
         x = hx; y = hy;
         vx *= 0.25;

@@ -174,9 +174,9 @@ await A.waitForFunction(() => window.__WORMS__.scene.getScene('Menu').section ==
   && /ходит первым/.test(window.__WORMS__.scene.getScene('Menu').duelNoteText?.text ?? ''), null, { timeout: 15000 });
 const duelId = db.prepare("select id from duel where p1 = 'tg812' and p2 = 'tg811' order by id desc").get()?.id;
 check('«Вызвать» у друга: дуэль создана, Боря ходит первым, Аня никого не ждёт (список дуэлей)', Number.isInteger(duelId), String(duelId));
-const called = tgCalls.filter((c) => c.method === 'sendMessage' && c.params.chat_id === 812 && /партию/.test(c.params.text));
-check('Боре бот пишет «Аня зовёт на шахматную партию — твой ход первый» с кнопкой в партию', called.length === 1
-  && /Аня зовёт тебя на шахматную партию/.test(called[0].params.text)
+const called = tgCalls.filter((c) => c.method === 'sendMessage' && c.params.chat_id === 812 && /на дуэль/.test(c.params.text));
+check('Боре бот пишет «Аня зовёт на дуэль — твой ход первый» с кнопкой в партию', called.length === 1
+  && /Аня зовёт тебя на дуэль/.test(called[0].params.text)
   && called[0].params.reply_markup.inline_keyboard[0][0].web_app.url.endsWith(`?duel=${duelId}`), called[0]?.params.text);
 await A.close();
 pages[0] = null;
