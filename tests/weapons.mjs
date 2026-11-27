@@ -599,6 +599,7 @@ for (const id of ['bazooka', 'grenade', 'cluster', 'mole', 'banana', 'holy', 'mo
     // Газ: травит стоящего в облаке в конце хода, живёт 3 хода, едет в снимке
     for (const g of s.gas) g.destroy();
     s.gas = [];
+    foe.guard = false;          // ходит вторым — начал окопавшимся (тактика)
     const hp0 = foe.health;
     s.addGas(foe.x, foe.centerY, WEAPONS_BY_ID.gas.gas, w);
     const t1 = s.tickHazards();

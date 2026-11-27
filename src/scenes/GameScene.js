@@ -70,6 +70,7 @@ import { bumpAch, checkAchievements, onAchievement } from '../platform/achieveme
 import { AchToasts } from '../ui/AchToast.js';
 import { CameraRig } from '../ui/CameraRig.js';
 import { Coach } from '../ui/Coach.js';
+import { Tips } from '../ui/Tips.js';
 import { voice } from '../audio/Voice.js';
 import { music, battleTheme } from '../audio/Music.js';
 import { askText, closeOverlay } from '../ui/Overlay.js';
@@ -201,6 +202,8 @@ export default class GameScene extends Phaser.Scene {
     this.koLog = new KoLog(this);
     this.kos = [];
     this.offscreen = new OffscreenMarkers(this);
+    // Подсказки «один раз»: первая дуэль и новые правила боя
+    this.tips = new Tips(this);
     // Новичок: пошаговая тренировка поверх «Первого выстрела»
     this.coach = this.match.tutorial && this.slingAim && !isDesktop() ? new Coach(this) : null;
 
@@ -231,7 +234,7 @@ export default class GameScene extends Phaser.Scene {
     this.turn.begin(this._firstTeam());
     // Честный первый ход: кто ходит не первым — начинает окопавшимся, щит
     // снимется в начале его хода. Первый выстрел партию не решает
-    if (this.tactics) {
+    if (this.tactics && !this.match.tutorial) {
       for (const w of this.worms) if (w.team !== this.turn.currentTeam) w.guard = true;
     }
 
@@ -1032,6 +1035,7 @@ export default class GameScene extends Phaser.Scene {
       }
       return;
     }
+    if (ok) this.tips?.show('duel_sent', '📨 Ход отправлен! Бот напишет в Telegram, когда друг сходит. Дуэлей может идти несколько сразу');
     this._duelPanel(ok ? 'Ход отправлен' : 'Ход не отправлен',
       ok ? `${this.net.opponent.name} получит сообщение в Telegram · на ход у него 24 часа`
         : (error || 'попробуй позже'), ok ? '#8ef0a0' : '#ff9a9a');
@@ -1360,7 +1364,8 @@ export default class GameScene extends Phaser.Scene {
     // Многоэтажная карта: бойцы сразу стоят на своих этажах. Десант сверху
     // посадил бы всех на крышу
     if (this.terrain.tops) {
-      const spots = this.tactics ? this._findTeamSpots(order) : this._findFloorSpots(order.length);
+      // Тренировка — со старых мест: под них подобраны мишень, флажок и трос
+      const spots = this.tactics && !this.match.tutorial ? this._findTeamSpots(order) : this._findFloorSpots(order.length);
       order.forEach(({ team, idx }, i) => {
         const p = spots[i] ?? { x: CFG.WORLD_W / 2, y: 100 };
         const worm = new Worm(this, p.x, p.y, team, idx);
@@ -1589,6 +1594,7 @@ export default class GameScene extends Phaser.Scene {
         if (this.coach.finished) this.coach = null;
       }
     }
+    if (!this.coach) this._tipsTick();
     this.ambience?.update(dt);
     for (const m of this.monsters) m.update(dt);
     if (this.monsters.some((m) => !m.alive)) this.monsters = this.monsters.filter((m) => m.alive);
@@ -1642,6 +1648,8 @@ export default class GameScene extends Phaser.Scene {
     // и свой ход «пропадал», едва начавшись
     // И пока игрок не начал свой ход (первое касание или клавиша): можно
     // спокойно осмотреть поле после повтора
+    // Отход после выстрела (тактика) идёт всегда — и в повторе чужого хода
+    if (this.net?.isDuel && this.turn.retreating && this.turn.retreated) return realDt;
     if (this.net?.isDuel && (!this.net.ready || !this.net.started)) return 0;
     if (this.net || this.room) return realDt;
     return Math.min(realDt, Math.max(physDt, realDt / CFG.TURN_CLOCK_STRETCH));
@@ -2076,6 +2084,9 @@ export default class GameScene extends Phaser.Scene {
     // Приказ уходит наружу до симуляции: сеть должна получить ровно то,
     // что игрок задал, а не то, что из этого вышло локально.
     if (!this.replaying) {
+      // Выстрел — это начало хода и для часов дуэли: иначе отход после
+      // выстрела (тактика) ждал бы часов, которые ещё стоят
+      this.net?.begin?.();
       const cmd = captureCommand(this, vx, vy);
       this.onShot?.(cmd);
       this.net?.sendShot(cmd);
@@ -2336,8 +2347,34 @@ export default class GameScene extends Phaser.Scene {
     if (this.walkLeft != null) this.walkLeft = Math.max(0, this.walkLeft - px);
   }
 
+  /**
+   * Подсказки «один раз» по ходу боя: первая дуэль — что за повтор, что
+   * значит свой ход; новые правила — трос и шаги, взвод, «Окопаться».
+   * Обучение (Coach) говорит своё — тогда здесь молчим.
+   */
+  _tipsTick() {
+    const t = this.tips;
+    if (!t || this.fastForward || this.gameOverUi || this.match.tutorial) return;
+    const n = this.net;
+    if (n?.isDuel) {
+      if (n.showing) t.show('duel_replay', '👀 Это повтор хода соперника — смотри, куда он стрелял. Надоело — «Пропустить повтор» внизу');
+      else if (n.phase === 'play' && this.canPlayerAct()) {
+        t.show('duel_play', '⚔️ Твой ход! На него сутки — можно выйти и вернуться. Часы пойдут, когда начнёшь');
+      }
+    }
+    const mine = this.canPlayerAct() && !this.isBotTurn() && this.isLocalTeam(this.turn.currentTeam) && !n?.showing;
+    if (this.tactics && mine && !this.turn.retreating) {
+      t.show('tac_move', '🪢 Трос — один за ход, шаги — полоска под бойцом. За ход к врагу не подбежать — стреляй издалека');
+      t.show('tac_arm', '🎯 Ракета взводится не сразу: вплотную почти не ранит. Прямое попадание — +40% урона');
+      t.show('tac_guard', '🛡 Не достаёшь врага — тапни 🛡 на ленте два раза: окопаешься, урон вдвое меньше до твоего хода');
+    }
+  }
+
   /** Тактика: выстрел долетел — три секунды на отход, шагов хватит на укрытие. */
   onRetreat() {
+    if (!this.replaying && !this.isBotTurn() && this.isLocalTeam(this.turn.currentTeam)) {
+      this.tips?.show('tac_retreat', '🏃 После выстрела — 3 секунды отойти в укрытие: стик или трос, если остался');
+    }
     if (this.walkLeft != null) this.walkLeft = Math.max(this.walkLeft, 160);
     if (this.isLocalTeam(this.turn.currentTeam) && !this.replaying) this.fx.banner('Отход!', '#9fd2ff', 900);
   }
@@ -2688,6 +2725,11 @@ export default class GameScene extends Phaser.Scene {
 
   onGameOver(winner) {
     if (this.gameOverUi) return;
+    this.tips?.destroy();
+    if (this.net?.isDuel && !this.fastForward) {
+      this.time.delayedCall(1800, () => this.tips?.show('duel_rating',
+        '🏆 За победы в дуэлях растёт рейтинг: лига и место в топе — в разделе «Рейтинг»'));
+    }
     // Выжившие радуются или плачут — у кого есть чем
     for (const w of this.worms) if (w.alive) w.mood = w.team === winner ? 'worm_win' : 'worm_cry';
 

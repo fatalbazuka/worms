@@ -1194,7 +1194,7 @@ export class Hud {
       const splitting = !scene.replaying && !scene.isBotTurn?.() && scene.isLocalTeam?.(scene.turn.currentTeam)
         && scene.projectiles?.find((p) => p.alive && (p.weapon.projectile.split || p.weapon.projectile.tapBoom));
       const bannerUp = (scene.fx?.bannerUntil ?? 0) > scene.time.now;
-      const guard = scene.turn.weapon?.id === 'guard' && scene.canPlayerAct() && !scene.isBotTurn?.()
+      const guard = !scene.coach && scene.turn.weapon?.id === 'guard' && scene.canPlayerAct() && !scene.isBotTurn?.()
         && scene.isLocalTeam?.(scene.turn.currentTeam);
       const show = splitting || guard || (!this.helpVisible && !bannerUp && scene.canPlayerAct() && !scene.coach
         && (spring || sling || (scene.hookHint && scene.hooksLeft > 0)));

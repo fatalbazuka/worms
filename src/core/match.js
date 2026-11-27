@@ -107,7 +107,8 @@ export function rookieMatch() {
 /** Обучение: «Первый выстрел» без потопа — мишень не должна утонуть сама. */
 export function tutorialMatch() {
   const m = challengeMatch('first');
-  return { ...m, tutorial: true, rules: { ...m.rules, flood: null } };
+  // Правила — как в бою на башне (тактика): тренировка учит тому, во что потом играть
+  return { ...m, tutorial: true, rules: { ...m.rules, flood: null, tactics: true, hook: 1, walk: 260 } };
 }
 
 /** Варианты настроек быстрой игры — для меню и проверки сохранённых. */
