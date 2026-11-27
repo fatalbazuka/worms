@@ -305,6 +305,26 @@ const MIGRATIONS = [
   create unique index if not exists player_code on player (code);
   alter table duel add column delta integer;
   `,
+  // 16: журнал запусков страницы — почему игра иногда не открывается
+  // (server/bootlog.mjs). Без ссылки на игрока: до входа дело может не дойти
+  `
+  create table if not exists boot_log (
+    id         integer primary key,
+    boot       text not null,            -- id запуска со страницы
+    created_at integer not null,
+    outcome    text not null,            -- ok | stuck | error | closed | lost
+    stage      text,                     -- последний пройденный этап
+    ms         integer,                  -- с начала загрузки страницы
+    tg_id      integer,
+    platform   text,
+    tg_version text,
+    net        text,
+    ua         text,
+    error      text,
+    stages     text                      -- JSON: этап → мс
+  );
+  create index if not exists boot_log_time on boot_log (created_at);
+  `,
 ];
 
 export function openDb(path) {

@@ -53,6 +53,7 @@ export default class BootScene extends Phaser.Scene {
    * спасает: обрыв случайный, а не «файла нет».
    */
   create() {
+    globalThis.__BOOT?.mark('boot_scene');   // журнал запуска (index.html)
     if (missing.size && !this.retried) {
       this.retried = true;
       const again = [...missing];

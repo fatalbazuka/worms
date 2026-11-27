@@ -949,6 +949,28 @@ check('«твой ход» бот не пишет', !calls('sendMessage').some((
   }
 }
 
+// --- журнал запусков: без входа, мусор отброшен, сводка только админу ---
+{
+  const post = (b) => fetch(`${base}/api/boot`, { method: 'POST', body: JSON.stringify(b) }).then((r) => r.json());
+  const ok = await post({ boot: 'b1', outcome: 'ok', stage: 'menu', ms: 2100, platform: 'ios',
+    stages: { html: 5, tg_sdk: 400, phaser: 900, modules: 1500, tg_ready: 1510, menu: 2100 } });
+  await post({ boot: 'b2', outcome: 'stuck', stage: 'phaser', ms: 15000, platform: 'ios' });
+  await post({ boot: 'b2', outcome: 'closed', stage: 'phaser', ms: 21000, platform: 'ios',
+    error: 'load module(+imports) https://x/src/main.js' });
+  await post({ boot: 'b3', outcome: 'stuck', stage: 'save', ms: 15000, platform: 'android' });
+  await post({ boot: 'b3', outcome: 'ok', stage: 'menu', ms: 17000, platform: 'android', stages: { menu: 17000 } });
+  const junk = await post({ outcome: 'взлом', stage: 'x' });
+  check('журнал запусков: отчёт принят без входа, мусор отброшен', ok.ok === true && junk.ok === false);
+  const rep = app.bootlog.report(24);
+  check('журнал запусков: сводка — открылись, застряли, ошибки',
+    /Запуски за 24 ч: 3/.test(rep) && /открылись: 2/.test(rep) && /дольше 15 с: 1/.test(rep)
+      && /closed после «phaser»: 1/.test(rep) && /src\/main\.js/.test(rep), rep);
+  await hook({ message: { from: { id: ADMIN }, chat: { id: ADMIN, type: 'private' }, text: '/boot' } });
+  check('/boot у админа', /Запуски за 24 ч/.test(calls('sendMessage').at(-1)?.params.text ?? ''));
+  await hook({ message: { from: { id: 3 }, chat: { id: 3, type: 'private' }, text: '/boot' } });
+  check('/boot не админу не показывается', !/Запуски/.test(calls('sendMessage').at(-1)?.params.text ?? ''));
+}
+
 server.close();
 fakeTg.close();
 db.close();
