@@ -1,6 +1,6 @@
 import {
   Weapon, ClusterWeapon, PlacedWeapon, InstantWeapon, BatWeapon, MineWeapon,
-  AirstrikeWeapon, TeleportWeapon, SpringWeapon, LaserWeapon, SheepWeapon, GasWeapon,
+  AirstrikeWeapon, TeleportWeapon, SpringWeapon, LaserWeapon, SheepWeapon, GasWeapon, GuardWeapon,
 } from './Weapon.js';
 
 /**
@@ -445,6 +445,20 @@ WEAPONS.push(new GasWeapon({
   projectile: { radius: 6, windScale: 0.8 },
   explosion: { radius: 8, damageRadius: 24, damage: 4, knockback: 40, shake: 0.002 },
   gas: { radius: 72, turns: 3, damage: 10 },
+}));
+
+// Не оружие, а действие хода: в партиях с тактикой есть всегда (GameScene
+// обнуляет его в остальных)
+WEAPONS.push(new GuardWeapon({
+  id: 'guard',
+  rarity: 'common', name: 'Окопаться',
+  icon: '🛡',
+  emojiIcon: '🛡',
+  iconKey: 'emoji_shield',
+  color: 0x9fd2ff,
+  category: 'снаряжение',
+  startAmmo: null,
+  explosion: { radius: 0, damageRadius: 0, damage: 0, knockback: 0 },
 }));
 
 export const WEAPONS_BY_ID = Object.fromEntries(WEAPONS.map((w) => [w.id, w]));

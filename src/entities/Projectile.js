@@ -9,6 +9,9 @@ import { has, rotFrame, meta, fitScale } from '../core/assets.js';
  * подшага — попиксельная трассировка отрезка по маске ландшафта. Даже очень
  * быстрый снаряд не проскочит сквозь тонкую перемычку.
  */
+/** Тактика: ближе этого от ствола ракета не взведена. */
+export const ARM_DIST = 110;
+
 export class Projectile {
   constructor(scene, x, y, vx, vy, weapon, owner) {
     this.scene = scene;
@@ -163,6 +166,7 @@ export class Projectile {
     const wormHit = this._wormOnSegment(this.x, this.y, nx, ny);
     if (wormHit) {
       this.x = wormHit.x; this.y = wormHit.y;
+      this.direct = true;          // прямое попадание (тактика: сильнее)
       this.detonate(wormHit.x, wormHit.y);
       return;
     }
@@ -576,9 +580,31 @@ export class Projectile {
   detonate(x, y) {
     if (!this.alive) return;
     this.alive = false;
-    const spawned = this.weapon.onDetonate(this.scene, this, x, y);
+    const mul = this._blastMul(x, y);
+    this.scene.blastMul = mul;
+    let spawned;
+    try { spawned = this.weapon.onDetonate(this.scene, this, x, y); } finally { this.scene.blastMul = 1; }
     this._cleanupView();
     if (spawned && spawned.length) this.scene.projectiles.push(...spawned);
+  }
+
+  /**
+   * Тактика: ракета взводится на ARM_DIST от ствола — вплотную она едва
+   * царапает (×0.3) и почти не толкает; прямое попадание в бойца — ×1.4.
+   * Что ложится и ждёт (фитиль, липучка, овца), взводится и так.
+   */
+  _blastMul(x, y) {
+    const s = this.scene, p = this.weapon.projectile;
+    if (!s.tactics || !this.launch || p.fuse > 0 || p.sticky || p.walker) return 1;
+    if (Math.hypot(x - this.launch.x, y - this.launch.y) < ARM_DIST) {
+      s.fx?.callout?.(x, y - 40, 'не взвелась', '#c8ccd6', 24);
+      return 0.3;
+    }
+    if (this.direct) {
+      s.fx?.callout?.(x, y - 56, 'Прямое!', '#ffd166', 30);
+      return 1.4;
+    }
+    return 1;
   }
 
   destroy() {

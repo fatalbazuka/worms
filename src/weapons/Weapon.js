@@ -41,6 +41,8 @@ export class Weapon {
     this.retreat = cfg.retreat ?? 0;
     // Кадры спрайтшита — предрассчитанные повороты, а не анимация
     this.rotational = cfg.rotational ?? false;
+    // Без отхода после выстрела (тактика): «Окопаться» кончает ход сразу
+    this.noRetreat = cfg.noRetreat ?? false;
 
     // Параметры полёта
     this.projectile = Object.assign({
@@ -545,5 +547,26 @@ export class GasWeapon extends Weapon {
     scene.explode(x, y, this.explosion, projectile.owner);
     scene.addGas(x, y - 12, this.gas, projectile.owner);
     return null;
+  }
+}
+
+/**
+ * «Окопаться»: вместо выстрела — защита до своего следующего хода. Урон
+ * вдвое меньше, отбрасывает втрое слабее (Worm.damage / applyImpulse).
+ * Ход кончается сразу, без отхода. Есть только в партиях с тактикой.
+ */
+export class GuardWeapon extends InstantWeapon {
+  constructor(cfg) {
+    super({ ...cfg, noRetreat: true });
+  }
+
+  fire(scene, x, y, vx, vy, owner) {
+    if (owner) {
+      owner.guard = true;
+      scene.fx?.dust(owner.x, owner.y, 8);
+      if (!scene.replaying) scene.fx?.callout?.(Math.max(110, Math.min(scene.terrain.width - 110, owner.x)), owner.y - 60, 'Окопался!', '#9fd2ff', 30);
+    }
+    scene.fx?.sound('thunk');
+    return [];
   }
 }

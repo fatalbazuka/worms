@@ -41,7 +41,7 @@ import { SKIN_IDS } from './shop.mjs';
 import { settle } from './lib/elo.js';
 
 /** Версия правил новых дуэлей: 2 — с «арсеналом боя» (клиент: net/duel.js duelMatch). */
-export const RULES = 2;
+export const RULES = 3;
 export const TURN_MS = 24 * 3600_000;
 export const REMIND_BEFORE = 2 * 3600_000;
 export const MAX_ACTIVE = 5;

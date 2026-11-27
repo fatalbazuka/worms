@@ -171,6 +171,8 @@ export function captureState(scene) {
       alive: w.alive,
       facing: w.facing,
       hang: w.hang ?? null,
+      // Окопался (тактика) — до своего хода; поле только когда есть
+      ...(w.guard ? { guard: 1 } : {}),
     })),
     ammo: scene.turn.ammo.map((row) => row.slice()),
     crates: scene.crates
@@ -242,6 +244,7 @@ export function applyState(scene, state) {
       w.squash = 0.8;
     }
     w.health = s.hp;
+    w.guard = Boolean(s.guard);
     w.grounded = w.supported(w.x, w.y);
     w.zip = null;
     w.hang = s.hang ?? null;
@@ -330,7 +333,7 @@ export function stateHash(state) {
   mix(state.team);
   mix(state.worm);
   mix(state.wind);
-  for (const w of state.worms) { mix(w.x); mix(w.y); mix(w.hp); mix(w.alive ? 1 : 0); }
+  for (const w of state.worms) { mix(w.x); mix(w.y); mix(w.hp); mix(w.alive ? 1 : 0); if (w.guard) mix(7); }
   for (const row of state.ammo) mixAmmo(mix, row);
   for (const g of state.gas ?? []) { mix(g.x); mix(g.y); mix(g.turns); }
   // Журнал взрывов в свёртку не идёт: у принявшего он уже пуст. Сверяется

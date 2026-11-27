@@ -4,6 +4,7 @@ import {
   InstantWeapon, BatWeapon, PlacedWeapon, MineWeapon, AirstrikeWeapon, TeleportWeapon, ClusterWeapon,
 } from '../weapons/Weapon.js';
 import { simulateFlight, muzzle } from './ballistics.js';
+import { ARM_DIST } from '../entities/Projectile.js';
 
 /**
  * Бот.
@@ -885,7 +886,14 @@ export class Bot {
         const d = direct ? 0 : Math.hypot(r.x - w.x, r.y - w.centerY);
         if (w === target) miss = Math.min(miss, d + (r.kind === 'water' ? 300 : 0));
         if (d >= ex.damageRadius) continue;
-        got.set(w, (got.get(w) ?? 0) + ex.damage * (1 - d / ex.damageRadius));
+        // Тактика: вплотную ракета не взводится, прямое — сильнее, окопавшемуся вдвое меньше
+        let mul = 1;
+        if (this.scene.tactics && me && !placer) {
+          if (Math.hypot(r.x - me.x, r.y - me.centerY) < ARM_DIST + 10) mul = 0.3;
+          else if (direct) mul = 1.4;
+        }
+        if (w.guard) mul *= 0.5;
+        got.set(w, (got.get(w) ?? 0) + ex.damage * (1 - d / ex.damageRadius) * mul);
       }
     }
     if (!any) return 5000;
