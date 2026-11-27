@@ -11,6 +11,7 @@ import { AFFIXES, DEFAULT_AFFIXES } from '../entities/Affixes.js';
 import { ascentDone, ascentStars, claimChapterBoxes } from '../platform/ascent.js';
 import { challengeStars } from '../platform/challenges.js';
 import { onboardStage, isNewbie } from '../platform/onboard.js';
+import { pathState, claimPath, markInvited } from '../platform/path.js';
 import { currentGoal } from '../platform/nextgoal.js';
 import { dailyTowerStreak, dailyTowerWon } from '../platform/dailytower.js';
 import { streakBonus } from '../core/dailytower.js';
@@ -657,8 +658,11 @@ export default class MenuScene extends Phaser.Scene {
     // Партия оборвалась (Telegram перезапустился, погас экран), а мы
     // открылись без ссылки: предлагаем вернуться, пока соперник ждёт
     let areaBottom = playY - playH / 2 - 22;
-    // «Что дальше» — одна строка над «Играть». Новичку не нужна: ему — «Играть»
-    if (!isNewbie()) areaBottom = this._goalLine(cx, areaBottom - 16, Math.min(W - 72, 560)) - 22;
+    // «Путь новичка» — пока не пройден: дуэль, рейтинг, скины. Иначе «Что
+    // дальше» — одна строка над «Играть». До обучения — ничего: только «Играть»
+    const path = tutorial ? null : pathState({ duelsLive: this.duelsLive ?? 0, pastTutorial: true });
+    if (path) areaBottom = this._pathRow(cx, areaBottom - 16, Math.min(W - 72, 560), path) - 22;
+    else if (!isNewbie()) areaBottom = this._goalLine(cx, areaBottom - 16, Math.min(W - 72, 560)) - 22;
     const pending = pendingSession();
     if (pending && Date.now() - pending.at < 15 * 60 * 1000) {
       const y = areaBottom - 30;
@@ -731,6 +735,63 @@ export default class MenuScene extends Phaser.Scene {
    * в её раздел: задания, коробки, дорога наград, достижения.
    * @returns {number} верхний край строки
    */
+  /**
+   * «Путь новичка»: плашка с текущим шагом и кружками всех четырёх. Шаг
+   * сделан — «Забери +50»; нет — тап ведёт туда, где его делают.
+   * @returns {number} верх плашки
+   */
+  _pathRow(cx, y, w, path) {
+    const cur = path.current;
+    const h = 74, top = y - h;
+    const ready = cur.done && !cur.claimed;
+    const g = this.add.graphics();
+    g.fillStyle(ready ? 0x1f4a2a : 0x1c1440, 0.96).fillRoundedRect(cx - w / 2, top, w, h, 18);
+    g.lineStyle(3, ready ? 0x8ef0a0 : 0xffd166, 0.85).strokeRoundedRect(cx - w / 2, top, w, h, 18);
+    this.items.push(g);
+    const r = cur.reward;
+    const prize = r?.coins ? `+${r.coins} 🪙` : r?.boxes ? '🎁 коробка' : '';
+    this.items.push(this.add.text(cx - w / 2 + 18, top + 16, `Путь новичка · шаг ${path.steps.indexOf(cur) + 1} из ${path.total}`,
+      font(16, 800, UI.textDim)).setOrigin(0, 0.5));
+    const main = ready ? `✓ Готово — забери ${prize}` : `${cur.icon} ${cur.text}${prize ? ` · ${prize}` : ''} ›`;
+    const t = this.add.text(cx - w / 2 + 18, top + 46, main, font(22, 900, ready ? '#8ef0a0' : '#ffe9c2')).setOrigin(0, 0.5);
+    if (t.width > w - 120) t.setScale((w - 120) / t.width);
+    this.items.push(t);
+    // Кружки шагов справа: зелёные — пройдено, жёлтый — текущий
+    path.steps.forEach((s, i) => {
+      const x = cx + w / 2 - 22 - (path.steps.length - 1 - i) * 22;
+      const col = s.claimed ? 0x8ef0a0 : s === cur ? 0xffd166 : 0x3a4060;
+      this.items.push(this.add.circle(x, top + 16, 7, col));
+    });
+    if (ready) this.tweens.add({ targets: t, scale: t.scale * 1.05, duration: 600, yoyo: true, repeat: -1, ease: 'Sine.easeInOut' });
+    const zone = this.add.zone(cx, top + h / 2, w, h).setInteractive({ useHandCursor: true });
+    zone.on('pointerup', () => {
+      if (this._dragging) return;
+      haptic('tap');
+      if (ready) {
+        const got = claimPath(cur.id, { duelsLive: this.duelsLive ?? 0, pastTutorial: true });
+        this.showRoot();
+        if (got) {
+          haptic('win');
+          sfx.play('pickup');
+          // Поверх нового экрана и мимо списка items: showRoot его чистит
+          const msg = this.add.text(cx, top + h / 2, got.coins ? `+${got.coins} монет` : '🎁 Коробка — открой в «Скинах»',
+            font(30, 900, '#8ef0a0')).setOrigin(0.5).setStroke('#10131a', 6).setDepth(80);
+          this.tweens.add({ targets: msg, y: msg.y - 60, alpha: 0, delay: 700, duration: 700, onComplete: () => msg.destroy() });
+        }
+        return;
+      }
+      const go = {
+        skins: () => this.showSkins(),
+        invite: () => this._inviteFriend(),
+        rated: () => ((this.duelsLive ?? 0) > 0 ? this.showDuels() : this._inviteFriend()),
+      }[cur.action];
+      go?.();
+    });
+    this.items.push(zone);
+    this.buttons.path = { x: cx, y: top + h / 2 + this.oy, w, h, enabled: true };
+    return top;
+  }
+
   _goalLine(cx, y, w) {
     const goal = currentGoal();
     if (!goal) return y + 16;
@@ -1219,6 +1280,7 @@ export default class MenuScene extends Phaser.Scene {
 
   /** Позвать друга: с входом — шахматная партия карточкой в чат, без — ссылка в игру. */
   _inviteFriend() {
+    markInvited();
     if (loggedIn()) { this.challengeFriend(); return; }
     const link = refLink();
     trackStep('invite');

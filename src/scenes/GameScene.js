@@ -70,6 +70,7 @@ import { bumpAch, checkAchievements, onAchievement } from '../platform/achieveme
 import { AchToasts } from '../ui/AchToast.js';
 import { CameraRig } from '../ui/CameraRig.js';
 import { Coach } from '../ui/Coach.js';
+import { Tips } from '../ui/Tips.js';
 import { voice } from '../audio/Voice.js';
 import { music, battleTheme } from '../audio/Music.js';
 import { askText, closeOverlay } from '../ui/Overlay.js';
@@ -139,6 +140,12 @@ export default class GameScene extends Phaser.Scene {
     // Схема прицела на башне — выбор игрока: рогатка (по умолчанию) или
     // прежние кнопки угла и «Огонь». Раскладка экрана от неё не зависит
     this.slingAim = this.sling && aimScheme() !== 'buttons';
+    // Тактика (башня, онлайн, дуэли): трос один, шаги в запасе, ракета
+    // вплотную не взводится, прямое попадание сильнее, отброс слабее,
+    // отход после выстрела, «Окопаться», честный первый ход
+    this.tactics = Boolean(this.rules.tactics);
+    this.walkPerTurn = this.tactics && Number(this.rules.walk) > 0 ? Number(this.rules.walk) : null;
+    this.walkLeft = this.walkPerTurn;
     // Рогатка с любого места: протяжка пальцем по полю — натяжение, а не камера
     this.aimAnywhere = this.slingAim && aimScheme() === 'anywhere';
     this.explosionLog = [];
@@ -196,6 +203,8 @@ export default class GameScene extends Phaser.Scene {
     this.koLog = new KoLog(this);
     this.kos = [];
     this.offscreen = new OffscreenMarkers(this);
+    // Подсказки «один раз»: первая дуэль и новые правила боя
+    this.tips = new Tips(this);
     // Новичок: пошаговая тренировка поверх «Первого выстрела»
     this.coach = this.match.tutorial && this.slingAim && !isDesktop() ? new Coach(this) : null;
 
@@ -224,6 +233,11 @@ export default class GameScene extends Phaser.Scene {
     // Первым ходит человек: отдавать первый ход боту в миссии — почти то же,
     // что начать её с потери бойца.
     this.turn.begin(this._firstTeam());
+    // Честный первый ход: кто ходит не первым — начинает окопавшимся, щит
+    // снимется в начале его хода. Первый выстрел партию не решает
+    if (this.tactics && !this.match.tutorial) {
+      for (const w of this.worms) if (w.team !== this.turn.currentTeam) w.guard = true;
+    }
 
     this._setupNet();
     if (this.variant?.intro) {
@@ -692,6 +706,9 @@ export default class GameScene extends Phaser.Scene {
   }
 
   _applyAmmoRules() {
+    // «Окопаться» — только в партиях с тактикой
+    const gi = WEAPONS.findIndex((w) => w.id === 'guard');
+    if (gi >= 0 && !this.tactics) this.turn.ammo.forEach((row) => { row[gi] = 0; });
     const set = (team, table) => {
       if (!table) return;
       for (const [id, count] of Object.entries(table)) {
@@ -1019,6 +1036,7 @@ export default class GameScene extends Phaser.Scene {
       }
       return;
     }
+    if (ok) this.tips?.show('duel_sent', '📨 Ход отправлен! Бот напишет в Telegram, когда друг сходит. Дуэлей может идти несколько сразу');
     this._duelPanel(ok ? 'Ход отправлен' : 'Ход не отправлен',
       ok ? `${this.net.opponent.name} получит сообщение в Telegram · на ход у него 24 часа`
         : (error || 'попробуй позже'), ok ? '#8ef0a0' : '#ff9a9a');
@@ -1347,7 +1365,8 @@ export default class GameScene extends Phaser.Scene {
     // Многоэтажная карта: бойцы сразу стоят на своих этажах. Десант сверху
     // посадил бы всех на крышу
     if (this.terrain.tops) {
-      const spots = this._findFloorSpots(order.length);
+      // Тренировка — со старых мест: под них подобраны мишень, флажок и трос
+      const spots = this.tactics && !this.match.tutorial ? this._findTeamSpots(order) : this._findFloorSpots(order.length);
       order.forEach(({ team, idx }, i) => {
         const p = spots[i] ?? { x: CFG.WORLD_W / 2, y: 100 };
         const worm = new Worm(this, p.x, p.y, team, idx);
@@ -1369,6 +1388,30 @@ export default class GameScene extends Phaser.Scene {
       worm.deployChute();
       this.worms.push(worm);
     });
+  }
+
+  /**
+   * Тактика: команды стартуют далеко друг от друга — за первый ход до
+   * соперника не добраться. Свои — не вплотную. Перемешивание то же, что
+   * в _findFloorSpots: зерно у обоих одно, точки совпадают.
+   */
+  _findTeamSpots(order) {
+    const all = this.terrain.standSpots();
+    for (let i = all.length - 1; i > 0; i--) {
+      const j = this.rng.int(0, i);
+      [all[i], all[j]] = [all[j], all[i]];
+    }
+    for (let far = 1100; far >= 250; far -= 50) {
+      const picked = [];
+      for (const { team } of order) {
+        const p = all.find((q) => !picked.some((o) => o.p === q) && picked.every((o) => Math.hypot(o.p.x - q.x, o.p.y - q.y)
+          >= (o.team === team ? 120 : far)));
+        if (!p) break;
+        picked.push({ p, team });
+      }
+      if (picked.length === order.length) return picked.map((o) => o.p);
+    }
+    return this._findFloorSpots(order.length);
   }
 
   /** Точки старта на этажах: случайные, но подальше друг от друга. */
@@ -1528,6 +1571,7 @@ export default class GameScene extends Phaser.Scene {
     this._lastNow = now;
 
     this._handleMovement(dt, realDt);
+    this._drawWalkBar();
     // Бот решает и «держит кнопку» до набора силы — оба шага на системных
     // часах, иначе доворот ствола шёл бы в разы медленнее задуманного.
     if (this.isBotTurn()) this.botFor(this.turn.currentTeam).update(realDt, dt);
@@ -1551,6 +1595,7 @@ export default class GameScene extends Phaser.Scene {
         if (this.coach.finished) this.coach = null;
       }
     }
+    if (!this.coach) this._tipsTick();
     this.ambience?.update(dt);
     for (const m of this.monsters) m.update(dt);
     if (this.monsters.some((m) => !m.alive)) this.monsters = this.monsters.filter((m) => m.alive);
@@ -1604,6 +1649,8 @@ export default class GameScene extends Phaser.Scene {
     // и свой ход «пропадал», едва начавшись
     // И пока игрок не начал свой ход (первое касание или клавиша): можно
     // спокойно осмотреть поле после повтора
+    // Отход после выстрела (тактика) идёт всегда — и в повторе чужого хода
+    if (this.net?.isDuel && this.turn.retreating && this.turn.retreated) return realDt;
     if (this.net?.isDuel && (!this.net.ready || !this.net.started)) return 0;
     if (this.net || this.room) return realDt;
     return Math.min(realDt, Math.max(physDt, realDt / CFG.TURN_CLOCK_STRETCH));
@@ -1742,7 +1789,11 @@ export default class GameScene extends Phaser.Scene {
     // Прыжок помним 150 мс: нажал за миг до приземления — прыгнет, приземлившись
     if (this.moveInput.jumpQueued || Phaser.Input.Keyboard.JustDown(k.jump)) this._jumpAt = this.time.now;
     if (this._jumpAt && (w.grounded || w.hang) && this.time.now - this._jumpAt < 150) {
-      w.jump();
+      // Прыжок тоже из запаса шагов: иначе кончились ноги — допрыгал бы
+      if (this.walkLeft == null || this.walkLeft > 0) {
+        w.jump();
+        this.spendWalk(40);
+      }
       this._jumpAt = 0;
     }
     this.moveInput.jumpQueued = false;
@@ -1833,6 +1884,9 @@ export default class GameScene extends Phaser.Scene {
   resetAim() {
     this.aimAngle = CFG.AIM_ANGLE_START;
     this.hooksLeft = this.hookPerTurn;
+    this.walkLeft = this.walkPerTurn;
+    // Первый ход партии — без троса: к сопернику не долететь с порога
+    if (this.tactics && this.turn.turnNumber <= 1) this.hooksLeft = 0;
     this.applyFlood();
     this.cancelCharge();
     this.mouseFire = false;
@@ -2031,6 +2085,9 @@ export default class GameScene extends Phaser.Scene {
     // Приказ уходит наружу до симуляции: сеть должна получить ровно то,
     // что игрок задал, а не то, что из этого вышло локально.
     if (!this.replaying) {
+      // Выстрел — это начало хода и для часов дуэли: иначе отход после
+      // выстрела (тактика) ждал бы часов, которые ещё стоят
+      this.net?.begin?.();
       const cmd = captureCommand(this, vx, vy);
       this.onShot?.(cmd);
       this.net?.sendShot(cmd);
@@ -2048,6 +2105,8 @@ export default class GameScene extends Phaser.Scene {
       }
     }
     const shots = this.turn.weapon.fire(this, sx, sy, vx, vy, w);
+    // Тактика: откуда вылетел — ракета взводится не сразу (Projectile.detonate)
+    if (this.tactics) for (const p of shots) p.launch = { x: sx, y: sy };
     this.projectiles.push(...shots);
     // След выстрела — только своему игроку на этом устройстве
     if (!this.replaying && !this.isBotTurn() && this.isLocalTeam(this.turn.currentTeam)) {
@@ -2123,6 +2182,10 @@ export default class GameScene extends Phaser.Scene {
       m.armed = true;
     }
 
+    // Тактика: невзведённая ракета едва царапает, прямое попадание — сильнее
+    // (blastMul ставит Projectile.detonate), отброс всех взрывов слабее
+    const mul = this.blastMul ?? 1;
+    const knock = (this.tactics ? 0.7 : 1) * Math.min(1, mul);
     // Кто задел — для причины выбывания: снаряд бойца или стихия (null)
     this._blastBy = owner ?? 'env';
     this._blastCfg = cfg;
@@ -2144,13 +2207,13 @@ export default class GameScene extends Phaser.Scene {
       if (d > cfg.damageRadius) continue;
 
       const f = 1 - d / cfg.damageRadius;      // линейный спад от центра
-      const dmg = Math.round(cfg.damage * f);
+      const dmg = Math.round(cfg.damage * f * mul);
 
       let nx, ny;
       if (d < 1) { nx = 0; ny = -1; } else { nx = (wx - x) / d; ny = (wy - y) / d; }
       // Магнит тянет и с края круга заметно: иначе в 140 px от точки
       // боец едва шевелился
-      const kf = cfg.pull ? Math.max(0.45, f) : f;
+      const kf = (cfg.pull ? Math.max(0.45, f) : f) * (cfg.pull ? 1 : knock);
       w.applyImpulse(nx * cfg.knockback * kf, ny * cfg.knockback * kf - 70 * kf);
 
       w.damage(dmg, 'взрыв');
@@ -2257,6 +2320,79 @@ export default class GameScene extends Phaser.Scene {
     this.tweens.add({
       targets: g, alpha: 0, duration, ease: 'Cubic.easeIn', onComplete: () => g.destroy(),
     });
+  }
+
+  /** Запас шагов полоской под своим бойцом: видно, сколько ещё пройдёт. */
+  _drawWalkBar() {
+    const w = this.turn.activeWorm;
+    const show = this.walkPerTurn && w?.alive && this.canPlayerAct() && !this.isBotTurn()
+      && this.isLocalTeam(this.turn.currentTeam) && !w.zip && !this.charging;
+    if (!show) { this.walkGfx?.setVisible(false); return; }
+    this.walkGfx ??= this.rig.world(this.add.graphics().setDepth(DEPTH.AIM));
+    const g = this.walkGfx.setVisible(true);
+    g.clear();
+    const k = Math.max(0, Math.min(1, this.walkLeft / this.walkPerTurn));
+    const bw = 40, bx = Math.round(w.x - bw / 2), by = Math.round(w.y + 6);
+    g.fillStyle(0x10131a, 0.75).fillRoundedRect(bx - 2, by - 2, bw + 4, 9, 4);
+    if (k > 0) g.fillStyle(k > 0.3 ? 0x8fe36b : 0xffb347, 1).fillRoundedRect(bx, by, Math.max(4, bw * k), 5, 2.5);
+    else g.lineStyle(1.5, 0xff8a8a, 0.9).strokeRoundedRect(bx, by, bw, 5, 2.5);
+  }
+
+  /** Тактика: сколько ещё можно пройти этим бойцом в этом ходу; null — без счёта. */
+  walkBudget(worm) {
+    if (this.walkLeft == null || this.replaying || worm !== this.turn.activeWorm) return null;
+    return this.walkLeft;
+  }
+
+  spendWalk(px) {
+    if (this.walkLeft != null) this.walkLeft = Math.max(0, this.walkLeft - px);
+  }
+
+  /**
+   * Подсказки «один раз» по ходу боя: первая дуэль — что за повтор, что
+   * значит свой ход; новые правила — трос и шаги, взвод, «Окопаться».
+   * Обучение (Coach) говорит своё — тогда здесь молчим.
+   */
+  _tipsTick() {
+    const t = this.tips;
+    if (!t || this.fastForward || this.gameOverUi || this.match.tutorial) return;
+    const n = this.net;
+    if (n?.isDuel) {
+      if (n.showing) t.show('duel_replay', '👀 Это повтор хода соперника — смотри, куда он стрелял. Надоело — «Пропустить повтор» внизу');
+      else if (n.phase === 'play' && this.canPlayerAct()) {
+        t.show('duel_play', '⚔️ Твой ход! На него сутки — можно выйти и вернуться. Часы пойдут, когда начнёшь');
+      }
+    }
+    const mine = this.canPlayerAct() && !this.isBotTurn() && this.isLocalTeam(this.turn.currentTeam) && !n?.showing;
+    if (this.tactics && mine && !this.turn.retreating) {
+      t.show('tac_move', '🪢 Трос — один за ход, шаги — полоска под бойцом. За ход к врагу не подбежать — стреляй издалека');
+      t.show('tac_arm', '🎯 Ракета взводится не сразу: вплотную почти не ранит. Прямое попадание — +40% урона');
+      t.show('tac_guard', '🛡 Не достаёшь врага — тапни 🛡 на ленте два раза: окопаешься, урон вдвое меньше до твоего хода');
+    }
+  }
+
+  /** Тактика: выстрел долетел — три секунды на отход, шагов хватит на укрытие. */
+  onRetreat() {
+    if (!this.replaying && !this.isBotTurn() && this.isLocalTeam(this.turn.currentTeam)) {
+      this.tips?.show('tac_retreat', '🏃 После выстрела — 3 секунды отойти в укрытие: стик или трос, если остался');
+    }
+    if (this.walkLeft != null) this.walkLeft = Math.max(this.walkLeft, 160);
+    if (this.isLocalTeam(this.turn.currentTeam) && !this.replaying) this.fx.banner('Отход!', '#9fd2ff', 900);
+  }
+
+  /** «Окопаться»: вместо выстрела — защита до своего следующего хода. */
+  digIn() {
+    const i = WEAPONS.findIndex((w) => w.id === 'guard');
+    const w = this.turn.activeWorm;
+    if (i < 0 || !w || !this.canAct() || this.turn.ammoOf(i) <= 0) return false;
+    if (this.turn.weaponIndex !== i) this.turn.setWeaponIndex(i);
+    this.fireActiveWorm(w.facing * 10, -10);
+    return true;
+  }
+
+  /** Начало хода команды: её бойцы вылезают из окопа. */
+  clearGuard(team) {
+    for (const w of this.worms) if (w.team === team) w.guard = false;
   }
 
   /** Облако ядовитого газа: живёт в сцене несколько ходов. */
@@ -2590,6 +2726,11 @@ export default class GameScene extends Phaser.Scene {
 
   onGameOver(winner) {
     if (this.gameOverUi) return;
+    this.tips?.destroy();
+    if (this.net?.isDuel && !this.fastForward) {
+      this.time.delayedCall(1800, () => this.tips?.show('duel_rating',
+        '🏆 За победы в дуэлях растёт рейтинг: лига и место в топе — в разделе «Рейтинг»'));
+    }
     // Выжившие радуются или плачут — у кого есть чем
     for (const w of this.worms) if (w.alive) w.mood = w.team === winner ? 'worm_win' : 'worm_cry';
 

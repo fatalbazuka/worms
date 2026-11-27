@@ -47,7 +47,11 @@ export function duelMatch(duel) {
   // начатая раньше доигрывается без него, её патроны уже в истории ходов
   return {
     ...m, mode: 'duel', seed: duel.seed, duelId: duel.id,
-    rules: { ...m.rules, turnTime: DUEL_TURN_TIME, loadout: (duel.rules ?? 1) >= 2 },
+    rules: {
+      ...m.rules, turnTime: DUEL_TURN_TIME, loadout: (duel.rules ?? 1) >= 2,
+      // Тактика — с правил 3; начатые раньше доигрываются по старым
+      ...((duel.rules ?? 1) >= 3 ? {} : { tactics: false, hook: 3, walk: null }),
+    },
   };
 }
 
@@ -72,7 +76,7 @@ export function turnHash(scene) {
   let h = 2166136261;
   const mix = (n) => { h ^= n | 0; h = Math.imul(h, 16777619); };
   mix(s.turn); mix(s.team); mix(s.worm); mix(s.wind); mix(s.over ? 1 : 0);
-  for (const w of s.worms) { mix(w.x); mix(w.y); mix(w.hp); mix(w.alive ? 1 : 0); }
+  for (const w of s.worms) { mix(w.x); mix(w.y); mix(w.hp); mix(w.alive ? 1 : 0); if (w.guard) mix(7); }
   for (const row of s.ammo) mixAmmo(mix, row);
   for (const c of s.crates) { mix(c.x); mix(c.y); mix(c.weapon ?? -1); }
   for (const m of s.mines) { mix(m.x); mix(m.y); mix(m.armed ? 1 : 0); }

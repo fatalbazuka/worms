@@ -720,6 +720,8 @@ export class Hud {
       zone.on('pointerdown', () => {
         const c = this.strip.chips[i];
         if (c.index == null || !s.canPlayerAct() || !this.strip.shown) return;
+        // «Окопаться»: первый тап — выбрать (подсказка снизу), второй — окопаться
+        if (WEAPONS[c.index]?.id === 'guard' && s.turn.weaponIndex === c.index) { s.digIn?.(); return; }
         s.turn.setWeaponIndex(c.index);
       });
       this.uiRects.push({ x: cx - r, y: y - r, w: r * 2, h: r * 2, round: true });
@@ -741,6 +743,12 @@ export class Hud {
       if (has(i) && !out.includes(i)) out.push(i);
     }
     for (let i = 0; i < WEAPONS.length && out.length < st.n; i++) if (has(i) && !out.includes(i)) out.push(i);
+    // Тактика: «🛡 Окопаться» на ленте всегда — последним кружком
+    const gi = WEAPONS.findIndex((w) => w.id === 'guard');
+    if (this.scene.tactics && gi >= 0 && has(gi)) {
+      const rest = out.filter((i) => i !== gi).slice(0, st.n - 1).sort((a, b) => a - b);
+      return [...rest, gi];
+    }
     return out.slice(0, st.n).sort((a, b) => a - b);
   }
 
@@ -1186,10 +1194,12 @@ export class Hud {
       const splitting = !scene.replaying && !scene.isBotTurn?.() && scene.isLocalTeam?.(scene.turn.currentTeam)
         && scene.projectiles?.find((p) => p.alive && (p.weapon.projectile.split || p.weapon.projectile.tapBoom));
       const bannerUp = (scene.fx?.bannerUntil ?? 0) > scene.time.now;
-      const show = splitting || (!this.helpVisible && !bannerUp && scene.canPlayerAct() && !scene.coach
+      const guard = !scene.coach && scene.turn.weapon?.id === 'guard' && scene.canPlayerAct() && !scene.isBotTurn?.()
+        && scene.isLocalTeam?.(scene.turn.currentTeam);
+      const show = splitting || guard || (!this.helpVisible && !bannerUp && scene.canPlayerAct() && !scene.coach
         && (spring || sling || (scene.hookHint && scene.hooksLeft > 0)));
       if (show) {
-        this.hintText.setText(splitting ? (splitting.weapon.projectile.tapBoom ? 'тапни по экрану — овца взорвётся'
+        this.hintText.setText(guard ? 'ещё тап по 🛡 — окопаться: урон ×½ до твоего хода' : splitting ? (splitting.weapon.projectile.tapBoom ? 'тапни по экрану — овца взорвётся'
           : 'тапни по экрану — ракета разделится на три') : spring
           ? 'батут: тяни рычаг — полетишь сам по дуге, пружина останется'
           : sling

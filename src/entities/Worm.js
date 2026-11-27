@@ -430,7 +430,21 @@ export class Worm {
   }
 
   /** Ходьба по команде игрока. Возвращает true, если сдвинулся. */
+  /**
+   * Шаг с учётом запаса ходьбы на ход (тактика: GameScene.walkBudget). Запас
+   * кончился — стоит; иначе идёт не дальше остатка и списывает пройденное.
+   */
   walk(dir, dt) {
+    const left = this.scene.walkBudget?.(this);
+    if (left == null || this.hang) return this._walk(dir, dt);
+    if (left <= 0) { this.walking = false; return false; }
+    const x0 = this.x;
+    const r = this._walk(dir, Math.min(dt, left / CFG.WALK_SPEED));
+    this.scene.spendWalk?.(Math.abs(this.x - x0));
+    return r;
+  }
+
+  _walk(dir, dt) {
     // Висит на потолке или стене — шаг отцепляет: не застревать вниз головой
     if (this.alive && this.hang) { this.dropFromHang(dir); return true; }
     if (!this.alive || !this.grounded) return false;
@@ -532,6 +546,8 @@ export class Worm {
   /** Импульс от взрыва. */
   applyImpulse(ix, iy) {
     if (!this.alive) return;
+    // Окопался — почти не сдвинуть
+    if (this.guard) { ix *= 0.3; iy *= 0.3; }
     if (this.grounded || this.hang || this.zip) this.fallStartY = this.y;
     // Взрыв срывает со стены и обрывает рывок
     this.hang = null;
@@ -645,6 +661,8 @@ export class Worm {
     // В обучении своего бойца не ранит: проиграть урок собственным взрывом
     // нельзя — «Поражение» на первой минуте игры закрывало вкладку
     if (this.scene.match?.tutorial && this.team === this.scene.myTeamIndex) return;
+    // Окопался — вдвое меньше (вода топит мимо урона, через kill)
+    if (this.guard) amount = Math.ceil(amount / 2);
     this.health = Math.max(0, this.health - amount);
     // Пару секунд лицо помнит, что было больно; после падения — кружится голова
     this.hurtPose = cause === 'падение' ? 'worm_dizzy' : 'worm_hurt';
@@ -691,6 +709,7 @@ export class Worm {
       onComplete: () => {
         this.view.destroy();
         this.label.destroy();
+        this.guardIcon?.destroy();
         this.bar.destroy();
         this.barBg.destroy();
         this.barGhost?.destroy();
@@ -813,6 +832,18 @@ export class Worm {
     const by = ceil ? ry + 17 : ry - CFG.WORM_H - 7 - lift;
     this.label.setPosition(rx + shake, ly);
     this.label.setText(`${Math.round(this.shownHealth)}`);
+    // Окопался — щит у числа здоровья, до своего следующего хода
+    if (this.guard && !this.guardIcon) {
+      const s = this.scene;
+      this.guardIcon = s.rig.world(s.textures.exists('emoji_shield')
+        ? s.add.image(0, 0, 'emoji_shield').setScale(22 / 128)
+        : s.add.text(0, 0, '🛡', { fontSize: '18px' }).setOrigin(0.5));
+      this.guardIcon.setDepth(this.label.depth);
+    }
+    if (this.guardIcon) {
+      this.guardIcon.setVisible(Boolean(this.guard) && this.alive);
+      this.guardIcon.setPosition(rx - this.label.width / 2 - 14, ly + 1);
+    }
     this.barBg.setPosition(rx, by);
     this.bar.setPosition(rx - HP_BAR_W / 2, by);
     this.bar.width = HP_BAR_W * (this.health / CFG.MAX_HEALTH);

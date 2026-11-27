@@ -82,7 +82,9 @@ export const EMOJI = ['pine', 'tree', 'palm', 'mushroom', 'rock', 'barrel', 'cac
   // новое оружие: пчёлы, бур, магнит
   'bee', 'honey', 'nutbolt', 'magnet',
   // овца, лазер, газ
-  'sheep', 'flashlight', 'testtube'];
+  'sheep', 'flashlight', 'testtube',
+  // «Окопаться»
+  'shield'];
 
 /** Текстуры ландшафта: по четыре файла на каждую тему из biomes.js. */
 for (const b of BIOMES) {

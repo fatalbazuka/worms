@@ -86,7 +86,7 @@ await Promise.all(pages.map((p) => p.waitForTimeout(1200)));
 const info = (p) => p.evaluate(() => {
   const s = window.__WORMS__.scene.getScene('Game');
   return {
-    shape: s.shape.id, sling: s.sling, hooks: s.hookPerTurn, flood: !!s.rules.flood, variant: s.variant?.id,
+    shape: s.shape.id, sling: s.sling, hooks: s.hookPerTurn, tactics: s.tactics, firstHooks: s.hooksLeft, flood: !!s.rules.flood, variant: s.variant?.id,
     biome: s.terrain.biome.id,
     myTeam: s.net.myTeam, team: s.turn.currentTeam, turn: s.turn.turnNumber, state: s.turn.state,
     terrain: s.terrain.hash(),
@@ -98,9 +98,10 @@ const info = (p) => p.evaluate(() => {
 });
 
 let [a, b] = await Promise.all(pages.map(info));
-check('оба получили башню с тросом по коду комнаты',
-  a.shape === 'tower' && b.shape === 'tower' && a.sling && b.sling && a.hooks === 3 && a.flood,
-  `${a.shape}/${b.shape}, тросов ${a.hooks}`);
+check('оба получили башню с тросом по коду комнаты, правила с тактикой',
+  a.shape === 'tower' && b.shape === 'tower' && a.sling && b.sling && a.hooks === 1 && a.flood && a.tactics && b.tactics,
+  `${a.shape}/${b.shape}, тросов ${a.hooks}, тактика ${a.tactics}/${b.tactics}`);
+check('первый ход партии — без троса', a.firstHooks === 0 && b.firstHooks === 0, `${a.firstHooks}/${b.firstHooks}`);
 check('карта и расстановка у обоих одни', a.terrain === b.terrain && a.pos === b.pos, `${a.pos} | ${b.pos}`);
 check('вид башни и тема у обоих одни', a.variant && a.variant === b.variant && a.biome === b.biome,
   `${a.variant}/${a.biome} | ${b.variant}/${b.biome}`);
@@ -113,6 +114,8 @@ const watcher = mover === pages[0] ? pages[1] : pages[0];
 const hooked = await mover.evaluate(() => {
   const s = window.__WORMS__.scene.getScene('Game');
   const w = s.turn.activeWorm;
+  // В первый ход троса нет (тактика) — для проверки сети выдаём один
+  s.hooksLeft = 1;
   // Первый зацеп по кругу, после которого боец удержится и окажется не там, где стоял
   for (let k = 0; k < 32; k++) {
     const an = -Math.PI / 2 + Math.ceil(k / 2) * (Math.PI / 16) * (k % 2 ? 1 : -1);
@@ -125,7 +128,7 @@ const hooked = await mover.evaluate(() => {
   }
   return { ok: false };
 });
-check('трос пущен, один списан', hooked.ok && hooked.left === 2, JSON.stringify(hooked));
+check('трос пущен, один списан', hooked.ok && hooked.left === 0, JSON.stringify(hooked));
 await mover.waitForFunction((i) => !window.__WORMS__.scene.getScene('Game').worms[i].zip, hooked.worm, { timeout: 20000 });
 await mover.waitForTimeout(900);
 const at = (p) => p.evaluate((i) => {

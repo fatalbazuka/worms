@@ -453,11 +453,13 @@ export class AimController {
     this._hintKey = key;
     const scene = this.scene;
     const out = [];
-    for (let k = 0; k < 16 && out.length < 3; k++) {
-      // Сначала вверх, потом веером в обе стороны
+    // Сначала вверх, потом веером в обе стороны; ближнее кольцо, потом дальнее
+    // (этаж над головой бывает выше 200 px — тогда точек не было вовсе)
+    for (let i = 0; i < 32 && out.length < 3; i++) {
+      const k = i % 16, r = i < 16 ? 200 : 330;
       const off = Math.ceil(k / 2) * (Math.PI / 10) * (k % 2 ? 1 : -1);
       const a = -Math.PI / 2 + off;
-      const anchor = scene.hookAnchor(w, w.x + Math.cos(a) * 200, w.centerY + Math.sin(a) * 200);
+      const anchor = scene.hookAnchor(w, w.x + Math.cos(a) * r, w.centerY + Math.sin(a) * r);
       if (!anchor) continue;
       const end = w.zipEnd(anchor.x, anchor.y);
       if (!end.grounded && !end.hang) continue;

@@ -1,6 +1,9 @@
 import { CFG, TEAM_COLORS, TEAM_NAMES } from '../config.js';
 import { WEAPONS } from '../weapons/index.js';
 
+/** Тактика: секунд на отход после выстрела. */
+export const RETREAT_AFTER_SHOT = 3;
+
 export const STATE = {
   AIM: 'aim',         // игрок ходит и целится
   FLYING: 'flying',   // снаряд в воздухе
@@ -103,6 +106,8 @@ export class TurnManager {
     this.turnNumber++;
     this.monstersActed = false;
     this.hazardsActed = false;
+    this.retreated = false;
+    this.scene.clearGuard?.(team);
     this.timeLeft = this.scene.turnTime ?? CFG.TURN_TIME;
     this.state = STATE.AIM;
     this.retreating = false;
@@ -161,6 +166,8 @@ export class TurnManager {
     this.timeLeft = this.scene.turnTime ?? CFG.TURN_TIME;
     this.holdTimer = 0;
     this.hazardsActed = false;
+    this.retreated = false;
+    this.scene.clearGuard?.(info.team);
     this.state = STATE.AIM;
     this.retreating = false;
 
@@ -289,7 +296,8 @@ export class TurnManager {
         if (this._holding(dt)) break;
         if (!this.activeWorm || !this.activeWorm.alive) { this.endTurn(); break; }
         if (this.timeLeft <= 0) {
-          scene.fx.banner(this.retreating ? 'Поздно' : 'Время вышло', '#ffd166', 1000);
+          // Отход после выстрела кончился — это не «поздно», а просто конец хода
+          if (!this.retreated) scene.fx.banner(this.retreating ? 'Поздно' : 'Время вышло', '#ffd166', 1000);
           this.endTurn();
         }
         break;
@@ -304,6 +312,18 @@ export class TurnManager {
           scene.projectiles.length = 0;
         }
         if (scene.projectiles.length === 0) {
+          // Тактика: после выстрела — три секунды отойти в укрытие (трос,
+          // если остался, тоже можно). Боту не нужно: он и так не стоит
+          // под ответным огнём дольше хода, а людям ждать его незачем
+          if (scene.tactics && !this.retreated && !this.weapon.noRetreat && this.activeWorm?.alive
+            && !scene.isBotTurn?.() && !scene.fastForward) {
+            this.retreated = true;
+            this.state = STATE.AIM;
+            this.retreating = true;
+            this.timeLeft = RETREAT_AFTER_SHOT;
+            scene.onRetreat?.();
+            break;
+          }
           this.state = STATE.RESOLVE;
           this.resolveTimer = 0;
         }

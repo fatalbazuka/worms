@@ -126,6 +126,14 @@ async function playTurn(p, k) {
     s.moveInput.left = false; s.moveInput.right = false;
     const w = s.turn.activeWorm;
     const foes = s.worms.filter((o) => o.alive && o.team !== w.team);
+    // Тактика разводит команды по башне — за ход не дойти. Проверка здесь
+    // про историю и сверку, а не про дальность: ставим стрелка поближе
+    // (и у соперника это же место придёт снимком и записью хода)
+    const near = s.terrain.standSpots()
+      .map((q) => ({ q, d: Math.min(...foes.map((f) => Math.hypot(f.x - q.x, f.y - q.y))) }))
+      .filter((o) => o.d > 180 && o.d < 380 && w.bodyClear(o.q.x, o.q.y))
+      .sort((a, b) => a.d - b.d)[0];
+    if (near) { w.x = near.q.x; w.y = near.q.y; w.vx = 0; w.vy = 0; w.snapToGround(); w.fallStartY = w.y; }
     let best = null;
     // Сетка мелкая: на грубой (5° и 50 px/с) все выстрелы партии могли
     // лечь в шаге от радиуса взрыва, и сверять было нечего
@@ -352,14 +360,15 @@ check('каждый ход, восстановленный другим брау
     turns++;
     await watcher.waitForFunction((b) => {
       const s = window.__WORMS__.scene.getScene('Game');
-      return s?.sys.isActive() && s.net?.phase === 'play' && s.turn.turnNumber > b;
+      // Ход мог и закончить партию (тогда — итог): видно и то, и другое
+      return s?.sys.isActive() && ((s.net?.phase === 'play' && s.turn.turnNumber > b) || s.net?.phase === 'over');
     }, before, { timeout: 180000 }).catch(() => {});
     const w = await watcher.evaluate(() => {
       const s = window.__WORMS__.scene.getScene('Game');
       return { phase: s.net.phase, checks: s.net.checks.map((c) => c.mine === c.theirs) };
     });
     check('ждущий сам видит ход соперника — без перезахода, по опросу сервера',
-      w.phase === 'play' && w.checks.length > 0 && w.checks.every(Boolean), JSON.stringify(w));
+      ['play', 'over'].includes(w.phase) && w.checks.length > 0 && w.checks.every(Boolean), JSON.stringify(w));
   }
 }
 

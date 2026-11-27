@@ -3,16 +3,20 @@ import { WEAPONS } from '../weapons/index.js';
 import { font } from './theme.js';
 import { haptic } from '../platform/telegram.js';
 import { solveShot, placeTarget } from './coachAim.js';
+import { markTipsSeen } from './Tips.js';
+import { ARM_DIST } from '../entities/Projectile.js';
 
 /**
  * Пошаговая тренировка новичка — в испытании «Первый выстрел» (match.tutorial).
- * Сначала самое весёлое — взрыв, потом остальное, по одному приёму за раз:
+ * Сначала самое весёлое — взрыв, потом остальное, по одному приёму за раз.
+ * Правила — те же, что в бою на башне (тактика: GameScene.tactics):
  *
- *   1. shoot  — базука в руке (взрыв сразу, без запала): потянуть рычаг от мишени и отпустить;
- *   2. walk   — стиком дойти до флажка;
- *   3. jump   — прыжок (рывок стика вверх или круглая кнопка);
- *   4. hook   — коснуться светящейся точки: трос подтянет туда;
- *   5. finish — добить мишень; после промаха «палец» показывает точный жест.
+ *   1. shoot   — базука в руке (взрыв сразу, без запала): потянуть рычаг от мишени и отпустить;
+ *   2. retreat — три секунды отхода после выстрела: увести бойца стиком;
+ *   3. walk    — дойти до флажка; шаги на ход кончаются (полоска под бойцом);
+ *   4. hook    — коснуться светящейся точки: трос подтянет туда, он один за ход;
+ *   5. guard   — дважды тапнуть 🛡 на ленте: окопаться до своего хода;
+ *   6. finish  — добить мишень; после промаха «палец» показывает точный жест.
  *
  * Мишень живучая (100 жизней, граната снимает 50), так что первый выстрел
  * её почти никогда не добивает, а если добьёт — тоже хорошо: урок короче,
@@ -25,10 +29,11 @@ import { solveShot, placeTarget } from './coachAim.js';
  * всё, что дальше, — как у обычного «Первого выстрела».
  */
 const STEPS = [
-  { id: 'shoot', title: 'Выстрел', text: 'Тяни жёлтый рычаг ОТ мишени и отпусти' },
-  { id: 'walk', title: 'Ходьба', text: 'Веди стик внизу слева в сторону — дойди до флажка' },
-  { id: 'jump', title: 'Прыжок', text: 'Рывок стика вверх или круглая кнопка справа — прыжок' },
-  { id: 'hook', title: 'Трос', text: 'Коснись светящейся точки — трос подтянет туда' },
+  { id: 'shoot', title: 'Выстрел', text: 'Тяни жёлтый рычаг ОТ мишени и отпусти. Бей издалека: вплотную ракета не взводится' },
+  { id: 'retreat', title: 'Отход', text: 'После выстрела — 3 секунды уйти в укрытие. Веди стик!' },
+  { id: 'walk', title: 'Шаги', text: 'Дойди до флажка. Шаги на ход кончаются — смотри полоску под бойцом' },
+  { id: 'hook', title: 'Трос', text: 'Коснись светящейся точки — трос подтянет. Он один за ход' },
+  { id: 'guard', title: 'Окоп', text: 'Тапни 🛡 вверху два раза — окопаешься: до твоего хода урон вдвое меньше' },
   { id: 'finish', title: 'Добей', text: 'Мишень ещё стоит — тяни рычаг и добей её!' },
 ];
 const SHOOTS = new Set(['shoot', 'finish']);
@@ -156,13 +161,23 @@ export class Coach {
     this.doneAt = s.time.now;
     this.shotTurn = undefined;   // промах считаем от хода, в который начался шаг
     this.armed = false;          // к шагу выстрела — снова базука в руке
-    if (this.finished) { this.destroy(); return; }
+    if (this.finished) {
+      // Новые правила здесь уже показаны — в бою подсказки о них не нужны
+      markTipsSeen(['tac_move', 'tac_arm', 'tac_guard', 'tac_retreat']);
+      this.destroy();
+      return;
+    }
     this._show();
   }
 
-  /** Флажок на том же этаже, в ту сторону, где пол тянется дальше. */
+  /**
+   * Флажок на том же этаже, где пол тянется дальше, — и прочь от мишени:
+   * вплотную ракета не взводится, учить подходить к цели незачем.
+   */
   _placeFlag(w) {
-    for (const dir of [1, -1]) {
+    const foe = this.scene.worms.find((f) => f.alive && f.team !== w.team);
+    const away = foe ? (foe.x >= w.x ? -1 : 1) : 1;
+    for (const dir of [away, -away]) {
       let ok = true;
       for (let d = 10; d <= 120; d += 10) {
         const y = w.footYAt(w.x + dir * d, w.y);
@@ -194,8 +209,19 @@ export class Coach {
       placeTarget(s, w, foe, WEAPONS.find((x) => x.id === 'bazooka'));
     }
     this.dimHook?.setVisible(this.current?.id !== 'hook');
+    // На шаге «Окоп» лента наверху нужна: там 🛡
+    this.dimTop.setVisible(this.current?.id !== 'guard');
     this.arrow.clear();
     this.flagGfx.clear();
+    // Отход и окоп кончают ход — засчитываем и тогда, когда ход уже не наш
+    if (this.current?.id === 'retreat' && s.time.now - this.doneAt > 350) {
+      if (s.turn.retreating) this.sawRetreat = true;
+      else if (this.sawRetreat || s.turn.currentTeam !== 0) { this._next('Ушёл!'); return; }
+    }
+    if (this.current?.id === 'guard' && s.worms.some((x) => x.team === 0 && x.alive && x.guard)) {
+      this._next('Окопался!');
+      return;
+    }
     if (!mine) return;
     // Свежий шаг — дать полсекунды, чтобы «Отлично!» не съел следующее действие
     if (s.time.now - this.doneAt < 350) return;
@@ -211,10 +237,13 @@ export class Coach {
         if (Math.abs(w.x - this.flag.x) < 18 && w.grounded) this._next();
         break;
       }
-      case 'jump': {
-        const j = hud.buttons?.jump;
-        if (j) this._drawArrow(j.x, j.y - 80, 'down');
-        if (!w.grounded && !w.zip && !w.hang && w.vy < -60) this._next();
+      case 'retreat': {
+        if (hud.stick) this._drawArrow(hud.stick.cx + hud.stick.R + 14, hud.stick.cy, 'left');
+        break;
+      }
+      case 'guard': {
+        const chip = hud.strip?.chips.find((c) => WEAPONS[c.index]?.id === 'guard');
+        if (chip) this._drawArrow(chip.cx, hud.strip.y + hud.strip.r + 6, 'up');
         break;
       }
       case 'hook': {
@@ -222,6 +251,11 @@ export class Coach {
         if (spots[0]) {
           const [hx, hy] = this._ui(spots[0].x, spots[0].y - 40);
           this._drawArrow(hx, hy, 'down');
+          this.noSpotSince = null;
+        } else {
+          // Тросу отсюда не за что зацепиться — шаг не застревает
+          this.noSpotSince ??= s.time.now;
+          if (s.time.now - this.noSpotSince > 2000) { this._next('Трос — в бою!'); break; }
         }
         if (w.zip) this._next();
         break;
@@ -250,6 +284,14 @@ export class Coach {
         }
         if (this.shotTurn !== s.turn.turnNumber) this.foeHp = s.worms.find((f) => f.team !== 0)?.health ?? null;
         this.shotTurn = s.turn.turnNumber;
+        // Подошёл вплотную — ракета не взведётся: так и сказать, пока не выстрелил
+        const tgt = s.worms.find((f) => f.alive && f.team !== 0);
+        const close = this.current.id === 'finish' && tgt && Math.hypot(tgt.x - w.x, tgt.y - w.y) < ARM_DIST + 30;
+        if (close !== Boolean(this.closeNote)) {
+          this.closeNote = close;
+          this.bodyText.setText(close ? 'Слишком близко: ракета не взведётся — отойди стиком подальше' : this.current.text);
+        }
+        if (close && hud.stick) this._drawArrow(hud.stick.cx + hud.stick.R + 14, hud.stick.cy, 'left');
         break;
       }
       default: break;
