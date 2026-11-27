@@ -376,7 +376,8 @@ const gesture = (steps) => page.evaluate((steps) => {
     if (kind === 'up') a.onUp(p(dx, dy, false));
   }
 }, steps);
-const turnState = () => page.evaluate(() => window.__WORMS__.scene.getScene('Game').turn.state);
+// Отход после выстрела (тактика) — тоже «выстрел был»: aimR, а не aim
+const turnState = () => page.evaluate(() => { const t = window.__WORMS__.scene.getScene('Game').turn; return t.state + (t.retreating ? 'R' : ''); });
 await page.waitForFunction(() => window.__WORMS__.scene.getScene('Game').canPlayerAct(), null, { timeout: 20000 });
 await gesture([['down', 0, 0], ['move', 10, 60], ['move', 20, 140], ['up', 20, 140]]);
 await page.waitForTimeout(200);
@@ -802,16 +803,13 @@ check('прицел «кнопки»: на башне ▲▼ и «Огонь», 
     s.fireActiveWorm(Math.sign(foe.x - me.x) * 160, -260);
     seen.push(c.current?.id);
     for (let i = 0; i < 600 && !(s.turn.turnNumber > t0 + 1 && s.canPlayerAct()); i++) await wait(50);
+    seen.push(c.current?.id);
     const lockedWalk = c.lockShot;
     // Ход: идти к флажку
     await wait(500);
     const dir = Math.sign(c.flag?.x - s.turn.activeWorm.x) || 1;
     for (let i = 0; i < 80 && c.current?.id === 'walk'; i++) { s.moveInput[dir > 0 ? 'right' : 'left'] = true; await wait(50); }
     s.moveInput.left = s.moveInput.right = false;
-    seen.push(c.current?.id);
-    await wait(400);
-    s.moveInput.jumpQueued = true;
-    for (let i = 0; i < 40 && c.current?.id === 'jump'; i++) await wait(50);
     seen.push(c.current?.id);
     await wait(1200);
     for (let i = 0; i < 40 && c.current?.id === 'hook'; i++) {
@@ -820,10 +818,17 @@ check('прицел «кнопки»: на башне ▲▼ и «Огонь», 
       await wait(100);
     }
     seen.push(c.current?.id);
-    return { coach: true, seen, weapon, lockedFirst, lockedWalk, lockedAfter: c.lockShot, time: s.turn.timeLeft };
+    // Окоп: тот же двойной тап по 🛡 — digIn; ход уходит мишени и возвращается
+    const t1 = s.turn.turnNumber;
+    // Долетел по тросу и встал — тогда окапываемся
+    for (let i = 0; i < 100 && (s.turn.activeWorm.zip || !s.canAct()); i++) await wait(50);
+    const dug = s.digIn();
+    for (let i = 0; i < 600 && !(s.turn.turnNumber > t1 + 1 && s.canPlayerAct()); i++) await wait(50);
+    seen.push(c.current?.id);
+    return { coach: true, seen, weapon, lockedFirst, lockedWalk, dug, lockedAfter: c.lockShot, time: s.turn.timeLeft };
   });
-  check('тренировка новичка: выстрел базукой → ходьба → прыжок → трос → добей, рычаг заперт только на середине',
-    coach.coach && coach.seen.join() === 'shoot,walk,jump,hook,finish' && coach.weapon === 'bazooka'
+  check('тренировка новичка: выстрел базукой → отход → шаги → трос → окоп → добей, рычаг заперт только на середине',
+    coach.coach && coach.seen.join() === 'shoot,retreat,walk,hook,guard,finish' && coach.weapon === 'bazooka'
       && coach.lockedFirst === false && coach.lockedWalk === true && coach.lockedAfter === false && coach.time > 5,
     JSON.stringify(coach));
   await p2.evaluate(() => {
