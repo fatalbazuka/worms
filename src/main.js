@@ -20,6 +20,7 @@ import { dayKey, prevDay } from './core/daily.js';
 import { loadCloudProfile, player, dropAccount } from './platform/player.js';
 import { installI18n } from './i18n/index.js';
 
+globalThis.__BOOT?.mark('modules');   // все файлы src/ загрузились
 initTelegram();
 applyUiClass();
 // Английский — до того, как появится первый текст (экран входа тоже)
@@ -35,6 +36,7 @@ if (globalThis.WORMS_TELEGRAM_ONLY && !inTelegram() && !loggedIn()) {
 }
 
 async function showTelegramGate() {
+  globalThis.__BOOT?.cancel();   // экран входа — не зависание
   let link = botLink();
   if (!link) {
     try {
@@ -79,7 +81,9 @@ fitViewToScreen(window.innerWidth, window.innerHeight, screenInsets());
 // Копия прогресса с сервера — до сведения облаков: с сайта по логину она
 // единственная, в Telegram — вторая к облаку Telegram
 await prefetchServerSave();
+globalThis.__BOOT?.mark('save');
 await Promise.all([loadUiFont(), loadCloudProfile(), syncSkinsCloud(), syncDailyCloud(), syncChallengesCloud(), syncAscentCloud(), syncCosmeticsCloud(), syncLevelCloud(), syncAchCloud(), syncDailyTowerCloud(), syncAscentStarsCloud()]);
+globalThis.__BOOT?.mark('clouds');
 
 // Аккаунт. Профиль помнит, что вход был, а токена уже нет (вышли в другой
 // вкладке, почистили хранилище) — значит, мы аноним. Иначе — освежаем
@@ -152,6 +156,7 @@ const game = new Phaser.Game({
 });
 
 window.__WORMS__ = game;
+globalThis.__BOOT?.mark('game');
 window.__WORMS_FRAME__ = CFG.FRAME;   // для диагностики экрана (index.html)
 
 /**

@@ -89,6 +89,7 @@ export function initTelegram() {
 
   try {
     tg.ready();
+    globalThis.__BOOT?.mark('tg_ready');   // с этого момента Telegram убрал заглушку
     tg.expand();
     if (can(tg, 'disableVerticalSwipes', '7.7')) tg.disableVerticalSwipes();
     if (can(tg, 'setHeaderColor', '6.1')) tg.setHeaderColor('#0b1021');

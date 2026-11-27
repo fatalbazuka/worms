@@ -61,7 +61,7 @@ const DUEL_WEAPONS = ['базука', 'граната', 'кассета', 'кр�
   'мина', 'бита', 'авиаудар', 'телепорт', 'гиря', 'липучка', 'батут', 'бумеранг', 'самонаводка'];
 
 export function createBot({ db, api, players, tournaments, analytics = null, admin: adminPanel = null, adminIds = new Set(), publicUrl = '',
-  tz = 'Europe/Moscow', now = () => Date.now(), log = console, appName = '', promos = null, duels = () => null }) {
+  tz = 'Europe/Moscow', now = () => Date.now(), log = console, appName = '', promos = null, duels = () => null, bootlog = null }) {
   const q = {
     payAdd: db.prepare(`insert or ignore into payment (charge_id, player_id, tg_id, amount, purpose, ref, created_at)
                         values (?, ?, ?, ?, ?, ?, ?)`),
@@ -334,6 +334,7 @@ export function createBot({ db, api, players, tournaments, analytics = null, adm
     '/refund CHARGE_ID — вернуть платёж звёздами',
     '/stars — сколько звёзд пришло',
     '/metrics — игроки, новички, бои, возврат на второй день',
+    '/boot [часов=24] — запуски игры: сколько открылось, где застревают, ошибки',
     '/web TG_ID логин — выдать вход на сайт (пароль придумаю сам; повтор — новый пароль)',
     '/newweb логин [имя] — отдельный аккаунт только для сайта, без Telegram',
     '/newpromo КОД [коробок=3] [монет=0] [скин=id] [раз=100] [дней=30] — новый промокод',
@@ -530,6 +531,10 @@ export function createBot({ db, api, players, tournaments, analytics = null, adm
       }
       case '/metrics':
         return send(chat, analytics ? analytics.report() : 'Статистика не подключена.');
+      case '/boot': {
+        const h = Math.min(24 * 14, Math.max(1, Number(args[0]) || 24));
+        return send(chat, bootlog ? bootlog.report(h) : 'Журнал запусков не подключён.');
+      }
       case '/newweb': {
         // Аккаунт для человека без Telegram: логин и придуманный пароль
         if (!adminPanel) return send(chat, 'Админка не подключена.');
@@ -730,7 +735,8 @@ Tower, grappling hook, slingshot and smileys. Tap the button — you both land i
           { command: 'canceltour', description: 'Отменить турнир' },
           { command: 'settle', description: 'Решить спорный матч' },
           { command: 'stars', description: 'Звёзды' },
-          { command: 'metrics', description: 'Статистика игры' }],
+          { command: 'metrics', description: 'Статистика игры' },
+          { command: 'boot', description: 'Запуски: где застревают' }],
       });
     }
     if (!hooked) { log.warn?.('[bot] вебхук не поставлен — повторю позже'); return false; }

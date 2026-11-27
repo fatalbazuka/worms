@@ -109,6 +109,7 @@ export default class MenuScene extends Phaser.Scene {
   constructor() { super('Menu'); }
 
   create() {
+    globalThis.__BOOT?.mark('menu');   // первый экран — запуск удался (index.html)
     // Раскладка — в логическом экране, фон — на весь канвас: фон рисует
     // главная камера, а всё остальное — uiCam, чей вьюпорт сдвинут внутрь
     // на рамку безопасной области (под кнопки Telegram и «чёлку»).

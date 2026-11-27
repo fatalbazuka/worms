@@ -87,6 +87,7 @@ export default class GameScene extends Phaser.Scene {
   constructor() { super('Game'); }
 
   create() {
+    globalThis.__BOOT?.mark('menu');   // первый экран — запуск удался (index.html)
     // Что за партия — решает меню. Прямой заход по адресу описания не даёт,
     // и тогда игра ведёт себя как раньше: обычный хотсит на одном устройстве.
     this.match = this.registry.get('match') ?? HOTSEAT;

@@ -2,6 +2,131 @@
 <html lang="ru">
 <head>
 <meta charset="utf-8" />
+<!-- Журнал запуска: засекаем этапы загрузки и шлём отчёт на api/boot
+     (server/bootlog.mjs, сводка — команда бота /boot). Самым первым
+     скриптом: ловит и ошибки загрузки всего, что ниже. Этапы ставит
+     __BOOT.mark('имя'): html → tg_sdk → phaser → modules → tg_ready →
+     save → clouds → game → boot_scene → menu. Отчёты: ok — дошли до
+     первого экрана; stuck — 15 с, а экрана нет; error — упал скрипт или не
+     загрузился файл; closed — закрыли раньше; lost — прошлый запуск
+     оборвался молча (дошлём сейчас). -->
+<script>
+  (function () {
+    var KEY = 'worms_boot';
+    var started = Date.now();
+    var B = window.__BOOT = {
+      id: started.toString(36) + Math.random().toString(36).slice(2, 8),
+      stages: {}, stage: null, errors: [], done: false, off: false, sent: {},
+    };
+    function now() { return Math.round(window.performance && performance.now ? performance.now() : Date.now() - started); }
+
+    // Параметры запуска Telegram — из адреса, пока SDK их не забрал: если
+    // SDK так и не загрузится, платформа и игрок всё равно будут известны
+    var launch = {};
+    try {
+      var h = new URLSearchParams(location.hash.slice(1));
+      launch.platform = h.get('tgWebAppPlatform');
+      launch.tg_version = h.get('tgWebAppVersion');
+      var data = new URLSearchParams(h.get('tgWebAppData') || '');
+      var user = data.get('user');
+      if (user) launch.tg_id = JSON.parse(user).id;
+    } catch (e) { /* не из Telegram */ }
+
+    function info() {
+      var tg = window.Telegram && window.Telegram.WebApp;
+      var u = tg && tg.initDataUnsafe && tg.initDataUnsafe.user;
+      var c = navigator.connection;
+      return {
+        tg_id: (u && u.id) || launch.tg_id || null,
+        platform: (tg && tg.platform !== 'unknown' && tg.platform) || launch.platform || 'web',
+        tg_version: launch.tg_version || (tg && tg.version) || null,
+        net: c ? (c.effectiveType || '?') + (c.rtt ? '/' + c.rtt + 'ms' : '') : null,
+        ua: navigator.userAgent,
+      };
+    }
+
+    function url() {
+      try {
+        return new URL(String(window.WORMS_API || 'api').replace(/\/+$/, '') + '/boot', document.baseURI).href;
+      } catch (e) { return 'api/boot'; }
+    }
+
+    function post(body) {
+      var json = JSON.stringify(body);
+      try { if (navigator.sendBeacon && navigator.sendBeacon(url(), json)) return; } catch (e) { /* ниже */ }
+      try { fetch(url(), { method: 'POST', body: json, keepalive: true }); } catch (e) { /* без отчёта */ }
+    }
+
+    function snapshot(outcome) {
+      var b = info();
+      b.boot = B.id; b.outcome = outcome; b.stage = B.stage; b.ms = now();
+      b.stages = B.stages; b.error = B.errors.join(' | ') || null;
+      return b;
+    }
+
+    // Состояние — в localStorage на каждом шаге: если iOS прибьёт WebView
+    // молча, следующий запуск дошлёт его как lost
+    function persist(final) {
+      try {
+        if (final) localStorage.removeItem(KEY);
+        else localStorage.setItem(KEY, JSON.stringify(snapshot('lost')));
+      } catch (e) { /* хранилище недоступно */ }
+    }
+
+    function send(outcome) {
+      if (B.off || B.sent[outcome]) return;
+      B.sent[outcome] = true;
+      post(snapshot(outcome));
+      if (outcome !== 'stuck') persist(true);
+    }
+
+    B.mark = function (name) {
+      if (B.off || B.stages[name] != null) return;
+      B.stages[name] = now();
+      B.stage = name;
+      if (name === 'menu') { B.done = true; send('ok'); } else persist(false);
+    };
+    // Экран входа вне Telegram — это не зависание, отчёты не нужны
+    B.cancel = function () { B.off = true; persist(true); };
+
+    function fail(text) {
+      if (B.done || B.off || B.errors.length >= 5) return;
+      B.errors.push(String(text).slice(0, 300) + ' @' + now() + 'мс');
+      persist(false);
+      send('error');
+    }
+    // Ошибки загрузки файлов не всплывают — ловим на погружении
+    window.addEventListener('error', function (e) {
+      var t = e.target;
+      if (t && t !== window && (t.src || t.href)) {
+        fail('load ' + (t.type === 'module' ? 'module(+imports) ' : '') + (t.src || t.href));
+      } else {
+        fail('js ' + (e.message || e.error) + ' ' + String(e.filename || '').split('/').slice(-2).join('/')
+          + ':' + e.lineno + ':' + e.colno);
+      }
+    }, true);
+    window.addEventListener('unhandledrejection', function (e) {
+      var r = e.reason;
+      fail('promise ' + ((r && (r.stack || r.message)) || r));
+    });
+
+    // Прошлый запуск оборвался без отчёта. Через пару секунд: адрес API
+    // берётся из env.js, он ещё не загружен
+    try {
+      var prev = localStorage.getItem(KEY);
+      if (prev) setTimeout(function () { post(JSON.parse(prev)); }, 2000);
+    } catch (e) { /* — */ }
+    persist(false);
+
+    setTimeout(function () { if (!B.done) send('stuck'); }, 15000);
+    function leave() { if (!B.done) send('closed'); }
+    window.addEventListener('pagehide', leave);
+    document.addEventListener('visibilitychange', function () {
+      if (document.visibilityState === 'hidden') leave();
+    });
+    B.mark('html');
+  })();
+</script>
 <meta name="viewport" content="width=device-width, initial-scale=1, minimum-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
 <meta name="theme-color" content="#0b1021" />
 
@@ -255,14 +380,15 @@
     }
 
     function loadPhaser(i) {
-      if (window.Phaser) return start();
+      if (window.Phaser) { window.__BOOT.mark('phaser'); return start(); }
       if (i >= phaser.length) {
         var el = document.getElementById('fatal');
         el.style.display = 'flex';
         el.textContent = 'Не удалось загрузить Phaser 3. Проверьте сеть и обновите страницу.';
         return;
       }
-      load(phaser[i], start, function () { loadPhaser(i + 1); });
+      load(phaser[i], function () { window.__BOOT.mark('phaser'); start(); },
+        function () { loadPhaser(i + 1); });
     }
 
     function start() {
@@ -275,7 +401,8 @@
     // Без SDK игра всё равно запустится — как в обычном браузере
     if (insideTelegram()) {
       load('https://telegram.org/js/telegram-web-app.js',
-        function () { loadPhaser(0); }, function () { loadPhaser(0); });
+        function () { window.__BOOT.mark('tg_sdk'); loadPhaser(0); },
+        function () { window.__BOOT.mark('tg_sdk'); loadPhaser(0); });
     } else {
       loadPhaser(0);
     }

@@ -72,6 +72,7 @@ import { createPlayers } from './players.mjs';
 import { createTournaments } from './tournaments.mjs';
 import { createBot, webhookSecret } from './bot.mjs';
 import { createAnalytics } from './analytics.mjs';
+import { createBootLog } from './bootlog.mjs';
 import { createShop, SHOP, SKIN_STARS, SKIN_IDS, shopItem } from './shop.mjs';
 import { createDailyTower } from './dailytower.mjs';
 import { createSaves } from './saves.mjs';
@@ -106,6 +107,7 @@ export function createApp({
   });
   let weekly = null;
   const analytics = createAnalytics({ db, now, tz });
+  const bootlog = createBootLog({ db, now, log });
   const shop = createShop({ db, now });
   const promos = createPromos({ db, now });
   const saves = createSaves({ db, now });
@@ -113,7 +115,7 @@ export function createApp({
   const admin = createAdmin({ db, players, analytics, tournaments, shop, saves, api, now, log });
   // Дуэли заводятся ниже (им нужны друзья, а друзьям — бот): боту — ссылка
   bot = createBot({ db, api, players, tournaments, analytics, admin, adminIds: admins, publicUrl, tz, now, log, appName, promos,
-    duels: () => duels });
+    duels: () => duels, bootlog });
   weekly = createWeekly({ db, tournaments, shop, notify: (...a) => bot.notify(...a), tz, now, log });
   const friends = createFriends({
     db, players, analytics, now, log,
@@ -440,6 +442,10 @@ export function createApp({
         if (!limits.media.hit(me.id)) throw new HttpError(429, 'слишком много файлов, попробуй через час');
         return media.upload(req);
       }
+      // Журнал запусков: без входа — застревают как раз до него.
+      // Ограничитель записи выше уже стоит; тело — несколько килобайт
+      case 'POST /api/boot':
+        return { ok: bootlog.record(await readJson(req, 8 * 1024), ip) };
       case 'POST /api/event': {
         const me = auth(req);
         const body = await readJson(req);
@@ -551,6 +557,7 @@ export function createApp({
   handle.tournaments = tournaments;
   handle.weekly = weekly;
   handle.analytics = analytics;
+  handle.bootlog = bootlog;
   handle.bot = bot;
   handle.players = players;
   handle.friends = friends;
