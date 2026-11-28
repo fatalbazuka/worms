@@ -325,6 +325,23 @@ const MIGRATIONS = [
   );
   create index if not exists boot_log_time on boot_log (created_at);
   `,
+  // 17: игроки-боты (server/simbots.mjs): уровень, сколько сыграл за день;
+  // в дуэли — когда «сходит» бот; кого и когда боты вызывали; настройки
+  `
+  alter table player add column sim text;                  -- weak | mid | strong; у людей null
+  alter table player add column sim_day text;
+  alter table player add column sim_games integer not null default 0;
+  alter table duel add column bot_due integer;
+  alter table duel add column bot_pinged integer;         -- за какой ход человеку уже написали
+  create table if not exists sim_challenge (
+    player_id  text primary key references player (id) on delete cascade,
+    at         integer not null
+  );
+  create table if not exists setting (
+    key        text primary key,
+    value      text not null
+  );
+  `,
 ];
 
 export function openDb(path) {

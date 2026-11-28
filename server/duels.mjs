@@ -101,10 +101,20 @@ export function createDuels({ db, players, friends, analytics, notify, now = () 
                              and coalesce(reminded_turn, 0) != turn limit 200`),
     staleOpen: db.prepare(`select id from duel where status = 'open' and created_at < ? limit 200`),
     pinged: db.prepare("select count(*) as n from friend_ping where kind = 'duel_turn' and to_id = ? and day = ?"),
+    // Ход бота (server/simbots.mjs): когда он «сходит» и кому уже написали
+    botDue: db.prepare('update duel set bot_due = ?, deadline = ? where id = ?'),
+    botReady: db.prepare(`select * from duel where status = 'active' and bot_due is not null and bot_due <= ?
+                            and coalesce(bot_pinged, 0) != turn limit 200`),
+    botPinged: db.prepare('update duel set bot_pinged = turn where id = ?'),
     ping: db.prepare("insert into friend_ping (kind, from_id, to_id, day, created_at) values ('duel_turn', ?, ?, ?, ?)"),
   };
 
   const moverOf = (d) => (d.turn % 2 === 1 ? d.p1 : d.p2);
+  /** Уровень бота (server/simbots.mjs) или null у человека. */
+  const simOf = (id) => (id ? players.byId(id)?.sim ?? null : null);
+  /** Ход бота наступил: разыграть его может соперник-человек у себя. */
+  const botReadyFor = (d, meId) => d.status === 'active' && d.bot_due != null && d.bot_due <= now()
+    && moverOf(d) !== meId && Boolean(simOf(moverOf(d)));
   const otherOf = (d, id) => (d.p1 === id ? d.p2 : d.p1);
   const daytime = () => { const h = analytics.hourOf(); return h >= DAY_FROM && h < DAY_TO; };
   const activeCount = (id) => q.active.get({ p: id }).n;
@@ -140,7 +150,10 @@ export function createDuels({ db, players, friends, analytics, notify, now = () 
       delta: d.delta == null ? null : (d.winner === meId ? d.delta : -d.delta),
       winner: d.winner ? (d.winner === d.p1 ? 0 : 1) : null, reason: d.reason ?? null,
       me: team, p1: pub(d.p1), p2: pub(d.p2), opponent: pub(team === 0 ? d.p2 : d.p1),
-      myTurn: !invite && (d.status === 'active' || d.status === 'open') && mover === meId,
+      myTurn: !invite && (d.status === 'active' || d.status === 'open') && (mover === meId || botReadyFor(d, meId)),
+      // Ход бота наступил — игра соперника разыграет его сама (ai/Bot.js) и
+      // покажет повтором, как обычный ход соперника
+      ...(botReadyFor(d, meId) ? { botTurn: { level: simOf(mover), team: mover === d.p1 ? 0 : 1 } } : {}),
       ...(invite ? { invite: true } : {}),
       skips: [d.skips1, d.skips2],
       ...(d.code && d.p1 === meId ? { code: d.code } : {}),
@@ -188,9 +201,26 @@ export function createDuels({ db, players, friends, analytics, notify, now = () 
 
   const nameOf = (id) => players.byId(id)?.name ?? 'соперник';
 
+  /**
+   * Очередь у бота: он «думает» несколько минут (ночью — до утра), потом
+   * ход разыгрывает игра соперника, а ему бот напишет «твой ход» (tick).
+   */
+  function scheduleBot(d) {
+    const t = now();
+    let due = t + (3 + Math.floor(Math.random() * 40)) * 60_000;
+    const h = analytics.hourOf(due);
+    if (h < DAY_FROM || h >= DAY_TO) {
+      const toMorning = ((DAY_FROM - h + 24) % 24) * 3600_000;
+      due += toMorning + Math.floor(Math.random() * 90) * 60_000;
+    }
+    q.botDue.run(due, due + TURN_MS, d.id);
+    q.notified.run(d.id);
+  }
+
   async function turnNotice(d, skippedBy = null, { late = false } = {}) {
     const to = moverOf(d);
     if (!to) return null;
+    if (simOf(to)) { scheduleBot(d); return null; }
     const foe = nameOf(otherOf(d, to));
     const why = skippedBy ? `\n${foe} не успел походить — его ход пропущен.` : '';
     const sent = d.turn === 1 && !skippedBy
@@ -330,13 +360,32 @@ export function createDuels({ db, players, friends, analytics, notify, now = () 
   async function submit(me, id, body) {
     const d = own(me.id, id);
     if (!d) return { status: 404, error: 'нет такой дуэли' };
+    return record(d, me, me.id, body);
+  }
+
+  /**
+   * Ход бота, разыгранный у соперника-человека (me): записывается от имени
+   * бота. Только когда ход бота наступил (bot_due) и только его соперником.
+   */
+  async function submitBot(me, id, body) {
+    const d = own(me.id, id);
+    if (!d) return { status: 404, error: 'нет такой дуэли' };
     const n = Number(body.turn);
     const was = Number.isSafeInteger(n) ? q.turn.get(d.id, n) : null;
-    if (was && was.player_id === me.id && was.kind === 'move') return { duel: view(q.byId.get(d.id), me.id), repeated: true };
+    if (was && simOf(was.player_id) && was.kind === 'move') return { duel: view(q.byId.get(d.id), me.id), repeated: true };
+    if (!botReadyFor(d, me.id)) return { status: 409, error: 'сейчас не ход соперника', duel: view(d, me.id) };
+    return record(d, me, moverOf(d), body);
+  }
+
+  /** Записать ход moverId (сам игрок или бот, чей ход он разыграл); me — кто прислал. */
+  async function record(d, me, moverId, body) {
+    const n = Number(body.turn);
+    const was = Number.isSafeInteger(n) ? q.turn.get(d.id, n) : null;
+    if (was && was.player_id === moverId && was.kind === 'move') return { duel: view(q.byId.get(d.id), me.id), repeated: true };
     if (d.status !== 'active' && !(d.status === 'open' && d.turn === 1)) return { status: 409, error: 'дуэль окончена', duel: view(d, me.id) };
     if (isInvite(d)) return { status: 409, error: 'первым ходит тот, кто примет вызов', duel: view(d, me.id) };
     if (n !== d.turn) return { status: 409, error: 'этот ход уже не твой', duel: view(d, me.id) };
-    if (moverOf(d) !== me.id) return { status: 409, error: 'сейчас ход соперника', duel: view(d, me.id) };
+    if (moverOf(d) !== moverId) return { status: 409, error: 'сейчас ход соперника', duel: view(d, me.id) };
 
     const state = body.state;
     const cmds = Array.isArray(body.cmds) ? body.cmds : null;
@@ -354,7 +403,7 @@ export function createDuels({ db, players, friends, analytics, notify, now = () 
     const t = now();
     let rated = null;
     const fin = tx(db, () => {
-      q.addTurn.run(d.id, n, me.id, 'move', JSON.stringify(cmds), JSON.stringify(state), hash, t);
+      q.addTurn.run(d.id, n, moverId, 'move', JSON.stringify(cmds), JSON.stringify(state), hash, t);
       // Как у меня сошёлся последний восстановленный ход (prevTurn; за
       // пропуском свёртки нет — тогда это ход до него)
       const pn = Number.isSafeInteger(body.prevTurn) && body.prevTurn < n ? body.prevTurn : n - 1;
@@ -365,7 +414,7 @@ export function createDuels({ db, players, friends, analytics, notify, now = () 
           log.warn?.(`[duels] дуэль ${d.id}, ход ${pn}: состояние разошлось ${prev.hash} != ${body.prevHash}`);
         }
       }
-      const s1 = d.p1 === me.id ? 0 : d.skips1, s2 = d.p2 === me.id ? 0 : d.skips2;
+      const s1 = d.p1 === moverId ? 0 : d.skips1, s2 = d.p2 === moverId ? 0 : d.skips2;
       if (over) {
         const w = winner === -1 ? null : (winner === 0 ? d.p1 : d.p2);
         q.finish.run(w, winner === -1 ? 'draw' : 'kill', t, t, d.id);
@@ -375,11 +424,14 @@ export function createDuels({ db, players, friends, analytics, notify, now = () 
       // Ходить дальше некому (ссылку ещё не приняли) — часы стоят
       const nextMover = (n + 1) % 2 === 1 ? d.p1 : d.p2;
       q.next.run(n + 1, nextMover ? t + TURN_MS : null, s1, s2, t, d.id);
+      q.botDue.run(null, nextMover ? t + TURN_MS : null, d.id);
       return false;
     });
     const fresh = q.byId.get(d.id);
     afterRated(rated);
-    if (fin) await resultNotice(fresh);
+    if (fin) await resultNotice(fresh, simOf(moverId) ? { only: me.id } : {});
+    // Ход бота разыграл сам соперник — он прямо сейчас ходит, писать незачем
+    else if (moverId !== me.id) q.notified.run(fresh.id);
     else await turnNotice(fresh);
     return { duel: view(fresh, me.id) };
   }
@@ -453,6 +505,15 @@ export function createDuels({ db, players, friends, analytics, notify, now = () 
         if (ok) out.reminded++;
       }
       for (const { id } of q.staleOpen.all(t - OPEN_TTL)) q.cancel.run(t, t, id);
+      // Бот «сходил» — человеку «твой ход»: сам ход разыграет его игра
+      for (const d of q.botReady.all(t)) {
+        q.botPinged.run(d.id);
+        const human = otherOf(d, moverOf(d));
+        const foe = nameOf(moverOf(d));
+        const first = (q.turns.all(d.id) ?? []).length === 0;
+        await ping(d, human, first ? `⚔️ ${foe} сделал первый ход в дуэли!\nТвой ответ — на ход 24 часа.`
+          : `⚔️ Твой ход против ${foe}!\nДуэль: на ход 24 часа.`, 'turn', '⚔️ Ходить', { late: true });
+      }
     } finally {
       ticking = false;
     }
@@ -460,7 +521,7 @@ export function createDuels({ db, players, friends, analytics, notify, now = () 
   }
 
   return {
-    list, create, join, get, submit, resign, tick, view, history,
+    list, create, join, get, submit, submitBot, resign, tick, view, history,
     byId: (id) => q.byId.get(Number(id)),
     byCode: (c) => q.byCode.get(String(c ?? '').toUpperCase()) ?? null,
   };

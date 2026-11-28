@@ -1075,7 +1075,7 @@ export default class GameScene extends Phaser.Scene {
     const n = this.net;
     // Имя без предлога: «партия с Атаман» не склоняется
     const who = `⚔️ ${n.opponent.name}`;
-    if (n.phase === 'replay') return [`${who} · повтор хода соперника`, '#ffd166'];
+    if (n.phase === 'replay' || n.phase === 'botplay') return [`${who} · повтор хода соперника`, '#ffd166'];
     if (n.phase === 'play') return [`${who} · твой ход${n.started ? '' : ' · часы пойдут, когда начнёшь'}`, '#8ef0a0'];
     if (n.phase === 'over') return [`${who} · дуэль окончена`, '#ffd166'];
     const left = n.duel.deadline ? Math.max(0, n.duel.deadline - Date.now()) : null;
@@ -1685,7 +1685,7 @@ export default class GameScene extends Phaser.Scene {
    */
   _streamMove(realDt) {
     const net = this.net;
-    if (!net?.connected || this.turn.currentTeam !== net.myTeam) return;
+    if (!net?.connected || this.turn.currentTeam !== (net.recTeam ?? net.myTeam)) return;
     if (this.turn.state !== STATE.AIM || this.replaying) return;
     if (this.landing()) return;   // десант каждый сажает сам
     this._moveClock += realDt;
@@ -2008,7 +2008,8 @@ export default class GameScene extends Phaser.Scene {
     if (this.landing()) return false;          // десант ещё в воздухе
     if (this.turn.activeWorm?.skipping) return false;  // замёрз — ход пропускает
     // В сетевой партии ходит только тот, чья команда сейчас на очереди
-    if (this.net?.connected && this.net.myTeam !== this.turn.currentTeam) return false;
+    // (в дуэли с ботом его ход разыгрывается здесь — тогда на очереди он)
+    if (this.net?.connected && (this.net.recTeam ?? this.net.myTeam) !== this.turn.currentTeam) return false;
     return true;
   }
 
@@ -2036,6 +2037,8 @@ export default class GameScene extends Phaser.Scene {
     // ход»), очередь ведёт история, а не мы: иначе в повторе своего хода
     // не было видно ходьбы, а после выстрела он висел до тайм-аута
     if (this.net.isDuel && this.net.phase === 'replay') return this.checkVictory() === null;
+    // Ход соперника-бота разыгрывается здесь же — ждать некого
+    if (this.net.isDuel && this.net.phase === 'botplay') return false;
     if (this.turn.currentTeam === this.net.myTeam) return false;
     return this.checkVictory() === null;
   }

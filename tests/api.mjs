@@ -971,6 +971,81 @@ check('«твой ход» бот не пишет', !calls('sendMessage').some((
   check('/boot не админу не показывается', !/Запуски/.test(calls('sendMessage').at(-1)?.params.text ?? ''));
 }
 
+// --- игроки-боты: заводятся, играют между собой, вызывают человека, их ход разыгрывает соперник ---
+{
+  const sdb = openDb(':memory:');
+  const sapp = createApp({
+    db: sdb, botToken: BOT, mediaDir, adminIds: [ADMIN], publicUrl: 'https://example.test/worms',
+    telegramApiBase: `http://127.0.0.1:${fakeTg.address().port}`, now: () => clock, simRandom: () => 0,
+    log: { warn() {}, log() {}, info() {}, error: console.error },
+  });
+  const ssrv = createServer(sapp);
+  await new Promise((res) => ssrv.listen(0, '127.0.0.1', res));
+  const at = `http://127.0.0.1:${ssrv.address().port}`;
+  const call = (method, path, body, token) => callAt(method, path, body, token, {}, at);
+  const shook = (update) => callAt('POST', '/api/bot/webhook', update, null, { 'x-telegram-bot-api-secret-token': sapp.webhookSecret }, at);
+  const realNow = clock;
+  clock = Date.UTC(2026, 10, 21, 9, 0);              // 12:00 МСК — боты играют
+  const H = (await call('POST', '/api/telegram', { initData: await signInitData({
+    query_id: 'q', user: { id: 9101, first_name: 'Живой' }, auth_date: String(Math.floor(clock / 1000)) }, BOT) })).data;
+  sdb.prepare('update player set app_at = ? where id = ?').run(clock, H.player.id);
+  const made = sapp.simbots.ensure();
+  const again = sapp.simbots.ensure();
+  const bots = sdb.prepare('select * from player where sim is not null').all();
+  const levels = ['weak', 'mid', 'strong'].map((l) => bots.filter((b) => b.sim === l).length);
+  const topBefore = (await call('GET', '/api/top', null, H.token)).data;
+  const topList = topBefore.top ?? topBefore.items ?? topBefore.players ?? [];
+  check('боты: 12 аккаунтов, по 4 каждого уровня, без Telegram, в топе как игроки, второй раз не заводятся',
+    made === 12 && again === 0 && levels.join() === '4,4,4' && bots.every((b) => b.tg_id === null && b.wins + b.losses > 0)
+      && topList.filter((p) => bots.some((b) => b.id === p.id)).length >= 10, `${made} ${again} ${levels} ${topList.length}`);
+  const msgsBefore = calls('sendMessage').filter((m) => m.params.chat_id === 9101).length;
+  const sum = () => sdb.prepare('select sum(wins + losses) as n from player where sim is not null').get().n;
+  const games0 = sum();
+  const out = sapp.simbots.tick();
+  await new Promise((r) => setTimeout(r, 300));       // вызов уходит в Telegram без ожидания
+  const duel = sdb.prepare("select * from duel where status = 'active'").get();
+  const toH = calls('sendMessage').filter((m) => m.params.chat_id === 9101).slice(msgsBefore);
+  check('боты: за такт — партии между собой (рейтинг и счёт побед) и один вызов человеку',
+    out.bots >= 4 && out.humans === 1 && sum() > games0 && duel?.p1 === H.player.id
+      && toH.length === 1 && /зовёт тебя на дуэль/.test(toH[0].params.text), `${JSON.stringify(out)} ${toH.length}`);
+  // Лимит: 3–4 партии в день на бота — много тактов подряд больше не дают
+  for (let i = 0; i < 20; i++) sapp.simbots.tick();
+  const perBot = sdb.prepare('select sim_games as n from player where sim is not null').all().map((r) => r.n);
+  check('боты: не больше 3–4 партий в день на каждого', perBot.every((n) => n >= 1 && n <= 4), perBot.join());
+  // Человек ходит первым, потом очередь бота: он «думает», потом ход у человека
+  const turn = (n) => ({ turn: n, cmds: [{ k: 'shot', at: 900, cmd: { type: 'shot', turn: n, worm: 0, vx: 300, vy: -200 } }],
+    state: { turn: n + 1, team: n % 2, worms: [{ x: 1, y: 2, hp: 100, alive: true }] }, hash: `h${n}` });
+  const t1 = await call('POST', `/api/duels/${duel.id}/turn`, turn(1), H.token);
+  const early = (await call('GET', `/api/duels/${duel.id}`, null, H.token)).data.duel;
+  const earlyBot = await call('POST', `/api/duels/${duel.id}/botturn`, turn(2), H.token);
+  clock += 3 * 3600_000;
+  const before2 = calls('sendMessage').filter((m) => m.params.chat_id === 9101).length;
+  await sapp.duels.tick();
+  await sapp.duels.tick();
+  const pinged = calls('sendMessage').filter((m) => m.params.chat_id === 9101).slice(before2);
+  const ready = (await call('GET', `/api/duels/${duel.id}`, null, H.token)).data.duel;
+  const bt = await call('POST', `/api/duels/${duel.id}/botturn`, turn(2), H.token);
+  const row = sdb.prepare('select player_id from duel_turn where duel_id = ? and n = 2').get(duel.id);
+  check('дуэль с ботом: ход бота наступает не сразу; потом человеку «твой ход» один раз, и его игра разыгрывает ход бота',
+    t1.status === 200 && early.myTurn === false && !early.botTurn && earlyBot.status === 409
+      && pinged.length === 1 && /Твой ход против/.test(pinged[0].params.text)
+      && ready.myTurn === true && ready.botTurn?.team === 1 && ['weak', 'mid', 'strong'].includes(ready.botTurn.level)
+      && bt.status === 200 && bt.data.duel.turn === 3 && bt.data.duel.myTurn === true && row?.player_id === duel.p2,
+    `${t1.status} ${early.myTurn} ${earlyBot.status} ${pinged.length} ${JSON.stringify(ready.botTurn)} ${bt.status}`);
+  // Выключатель у админа: hide — боты не играют и не видны в топе
+  await shook({ message: { from: { id: ADMIN }, chat: { id: ADMIN, type: 'private' }, text: '/simbots hide' } });
+  const rep = calls('sendMessage').at(-1)?.params.text ?? '';
+  const g1 = sum();
+  sapp.simbots.tick();
+  const topAfter = (await call('GET', '/api/top', null, H.token)).data;
+  const listAfter = topAfter.top ?? topAfter.items ?? topAfter.players ?? [];
+  check('/simbots hide: сводка админу, боты не играют и не видны в топе',
+    /Боты: hide/.test(rep) && sum() === g1 && !listAfter.some((p) => bots.some((b) => b.id === p.id)), rep.slice(0, 80));
+  clock = realNow;
+  ssrv.close();
+  sdb.close();
+}
+
 server.close();
 fakeTg.close();
 db.close();
