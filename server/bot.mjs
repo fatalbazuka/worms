@@ -62,7 +62,7 @@ const DUEL_WEAPONS = ['базука', 'граната', 'кассета', 'кр�
 
 export function createBot({ db, api, players, tournaments, analytics = null, admin: adminPanel = null, adminIds = new Set(), publicUrl = '',
   tz = 'Europe/Moscow', now = () => Date.now(), log = console, appName = '', promos = null, duels = () => null, bootlog = null,
-  simbots = () => null }) {
+  simbots = () => null, seasons = () => null }) {
   const q = {
     payAdd: db.prepare(`insert or ignore into payment (charge_id, player_id, tg_id, amount, purpose, ref, created_at)
                         values (?, ?, ?, ?, ?, ?, ?)`),
@@ -337,6 +337,7 @@ export function createBot({ db, api, players, tournaments, analytics = null, adm
     '/metrics — игроки, новички, бои, возврат на второй день',
     '/boot [часов=24] — запуски игры: сколько открылось, где застревают, ошибки',
     '/simbots [on|off|hide] — игроки-боты: сводка, включить, выключить, спрятать из топа',
+    '/season [end] — сезон рейтинга: сколько осталось; end — закрыть сейчас с наградами',
     '/web TG_ID логин — выдать вход на сайт (пароль придумаю сам; повтор — новый пароль)',
     '/newweb логин [имя] — отдельный аккаунт только для сайта, без Telegram',
     '/newpromo КОД [коробок=3] [монет=0] [скин=id] [раз=100] [дней=30] — новый промокод',
@@ -533,6 +534,16 @@ export function createBot({ db, api, players, tournaments, analytics = null, adm
       }
       case '/metrics':
         return send(chat, analytics ? analytics.report() : 'Статистика не подключена.');
+      case '/season': {
+        // Сезон рейтинга: сколько осталось; end — закрыть сейчас (награды, сброс)
+        const ss = seasons();
+        if (!ss) return send(chat, 'Сезоны не подключены.');
+        if (args[0] === 'end') {
+          const r = ss.finish();
+          return send(chat, r ? `Сезон ${r.season} закрыт, наград: ${r.rewarded}.\n${ss.report()}` : 'Не вышло закрыть.');
+        }
+        return send(chat, ss.report());
+      }
       case '/simbots': {
         // Боты-игроки: сводка; on — играют, off — не играют, hide — и не видны в топе
         const sb = simbots();

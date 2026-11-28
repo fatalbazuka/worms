@@ -278,6 +278,11 @@ export async function reportResult({ room, seed, opponent, won }) {
 }
 
 /** Таблица лидеров: по рейтингу или по победам в турнирах. */
+/** Сезон рейтинга: сроки, награды, моё место, итог прошлого (server/seasons.mjs). */
+export async function fetchSeason() {
+  return (await call('GET', '/season')).season ?? null;
+}
+
 export async function fetchTop(limit = 20, kind = 'rating') {
   const data = await call('GET', `/top?limit=${limit}&kind=${kind}`);
   return Array.isArray(data.players) ? data.players : [];

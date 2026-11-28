@@ -1046,6 +1046,64 @@ check('«твой ход» бот не пишет', !calls('sendMessage').some((
   sdb.close();
 }
 
+// --- сезоны рейтинга: зачёт, места, награды подарком, титул, сброс, итог в игре ---
+{
+  const zdb = openDb(':memory:');
+  const zapp = createApp({
+    db: zdb, botToken: BOT, mediaDir, adminIds: [ADMIN], publicUrl: 'https://example.test/worms',
+    telegramApiBase: `http://127.0.0.1:${fakeTg.address().port}`, now: () => clock,
+    log: { warn() {}, log() {}, info() {}, error: console.error },
+  });
+  const zsrv = createServer(zapp);
+  await new Promise((res) => zsrv.listen(0, '127.0.0.1', res));
+  const at = `http://127.0.0.1:${zsrv.address().port}`;
+  const call = (method, path, body, token) => callAt(method, path, body, token, {}, at);
+  const zhook = (update) => callAt('POST', '/api/bot/webhook', update, null, { 'x-telegram-bot-api-secret-token': zapp.webhookSecret }, at);
+  const realNow = clock;
+  clock = Date.UTC(2026, 10, 25, 9, 0);              // среда
+  const login = async (id, name) => (await call('POST', '/api/telegram', { initData: await signInitData({
+    query_id: 'q', user: { id, first_name: name }, auth_date: String(Math.floor(clock / 1000)) }, BOT) })).data;
+  const P = [await login(9301, 'Первый'), await login(9302, 'Второй'), await login(9303, 'Третий'), await login(9304, 'Новичок')];
+  const s0 = (await call('GET', '/api/season', null, P[0].token)).data.season;
+  const endsMon = new Date(s0.endsAt + 3 * 3600_000).getUTCDay() === 1 && new Date(s0.endsAt + 3 * 3600_000).getUTCHours() === 0;
+  // Рейтинг и партии сезона: трое в зачёте, четвёртый сыграл мало
+  const set = zdb.prepare('update player set rating = ?, wins = ?, losses = ?, season_games = ? where id = ?');
+  set.run(1420, 10, 2, 8, P[0].player.id);
+  set.run(1260, 6, 4, 5, P[1].player.id);
+  set.run(980, 2, 3, 3, P[2].player.id);
+  set.run(1300, 1, 1, 2, P[3].player.id);
+  const mid = (await call('GET', '/api/season', null, P[1].token)).data.season;
+  check('сезон: две недели и меньше, кончается в понедельник 00:00 МСК; моё место и зачёт',
+    s0.n === 1 && s0.endsAt - clock <= 14 * 86400_000 && s0.endsAt - clock > 7 * 86400_000 && endsMon
+      && mid.me?.eligible === true && mid.me.rank === 2 && s0.places.length === 4 && s0.leagues.length === 7,
+    JSON.stringify({ n: s0.n, ends: new Date(s0.endsAt).toISOString(), me: mid.me }));
+  const before = calls('sendMessage').length;
+  clock = s0.endsAt + 60_000;
+  zapp.seasons.tick();
+  await new Promise((r) => setTimeout(r, 300));
+  const res = zdb.prepare('select * from season_result order by rank').all();
+  const gifts = zdb.prepare("select player_id, boxes, coins from bonus where reason = 'season' order by player_id").all();
+  const p0 = zdb.prepare('select rating, titles, season_games from player where id = ?').get(P[0].player.id);
+  const p3 = zdb.prepare('select rating from player where id = ?').get(P[3].player.id);
+  const msgs = calls('sendMessage').slice(before).filter((m) => /Сезон 1 окончен/.test(m.params.text));
+  check('конец сезона: места и награды только тем, кто в зачёте; чемпиону титул; рейтинг сжат к 1000; бот пишет итог',
+    res.length === 3 && res[0].player_id === P[0].player.id && res[0].league === 'ruby' && res[0].boxes === 3 + 3 && res[0].coins === 200 + 500
+      && /Чемпион сезона 1/.test(res[0].title) && res[2].league === 'bronze' && gifts.length === 3
+      && p0.rating === 1210 && p0.season_games === 0 && JSON.parse(p0.titles)[0].title.includes('Чемпион')
+      && p3.rating === 1150 && msgs.length === 3,
+    JSON.stringify({ res: res.map((r) => [r.rank, r.league, r.boxes, r.coins, r.title]), rating: [p0.rating, p3.rating], msgs: msgs.length }));
+  const s1 = (await call('GET', '/api/season', null, P[0].token)).data.season;
+  const shop = (await call('GET', '/api/shop', null, P[0].token)).data;
+  check('новый сезон идёт; игра видит итог прошлого и награду подарком',
+    s1.n === 2 && s1.endsAt - s1.startsAt === 14 * 86400_000 && s1.last?.n === 1 && s1.last.rank === 1
+      && shop.owned?.boxes >= 6 && shop.owned.coins >= 700, JSON.stringify({ n: s1.n, last: s1.last, owned: shop.owned }));
+  await zhook({ message: { from: { id: ADMIN }, chat: { id: ADMIN, type: 'private' }, text: '/season' } });
+  check('/season у админа — сводка', /Сезон 2: до конца/.test(calls('sendMessage').at(-1)?.params.text ?? ''));
+  clock = realNow;
+  zsrv.close();
+  zdb.close();
+}
+
 server.close();
 fakeTg.close();
 db.close();

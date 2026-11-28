@@ -44,9 +44,9 @@ export function createPlayers({ db, now = () => Date.now(), adminIds = new Set()
     ban: db.prepare('update player set banned_at = ? where id = ?'),
     byCode: db.prepare('select * from player where code = ?'),
     setCode: db.prepare('update player set code = ? where id = ? and code is null'),
-    won: db.prepare(`update player set rating = ?, wins = wins + 1, streak = streak + 1,
+    won: db.prepare(`update player set rating = ?, wins = wins + 1, streak = streak + 1, season_games = season_games + 1,
                      best_streak = max(best_streak, streak + 1) where id = ?`),
-    lost: db.prepare('update player set rating = ?, losses = losses + 1, streak = 0 where id = ?'),
+    lost: db.prepare('update player set rating = ?, losses = losses + 1, streak = 0, season_games = season_games + 1 where id = ?'),
     duels: db.prepare(`select * from match where (p1 = ? or p2 = ?) and status in ('confirmed', 'disputed')
                        order by settled_at desc limit ?`),
   };

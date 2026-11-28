@@ -342,6 +342,28 @@ const MIGRATIONS = [
     value      text not null
   );
   `,
+  // 18: сезоны рейтинга (server/seasons.mjs): партий на рейтинг за сезон,
+  // сами сезоны и итоги игроков с наградой
+  `
+  alter table player add column season_games integer not null default 0;
+  create table if not exists season (
+    id          integer primary key,
+    starts_at   integer not null,
+    ends_at     integer not null,
+    finished_at integer
+  );
+  create table if not exists season_result (
+    season_id  integer not null references season (id),
+    player_id  text not null references player (id) on delete cascade,
+    rank       integer not null,
+    rating     integer not null,
+    league     text not null,
+    boxes      integer not null default 0,
+    coins      integer not null default 0,
+    title      text,
+    primary key (season_id, player_id)
+  );
+  `,
 ];
 
 export function openDb(path) {

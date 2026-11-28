@@ -83,6 +83,7 @@ import { createPromos } from './promo.mjs';
 import { createFriends } from './friends.mjs';
 import { createDuels } from './duels.mjs';
 import { createSimBots } from './simbots.mjs';
+import { createSeasons } from './seasons.mjs';
 
 export function createApp({
   db, botToken = '', trustProxy = false, staticDir = null, now = () => Date.now(),
@@ -116,7 +117,7 @@ export function createApp({
   const admin = createAdmin({ db, players, analytics, tournaments, shop, saves, api, now, log });
   // Дуэли заводятся ниже (им нужны друзья, а друзьям — бот): боту — ссылка
   bot = createBot({ db, api, players, tournaments, analytics, admin, adminIds: admins, publicUrl, tz, now, log, appName, promos,
-    duels: () => duels, bootlog, simbots: () => simbots });
+    duels: () => duels, bootlog, simbots: () => simbots, seasons: () => seasons });
   weekly = createWeekly({ db, tournaments, shop, notify: (...a) => bot.notify(...a), tz, now, log });
   const friends = createFriends({
     db, players, analytics, now, log,
@@ -126,6 +127,8 @@ export function createApp({
   const duels = createDuels({ db, players, friends, analytics, now, log, notify: (...a) => bot.notify(...a) });
   // Игроки-боты: играют между собой и вызывают людей на дуэли (server/simbots.mjs)
   const simbots = createSimBots({ db, players, duels, analytics, now, log, random: simRandom });
+  // Сезоны рейтинга: две недели, награды, мягкий сброс (server/seasons.mjs)
+  const seasons = createSeasons({ db, now, log, tz, notify: (...a) => bot.notify(...a) });
   const hookSecret = botToken ? webhookSecret(botToken, secret) : '';
 
   const q = {
@@ -136,9 +139,9 @@ export function createApp({
     match: db.prepare('select * from match where room = ? and seed = ?'),
     matchAdd: db.prepare('insert into match (room, seed, p1, p2, p1_claim, created_at) values (?, ?, ?, ?, ?, ?)'),
     matchClose: db.prepare('update match set p2_claim = ?, status = ?, delta = ?, settled_at = ? where id = ?'),
-    won: db.prepare(`update player set rating = ?, wins = wins + 1, streak = streak + 1,
+    won: db.prepare(`update player set rating = ?, wins = wins + 1, streak = streak + 1, season_games = season_games + 1,
                      best_streak = max(best_streak, streak + 1) where id = ?`),
-    lost: db.prepare('update player set rating = ?, losses = losses + 1, streak = 0 where id = ?'),
+    lost: db.prepare('update player set rating = ?, losses = losses + 1, streak = 0, season_games = season_games + 1 where id = ?'),
   };
 
   function issueToken(playerId) {
@@ -344,6 +347,12 @@ export function createApp({
       case 'GET /api/health': return { ok: true };
       case 'GET /api/config': return { bot: bot.username || null, stars: api.enabled };
       case 'GET /api/top': return top(url);
+      // Сезон: сроки, награды, где игрок сейчас и чем кончился прошлый
+      case 'GET /api/season': {
+        let meId = null;
+        try { meId = auth(req).id; } catch { meId = null; }
+        return { season: seasons.info(meId) };
+      }
       case 'GET /api/friends': return friends.list(auth(req).id);
       case 'POST /api/friends/challenge': {
         const me = auth(req);
@@ -568,6 +577,7 @@ export function createApp({
   handle.friends = friends;
   handle.duels = duels;
   handle.simbots = simbots;
+  handle.seasons = seasons;
   handle.webhookSecret = hookSecret;
   /** Настроить бота (вебхук, меню) — вызывается при запуске сервера. */
   handle.setupBot = () => bot.setup({ secret: hookSecret });
@@ -619,6 +629,8 @@ if (isMain) {
     handle.duels.tick().catch((e) => console.error('[duels] tick', e));
     // Боты-игроки: партии между собой и вызовы людям, днём, 3–4 в день
     try { handle.simbots.tick(); } catch (e) { console.error('[simbots] tick', e); }
+    // Сезон кончился — награды, сброс рейтинга, следующий сезон
+    try { handle.seasons.tick(); } catch (e) { console.error('[seasons] tick', e); }
   }, 30_000);
   const stop = () => {
     clearInterval(ticker);

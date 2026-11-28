@@ -23,7 +23,7 @@ import { pendingSession, forgetSession } from '../net/session.js';
 import {
   syncMe, fetchTop, myRank, loggedIn, onAccountChange, track,
   trackStep, prepareChallenge, prepareDuelChallenge, fetchDailyTower, redeemPromo, fetchFriends, inviteFriend,
-  fetchDuels, fetchDuel, createDuel, joinDuel, resignDuel,
+  fetchDuels, fetchDuel, createDuel, joinDuel, resignDuel, fetchSeason, fetchShop,
 } from '../net/server.js';
 import { duelMatch, flushPendingTurns } from '../net/duel.js';
 import { shareChessInvite } from '../net/invite.js';
@@ -193,6 +193,10 @@ export default class MenuScene extends Phaser.Scene {
     } else if (fromLink && !this.registry.get('tourLinkUsed')) {
       this.registry.set('tourLinkUsed', true);
       this.time.delayedCall(300, () => this.openTournaments(/^\d+$/.test(fromLink) ? Number(fromLink) : null));
+    } else if (params.get('top') === '1' && !this.registry.get('topLinkUsed')) {
+      // «🏆 Открыть рейтинг» из сообщения об итогах сезона
+      this.registry.set('topLinkUsed', true);
+      this.time.delayedCall(300, () => { this.topFrom = 'tab'; this.showTop('rating', 'all'); });
     } else if (params.get('top') === 'friends' && !this.registry.get('topLinkUsed')) {
       // Кнопка из сообщения бота «друг тебя обогнал» — сразу к топу друзей
       this.registry.set('topLinkUsed', true);
@@ -654,6 +658,8 @@ export default class MenuScene extends Phaser.Scene {
       }
     }
     if (loggedIn()) this._refreshDuelBadge();
+    // Сезон кончился, пока не заходил, — окно с итогом (раз на сезон)
+    if (loggedIn() && onboardStage() !== 'tutorial' && !this.seasonChecked) { this.seasonChecked = true; this._seasonResult(); }
 
     // Партия оборвалась (Telegram перезапустился, погас экран), а мы
     // открылись без ссылки: предлагаем вернуться, пока соперник ждёт
@@ -2525,6 +2531,7 @@ export default class MenuScene extends Phaser.Scene {
       return;
     }
 
+    if (kind === 'rating') this._seasonLine(still);
     fetchTop(10, kind).then((rows) => {
       if (!still()) return;
       this.topRows = rows;
@@ -2534,6 +2541,113 @@ export default class MenuScene extends Phaser.Scene {
       if (!still()) return;
       note.setText(`сервер недоступен: ${e.message}`);
     });
+  }
+
+  /**
+   * Сезон над топом: «🏁 Сезон 2 · до конца 5 д 3 ч · награды ›» на месте
+   * подзаголовка. Тап — окно с наградами и тем, где игрок сейчас.
+   */
+  _seasonLine(still) {
+    fetchSeason().then((s) => {
+      if (!s || !still()) return;
+      this.season = s;
+      const left = Math.max(0, s.endsAt - Date.now());
+      const d = Math.floor(left / 86400_000), h = Math.floor((left % 86400_000) / 3600_000);
+      // Подзаголовок «рейтинг по боям…» уступает место сезону
+      const sub = this.items.find((o) => o.type === 'Text' && Math.abs(o.y - 106) < 1 && o !== this.items[0]);
+      sub?.destroy();
+      const t = this.add.text(this.W / 2, 106, `🏁 Сезон ${s.n} · до конца ${d} д ${h} ч · награды ›`,
+        font(this.fs(16), 800, '#ffd166')).setOrigin(0.5, 0);
+      this.items.push(t);
+      t.setInteractive({ useHandCursor: true });
+      t.on('pointerup', () => { if (!this._dragging) { haptic('tap'); this._seasonPanel(s); } });
+    }).catch(() => {});
+  }
+
+  /** Окно сезона: где ты, сколько партий до зачёта и что дадут за лигу и место. */
+  _seasonPanel(s) {
+    const W = this.W, H = this.H, cx = W / 2;
+    const layer = [];
+    const add = (o) => { o.setDepth(52); layer.push(o); this.items.push(o); return o; };
+    const close = () => { for (const o of layer) o.destroy(); };
+    const shade = add(this.add.rectangle(0, this.topY(0), W, H, 0x05070c, 0.8).setOrigin(0, 0));
+    shade.setInteractive();
+    shade.on('pointerup', close);
+    const pw = Math.min(W - 40, 620), ph = Math.min(H - 120, 640);
+    const top = this.topY(H / 2 - ph / 2);
+    const g = add(this.add.graphics());
+    g.fillStyle(0x161c2e, 0.98).fillRoundedRect(cx - pw / 2, top, pw, ph, 22);
+    g.lineStyle(3, 0xffd166, 0.8).strokeRoundedRect(cx - pw / 2, top, pw, ph, 22);
+    add(this.add.text(cx, top + 22, `🏁 Сезон ${s.n}`, font(34, 900, UI.accent)).setOrigin(0.5, 0));
+    const me = s.me;
+    const mine = !me ? 'войди в игру через Telegram — и сезон засчитает твои бои'
+      : me.eligible ? `ты сейчас ${me.rank}-й · награда — по месту и лиге в конце сезона`
+        : `сыграй ещё ${s.minGames - me.games} ${s.minGames - me.games === 1 ? 'бой' : 'боя'} на рейтинг — и ты в зачёте`;
+    add(this.add.text(cx, top + 72, mine, font(18, 800, me?.eligible ? '#8ef0a0' : '#ffe9c2'))
+      .setOrigin(0.5, 0).setAlign('center').setWordWrapWidth(pw - 40));
+    let y = top + 118;
+    add(this.add.text(cx - pw / 2 + 24, y, 'За место', font(18, 900, UI.textDim)).setOrigin(0, 0));
+    y += 30;
+    for (const p of s.places) {
+      const who = p.from === p.to ? `${p.from}-е` : `${p.from}–${p.to}`;
+      add(this.add.text(cx - pw / 2 + 24, y, `${p.title.split(' ')[0]} ${who}`, font(19, 800, UI.text)).setOrigin(0, 0));
+      add(this.add.text(cx + pw / 2 - 24, y, `🎁 ×${p.boxes} · +${p.coins} 🪙 · титул`, font(18, 800, '#ffd166')).setOrigin(1, 0));
+      y += 32;
+    }
+    y += 10;
+    add(this.add.text(cx - pw / 2 + 24, y, 'За лигу', font(18, 900, UI.textDim)).setOrigin(0, 0));
+    y += 30;
+    for (const l of s.leagues.slice().reverse()) {
+      if (y > top + ph - 70) break;
+      add(this.add.text(cx - pw / 2 + 24, y, `${l.name} (${l.min}+)`, font(18, 800, UI.text)).setOrigin(0, 0));
+      add(this.add.text(cx + pw / 2 - 24, y, `${l.boxes ? `🎁 ×${l.boxes} · ` : ''}+${l.coins} 🪙`, font(18, 800, '#ffe9c2')).setOrigin(1, 0));
+      y += 30;
+    }
+    add(this.add.text(cx, top + ph - 44, `в конце сезона рейтинг сжимается к 1000 вдвое · в зачёт — от ${s.minGames} боёв`,
+      font(15, 700, UI.textDim)).setOrigin(0.5, 0).setAlign('center').setWordWrapWidth(pw - 40));
+  }
+
+  /**
+   * Сезон кончился, пока игрока не было: одно окно с итогом — место, лига,
+   * титул и награда (она уже лежит подарком и придёт с синхронизацией).
+   */
+  _seasonResult() {
+    fetchSeason().then((s) => {
+      const last = s?.last;
+      if (!last || this.section !== this.showRoot) return;
+      let seen = 0;
+      try { seen = Number(localStorage.getItem('worms.seasonSeen')) || 0; } catch { /* инкогнито */ }
+      if (last.n <= seen) return;
+      try { localStorage.setItem('worms.seasonSeen', String(last.n)); } catch { /* инкогнито */ }
+      const W = this.W, H = this.H, cx = W / 2;
+      const layer = [];
+      const add = (o) => { o.setDepth(52); layer.push(o); this.items.push(o); return o; };
+      const close = () => { for (const o of layer) o.destroy(); };
+      add(this.add.rectangle(0, this.topY(0), W, H, 0x05070c, 0.8).setOrigin(0, 0)).setInteractive();
+      const pw = Math.min(W - 48, 600), ph = 400, top = this.topY(H * 0.42) - ph / 2;
+      const g = add(this.add.graphics());
+      g.fillStyle(0x161c2e, 0.98).fillRoundedRect(cx - pw / 2, top, pw, ph, 22);
+      g.lineStyle(3, 0xffd166, 0.85).strokeRoundedRect(cx - pw / 2, top, pw, ph, 22);
+      add(this.add.text(cx, top + 26, `🏁 Сезон ${last.n} окончен`, font(34, 900, UI.accent)).setOrigin(0.5, 0));
+      const lname = s.leagues.find((l) => l.id === last.league)?.name ?? last.league;
+      add(this.add.text(cx, top + 84, `${last.rank}-е место · ${lname}`, font(30, 900, UI.text)).setOrigin(0.5, 0));
+      if (last.title) add(this.add.text(cx, top + 132, last.title, font(24, 900, '#ffd166')).setOrigin(0.5, 0));
+      const gift = [last.boxes ? `🎁 ×${last.boxes}` : '', last.coins ? `+${last.coins} 🪙` : ''].filter(Boolean).join('   ');
+      add(this.add.text(cx, top + 186, gift || 'в этот раз без награды', font(30, 900, '#8ef0a0')).setOrigin(0.5, 0));
+      add(this.add.text(cx, top + 236, 'новый сезон уже идёт: рейтинг сжат к 1000 — рвани наверх',
+        font(17, 700, UI.textDim)).setOrigin(0.5, 0).setAlign('center').setWordWrapWidth(pw - 40));
+      const before = this.items.length;
+      this._button('season-ok', cx, top + ph - 56, 'Забрать', '', () => {
+        haptic('win');
+        sfx.play('pickup');
+        close();
+        // Награда уже лежит подарком на сервере — забираем сразу, не дожидаясь перезапуска
+        fetchShop().then((sh) => { if (sh?.owned) applyServerOwned(sh.owned); }).catch(() => {});
+        syncMe(true);
+        if (last.coins) this._coinBurst(cx, top + 200);
+      }, { w: 280, h: 72, variant: 'primary', titleSize: 28 });
+      for (const o of this.items.slice(before)) { o.setDepth(53); layer.push(o); }
+    }).catch(() => {});
   }
 
   /** Лист модельки по скину; нет такого — обычный смайлик. */
