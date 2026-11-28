@@ -50,7 +50,7 @@ const CHALLENGE_GAP = 24 * 3600_000;
 const ACTIVE_MS = 3 * 86400_000;
 const TICK_MS = 30_000;
 
-export function createSimBots({ db, players, duels, analytics, now = () => Date.now(), log = console, random = Math.random }) {
+export function createSimBots({ db, players, duels, analytics, social = null, now = () => Date.now(), log = console, random = Math.random }) {
   const q = {
     bots: db.prepare('select * from player where sim is not null and banned_at is null'),
     count: db.prepare('select count(*) as n from player where sim is not null'),
@@ -112,6 +112,7 @@ export function createSimBots({ db, players, duels, analytics, now = () => Date.
     const [w, l] = random() < p ? [a, b] : [b, a];
     const r = settle(w.rating, l.rating);
     players.rate(w.id, r.winner, l.id, r.loser);
+    social?.onRated({ winnerId: w.id, loserId: l.id, before: w.rating, after: r.winner, delta: r.delta });
     const t = now();
     q.played.run(t, a.id);
     q.played.run(t, b.id);

@@ -54,7 +54,7 @@ const FINISHED_SHOWN = 7 * 86400_000;       // доигранные видны �
 const DAY_FROM = 9, DAY_TO = 23;
 const CODE_ABC = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 
-export function createDuels({ db, players, friends, analytics, notify, now = () => Date.now(), log = console }) {
+export function createDuels({ db, players, friends, analytics, notify, social = null, now = () => Date.now(), log = console }) {
   const q = {
     byId: db.prepare('select * from duel where id = ?'),
     byCode: db.prepare('select * from duel where code = ?'),
@@ -262,12 +262,14 @@ export function createDuels({ db, players, friends, analytics, notify, now = () 
     const r = settle(w.rating, l.rating);
     players.rate(w.id, r.winner, l.id, r.loser);
     q.setDelta.run(r.delta, d.id);
-    return { winnerId: w.id, loserId: l.id, before: w.rating, after: r.winner };
+    return { winnerId: w.id, loserId: l.id, before: w.rating, after: r.winner, delta: r.delta };
   }
 
   /** Победитель мог обогнать друзей — им напишет бот (server/friends.mjs). */
   function afterRated(rated) {
     if (rated) friends.onRated?.(rated)?.catch?.((e) => log.warn?.('[duels] обогнал', e.message));
+    // Лента, лиги, «тебя обогнали» (server/social.mjs)
+    if (rated) social?.onRated(rated);
   }
 
   /** Доигранные партии с победителем — для «Последних боёв» в профиле. */

@@ -387,6 +387,8 @@ export const EN = {
  "Бур": "Drill",
  "Магнит": "Magnet",
  "Овца": "Sheep",
+ "одна победа до «{0}»!": "one win to “{0}”!",
+ "Новая лига!": "New league!",
  "🏁 Сезон {0} · до конца {1} д {2} ч · награды ›": "🏁 Season {0} · ends in {1}d {2}h · rewards ›",
  "🏁 Сезон {0}": "🏁 Season {0}",
  "🏁 Сезон {0} окончен": "🏁 Season {0} is over",

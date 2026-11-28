@@ -278,6 +278,12 @@ export async function reportResult({ room, seed, opponent, won }) {
 }
 
 /** Таблица лидеров: по рейтингу или по победам в турнирах. */
+/** Лента событий для главного: победы, серии, лиги (server/social.mjs). */
+export async function fetchFeed(limit = 12) {
+  const data = await call('GET', `/feed?limit=${limit}`);
+  return Array.isArray(data.items) ? data.items : [];
+}
+
 /** Сезон рейтинга: сроки, награды, моё место, итог прошлого (server/seasons.mjs). */
 export async function fetchSeason() {
   return (await call('GET', '/season')).season ?? null;

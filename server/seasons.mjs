@@ -60,7 +60,7 @@ export function rewardFor(rank, rating, n) {
   };
 }
 
-export function createSeasons({ db, notify = async () => null, tz = 'Europe/Moscow', now = () => Date.now(), log = console }) {
+export function createSeasons({ db, notify = async () => null, post = () => {}, tz = 'Europe/Moscow', now = () => Date.now(), log = console }) {
   const q = {
     current: db.prepare('select * from season where finished_at is null order by id desc limit 1'),
     last: db.prepare('select * from season where finished_at is not null order by id desc limit 1'),
@@ -143,6 +143,7 @@ export function createSeasons({ db, notify = async () => null, tz = 'Europe/Mosc
           q.titles.run(JSON.stringify(titles.slice(0, 20)), p.id);
         }
         if (p.tg_id) prizes.push({ id: p.id, rank, ...r });
+        if (rank === 1) post('season', p.id, `🏆 ${p.name} — чемпион сезона ${s.id}`);
       });
       q.reset.run(RESET);
       return true;

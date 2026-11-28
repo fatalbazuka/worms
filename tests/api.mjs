@@ -1104,6 +1104,58 @@ check('«твой ход» бот не пишет', !calls('sendMessage').some((
   zdb.close();
 }
 
+// --- лиги, лента и «тебя обогнали» (server/social.mjs) ---
+{
+  const xdb = openDb(':memory:');
+  const xapp = createApp({
+    db: xdb, botToken: BOT, mediaDir, adminIds: [ADMIN], publicUrl: 'https://example.test/worms',
+    telegramApiBase: `http://127.0.0.1:${fakeTg.address().port}`, now: () => clock, simRandom: () => 0,
+    log: { warn() {}, log() {}, info() {}, error: console.error },
+  });
+  const xsrv = createServer(xapp);
+  await new Promise((res) => xsrv.listen(0, '127.0.0.1', res));
+  const at = `http://127.0.0.1:${xsrv.address().port}`;
+  const call = (method, path, body, token) => callAt(method, path, body, token, {}, at);
+  const realNow = clock;
+  clock = Date.UTC(2026, 10, 26, 10, 0);             // 13:00 МСК
+  const login = async (id, name) => (await call('POST', '/api/telegram', { initData: await signInitData({
+    query_id: 'q', user: { id, first_name: name }, auth_date: String(Math.floor(clock / 1000)) }, BOT) })).data;
+  const U = await login(9501, 'Растущий'), V = await login(9502, 'Обогнанный');
+  xapp.seasons.current();
+  xapp.simbots.ensure();
+  xapp.simbots.tick();
+  const feed = (await call('GET', '/api/feed?limit=5')).data.items;
+  check('лента: партии ботов дают строки «победил»', feed.length === 5 && feed.every((f) => /победил|поднялся|подряд/.test(f.text)),
+    JSON.stringify(feed.slice(0, 2)));
+  const set = xdb.prepare('update player set rating = ?, wins = wins + 1 where id = ?');
+  set.run(1090, U.player.id);
+  set.run(1105, V.player.id);
+  const before = calls('sendMessage').length;
+  // Растущий выиграл: 1090 → 1120, Серебро впервые; обогнал «Обогнанного»
+  set.run(1120, U.player.id);
+  xapp.social.onRated({ winnerId: U.player.id, loserId: null, before: 1090, after: 1120, delta: 30 });
+  await new Promise((r) => setTimeout(r, 300));
+  const promos = (await call('GET', '/api/season', null, U.token)).data.season.promos;
+  const gift = xdb.prepare("select boxes, coins from bonus where player_id = ? and reason = 'league'").all(U.player.id);
+  const toV = calls('sendMessage').slice(before).filter((m) => m.params.chat_id === 9502);
+  // Опустился и снова поднялся в Серебро — второго подарка нет; второго «обогнал» за день — тоже
+  xapp.social.onRated({ winnerId: U.player.id, loserId: null, before: 1095, after: 1120, delta: 25 });
+  await new Promise((r) => setTimeout(r, 200));
+  const gift2 = xdb.prepare("select count(*) as n from bonus where player_id = ? and reason = 'league'").get(U.player.id).n;
+  const toV2 = calls('sendMessage').slice(before).filter((m) => m.params.chat_id === 9502);
+  const feed2 = (await call('GET', '/api/feed?limit=3')).data.items;
+  check('лига: Серебро впервые за сезон — подарок один раз, в игре праздник, в ленте строка',
+    promos.length === 1 && promos[0].league === 'silver' && gift.length === 1 && gift[0].boxes === 1 && gift2 === 1
+      && feed2.some((f) => /Растущий поднялся в Серебро/.test(f.text)), JSON.stringify({ promos, gift, gift2 }));
+  check('«тебя обогнали»: обогнанному бот пишет с кнопкой вызова, не чаще раза в день',
+    toV.length === 1 && /Растущий обогнал тебя/.test(toV[0].params.text)
+      && JSON.stringify(toV[0].params.reply_markup).includes(`rival=${U.player.id}`) && toV2.length === 1,
+    `${toV.length} ${toV2.length} ${toV[0]?.params.text}`);
+  clock = realNow;
+  xsrv.close();
+  xdb.close();
+}
+
 server.close();
 fakeTg.close();
 db.close();

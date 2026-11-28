@@ -23,7 +23,7 @@ import { pendingSession, forgetSession } from '../net/session.js';
 import {
   syncMe, fetchTop, myRank, loggedIn, onAccountChange, track,
   trackStep, prepareChallenge, prepareDuelChallenge, fetchDailyTower, redeemPromo, fetchFriends, inviteFriend,
-  fetchDuels, fetchDuel, createDuel, joinDuel, resignDuel, fetchSeason, fetchShop,
+  fetchDuels, fetchDuel, createDuel, joinDuel, resignDuel, fetchSeason, fetchShop, fetchFeed,
 } from '../net/server.js';
 import { duelMatch, flushPendingTurns } from '../net/duel.js';
 import { shareChessInvite } from '../net/invite.js';
@@ -36,7 +36,7 @@ import {
   inviteLink as tgInviteLink, shareRoom, shareMessage, canOfferHomeScreen, addToHomeScreen, onHomeScreenChange,
   haptic, inTelegram, botLink, refLink, shareLink, duelLink, startDuelCode,
 } from '../platform/telegram.js';
-import { leagueOf, nextLeague, leagueProgress, toNextLeague, leagueLabel } from '../platform/league.js';
+import { leagueOf, nextLeague, leagueProgress, toNextLeague, leagueLabel, LEAGUES } from '../platform/league.js';
 import { BOT_LEVELS } from '../ai/Bot.js';
 import { isDesktop, setUiMode, aimScheme, setAimScheme } from '../platform/device.js';
 import { sfx } from '../audio/Sfx.js';
@@ -193,6 +193,10 @@ export default class MenuScene extends Phaser.Scene {
     } else if (fromLink && !this.registry.get('tourLinkUsed')) {
       this.registry.set('tourLinkUsed', true);
       this.time.delayedCall(300, () => this.openTournaments(/^\d+$/.test(fromLink) ? Number(fromLink) : null));
+    } else if (/^[a-z0-9]{3,40}$/i.test(params.get('rival') ?? '') && !this.registry.get('rivalLinkUsed')) {
+      // «⚔️ Вызвать» из сообщения «X обогнал тебя» — сразу вызов на дуэль
+      this.registry.set('rivalLinkUsed', true);
+      this.time.delayedCall(400, () => this.duelChallenge({ id: params.get('rival'), name: 'обидчика' }));
     } else if (params.get('top') === '1' && !this.registry.get('topLinkUsed')) {
       // «🏆 Открыть рейтинг» из сообщения об итогах сезона
       this.registry.set('topLinkUsed', true);
@@ -433,9 +437,14 @@ export default class MenuScene extends Phaser.Scene {
 
     this.items.push(this.add.text(left, y + 12, cur.name, font(size, 800, cur.text))
       .setOrigin(0, 0));
-    this.items.push(this.add.text(left + w, y + 12,
-      next ? `до «${next.name}» ещё ${toNextLeague(rating)}` : 'выше некуда',
-      font(size, 700, UI.textDim)).setOrigin(1, 0));
+    // Почти дотянул — одна победа: так и сказать, ярко и с пульсом
+    const gap = next ? toNextLeague(rating) : null;
+    const close = gap != null && gap <= 24;
+    const hint = this.add.text(left + w, y + 12,
+      next ? (close ? `одна победа до «${next.name}»!` : `до «${next.name}» ещё ${gap}`) : 'выше некуда',
+      font(size, close ? 900 : 700, close ? '#ffd166' : UI.textDim)).setOrigin(1, 0);
+    this.items.push(hint);
+    if (close) this.tweens.add({ targets: hint, alpha: 0.55, duration: 650, yoyo: true, repeat: -1, ease: 'Sine.easeInOut' });
   }
 
   _back(onTap = () => this.showRoot()) {
@@ -659,7 +668,10 @@ export default class MenuScene extends Phaser.Scene {
     }
     if (loggedIn()) this._refreshDuelBadge();
     // Сезон кончился, пока не заходил, — окно с итогом (раз на сезон)
-    if (loggedIn() && onboardStage() !== 'tutorial' && !this.seasonChecked) { this.seasonChecked = true; this._seasonResult(); }
+    if (loggedIn() && onboardStage() !== 'tutorial' && Date.now() - (this.seasonCheckedAt ?? 0) > 20_000) {
+      this.seasonCheckedAt = Date.now();
+      this._seasonResult();
+    }
 
     // Партия оборвалась (Telegram перезапустился, погас экран), а мы
     // открылись без ссылки: предлагаем вернуться, пока соперник ждёт
@@ -715,6 +727,9 @@ export default class MenuScene extends Phaser.Scene {
       hero.on('pointerdown', () => { haptic('tap'); this.showSkins(); });
       this.items.push(hero);
       this.buttons.hero = { x: cx, y: fy - 40 * k + this.oy, w: 100 * k, h: 90 * k, enabled: true };
+
+      // Лента событий над бойцом: кто кого победил, кто поднялся в лигу
+      if (areaH > 200) this._feedTicker(cx, areaTop + 8, Math.min(W - 48, 560));
 
       // Подпись под бойцом и коробка, если есть неоткрытая: она
       // подпрыгивает, чтобы её заметили
@@ -2608,16 +2623,93 @@ export default class MenuScene extends Phaser.Scene {
   }
 
   /**
+   * Лента событий одной строкой над бойцом: сменяется раз в четыре секунды.
+   * Тап — в топ. Пустая лента — ничего.
+   */
+  _feedTicker(cx, y, w) {
+    const pill = this.add.text(cx, y, '', font(16, 800, '#ffe9c2')).setOrigin(0.5, 0)
+      .setPadding(12, 6, 12, 6).setBackgroundColor('#1c1440').setAlpha(0);
+    this.items.push(pill);
+    pill.setInteractive({ useHandCursor: true });
+    pill.on('pointerup', () => { if (!this._dragging) { haptic('tap'); this.topFrom = 'tab'; this.showTop('rating', 'all'); } });
+    const section = this.section;
+    const show = (items, i) => {
+      if (!pill.active || this.section !== section || !items.length) return;
+      const text = items[i % items.length].text;
+      pill.setText(text.length > 44 ? `${text.slice(0, 43)}…` : text);
+      if (pill.width > w) pill.setScale(w / pill.width); else pill.setScale(1);
+      this.tweens.add({ targets: pill, alpha: 1, duration: 260 });
+      this.tweens.add({ targets: pill, alpha: 0, delay: 3600, duration: 260,
+        onComplete: () => this.time.delayedCall(80, () => show(items, i + 1)) });
+    };
+    const now = Date.now();
+    const cached = this.feedCache && now - this.feedCache.at < 60_000 ? this.feedCache.items : null;
+    if (cached) { show(cached, 0); return; }
+    fetchFeed(12).then((items) => { this.feedCache = { at: Date.now(), items }; show(items, 0); }).catch(() => {});
+  }
+
+  /**
+   * Новая лига в этом сезоне — праздник на весь экран: значок лиги, салют
+   * и подарок (он уже лежит на сервере и придёт с синхронизацией).
+   * Каждую лигу сезона — один раз (помним на устройстве).
+   */
+  _leagueParty(p) {
+    const W = this.W, H = this.H, cx = W / 2, cy = this.topY(H * 0.4);
+    const L = leagueOf(LEAGUES.find((l) => l.id === p.league)?.min ?? 0);
+    const layer = [];
+    const add = (o) => { o.setDepth(54); layer.push(o); this.items.push(o); return o; };
+    add(this.add.rectangle(0, this.topY(0), W, H, 0x05070c, 0.85).setOrigin(0, 0)).setInteractive();
+    // Лучи за значком крутятся
+    const rays = add(this.add.graphics({ x: cx, y: cy }));
+    for (let i = 0; i < 12; i++) {
+      const a = (i / 12) * Math.PI * 2;
+      rays.fillStyle(L.color, 0.18).fillTriangle(0, 0, Math.cos(a - 0.12) * 420, Math.sin(a - 0.12) * 420, Math.cos(a + 0.12) * 420, Math.sin(a + 0.12) * 420);
+    }
+    this.tweens.add({ targets: rays, angle: 360, duration: 14000, repeat: -1 });
+    const badge = add(this.add.circle(cx, cy, 96, L.color).setStrokeStyle(10, 0xffffff, 0.9));
+    const crown = add(this.add.text(cx, cy, '🏅', { fontSize: '96px' }).setOrigin(0.5));
+    add(this.add.text(cx, cy - 190, 'Новая лига!', font(46, 900, '#ffffff')).setOrigin(0.5).setStroke('#10131a', 8));
+    const title = add(this.add.text(cx, cy + 140, L.name, font(56, 900, L.text)).setOrigin(0.5).setStroke('#10131a', 8));
+    const gift = [p.boxes ? `🎁 ×${p.boxes}` : '', p.coins ? `+${p.coins} 🪙` : ''].filter(Boolean).join('   ');
+    if (gift) add(this.add.text(cx, cy + 210, gift, font(34, 900, '#8ef0a0')).setOrigin(0.5));
+    for (const o of [badge, crown, title]) o.setScale(0.2);
+    this.tweens.add({ targets: [badge, crown, title], scale: 1, duration: 520, ease: 'Back.easeOut' });
+    // Салют: монетки и искры из значка
+    this._coinBurst(cx, cy);
+    this.time.delayedCall(450, () => this._coinBurst(cx - 120, cy + 40));
+    this.time.delayedCall(800, () => this._coinBurst(cx + 120, cy + 40));
+    haptic('win');
+    sfx.play('pickup');
+    const before = this.items.length;
+    this._button('league-ok', cx, cy + 300, 'Забрать', '', () => {
+      haptic('tap');
+      for (const o of layer) o.destroy();
+      fetchShop().then((sh) => { if (sh?.owned) applyServerOwned(sh.owned); this.showRoot(); }).catch(() => this.showRoot());
+    }, { w: 280, h: 76, variant: 'primary', titleSize: 30 });
+    for (const o of this.items.slice(before)) { o.setDepth(55); layer.push(o); }
+  }
+
+  /**
    * Сезон кончился, пока игрока не было: одно окно с итогом — место, лига,
    * титул и награда (она уже лежит подарком и придёт с синхронизацией).
+   * Иначе — новая лига этого сезона, если её ещё не праздновали.
    */
   _seasonResult() {
     fetchSeason().then((s) => {
-      const last = s?.last;
-      if (!last || this.section !== this.showRoot) return;
+      if (!s || this.section !== this.showRoot) return;
+      let partied = [];
+      try { partied = JSON.parse(localStorage.getItem('worms.leagueParty') ?? '[]'); } catch { partied = []; }
+      const fresh = (s.promos ?? []).filter((p) => !partied.includes(`${p.season}:${p.league}`));
+      const last = s.last;
       let seen = 0;
       try { seen = Number(localStorage.getItem('worms.seasonSeen')) || 0; } catch { /* инкогнито */ }
-      if (last.n <= seen) return;
+      if (!last || last.n <= seen) {
+        if (!fresh.length) return;
+        // Взял сразу несколько — празднуем самую высокую, остальные отмечаем
+        try { localStorage.setItem('worms.leagueParty', JSON.stringify([...partied, ...fresh.map((p) => `${p.season}:${p.league}`)].slice(-40))); } catch { /* инкогнито */ }
+        this._leagueParty(fresh.at(-1));
+        return;
+      }
       try { localStorage.setItem('worms.seasonSeen', String(last.n)); } catch { /* инкогнито */ }
       const W = this.W, H = this.H, cx = W / 2;
       const layer = [];

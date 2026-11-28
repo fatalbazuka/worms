@@ -84,6 +84,7 @@ import { createFriends } from './friends.mjs';
 import { createDuels } from './duels.mjs';
 import { createSimBots } from './simbots.mjs';
 import { createSeasons } from './seasons.mjs';
+import { createSocial } from './social.mjs';
 
 export function createApp({
   db, botToken = '', trustProxy = false, staticDir = null, now = () => Date.now(),
@@ -124,11 +125,14 @@ export function createApp({
     notify: (...a) => bot.notify(...a),
     invite: (...a) => bot.inviteDuel(...a),
   });
-  const duels = createDuels({ db, players, friends, analytics, now, log, notify: (...a) => bot.notify(...a) });
-  // Игроки-боты: играют между собой и вызывают людей на дуэли (server/simbots.mjs)
-  const simbots = createSimBots({ db, players, duels, analytics, now, log, random: simRandom });
   // Сезоны рейтинга: две недели, награды, мягкий сброс (server/seasons.mjs)
-  const seasons = createSeasons({ db, now, log, tz, notify: (...a) => bot.notify(...a) });
+  let social = null;
+  const seasons = createSeasons({ db, now, log, tz, notify: (...a) => bot.notify(...a), post: (...a) => social?.post(...a) });
+  // Лиги, лента событий и «тебя обогнали» (server/social.mjs)
+  social = createSocial({ db, players, analytics, seasons, friends, now, log, notify: (...a) => bot.notify(...a) });
+  const duels = createDuels({ db, players, friends, analytics, social, now, log, notify: (...a) => bot.notify(...a) });
+  // Игроки-боты: играют между собой и вызывают людей на дуэли (server/simbots.mjs)
+  const simbots = createSimBots({ db, players, duels, analytics, social, now, log, random: simRandom });
   const hookSecret = botToken ? webhookSecret(botToken, secret) : '';
 
   const q = {
@@ -247,11 +251,12 @@ export function createApp({
       q.lost.run(s.loser, l.id);
       q.matchClose.run(claim, 'confirmed', s.delta, t, m.id);
       m = q.match.get(room, seed);
-      rated = { winnerId: w.id, loserId: l.id, before: w.rating, after: s.winner };
+      rated = { winnerId: w.id, loserId: l.id, before: w.rating, after: s.winner, delta: s.delta };
       return mine('confirmed');
     });
     // Победитель мог обогнать друзей — им напишет бот, ответ игроку не ждёт
     if (rated) friends.onRated(rated).catch((e) => log.error?.('[friends] обогнал', e));
+    if (rated) social.onRated(rated);
     return out;
   }
 
@@ -351,8 +356,10 @@ export function createApp({
       case 'GET /api/season': {
         let meId = null;
         try { meId = auth(req).id; } catch { meId = null; }
-        return { season: seasons.info(meId) };
+        return { season: { ...seasons.info(meId), ...(meId ? { promos: social.promos(meId) } : {}) } };
       }
+      // Лента событий для главного: победы, серии, лиги, чемпионы
+      case 'GET /api/feed': return { items: social.feed(Number(url.searchParams.get('limit')) || 12) };
       case 'GET /api/friends': return friends.list(auth(req).id);
       case 'POST /api/friends/challenge': {
         const me = auth(req);
@@ -578,6 +585,7 @@ export function createApp({
   handle.duels = duels;
   handle.simbots = simbots;
   handle.seasons = seasons;
+  handle.social = social;
   handle.webhookSecret = hookSecret;
   /** Настроить бота (вебхук, меню) — вызывается при запуске сервера. */
   handle.setupBot = () => bot.setup({ secret: hookSecret });

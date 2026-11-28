@@ -364,6 +364,25 @@ const MIGRATIONS = [
     primary key (season_id, player_id)
   );
   `,
+  // 19: лиги, взятые за сезон (подарок — один раз за лигу), и лента событий
+  // на главном (server/social.mjs)
+  `
+  create table if not exists league_reward (
+    season_id  integer not null,
+    player_id  text not null references player (id) on delete cascade,
+    league     text not null,
+    created_at integer not null,
+    primary key (season_id, player_id, league)
+  );
+  create table if not exists feed (
+    id         integer primary key,
+    kind       text not null,                 -- win | streak | league | season
+    player_id  text,
+    text       text not null,
+    created_at integer not null
+  );
+  create index if not exists feed_time on feed (created_at);
+  `,
 ];
 
 export function openDb(path) {
