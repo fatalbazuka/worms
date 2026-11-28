@@ -26,11 +26,15 @@ export function createPlayers({ db, now = () => Date.now(), adminIds = new Set()
     insert: db.prepare(`insert into player (id, name, name_key, pass_hash, tg_id, rating, photo, created_at, seen_at)
                         values (?, ?, null, null, ?, ?, ?, ?, ?)`),
     update: db.prepare('update player set name = ?, photo = coalesce(?, photo), seen_at = ? where id = ?'),
-    rank: db.prepare('select count(*) + 1 as rank from player where wins + losses > 0 and banned_at is null and rating > ?'),
+    rank: db.prepare(`select count(*) + 1 as rank from player where wins + losses > 0 and banned_at is null and rating > ?
+                       and (sim is null or not exists (select 1 from setting where key = 'simbots' and value = 'hide'))`),
     // skin — надетый скин из прогресса на сервере (save_kv): топ показывает
     // игроков в их модельках. Битая копия — null, а не ошибка всего топа
     top: db.prepare(`select id, name, photo, rating, wins, losses, tourney_wins, ${SKIN_SQL} as skin from player
-                     where wins + losses > 0 and banned_at is null order by rating desc, wins desc, created_at asc limit ?`),
+                     where wins + losses > 0 and banned_at is null
+                       -- боты (server/simbots.mjs) прячутся из таблицы по /simbots hide
+                       and (sim is null or not exists (select 1 from setting where key = 'simbots' and value = 'hide'))
+                     order by rating desc, wins desc, created_at asc limit ?`),
     topTourney: db.prepare(`select id, name, photo, rating, wins, losses, tourney_wins, ${SKIN_SQL} as skin from player
                             where tourney_wins > 0 and banned_at is null order by tourney_wins desc, rating desc limit ?`),
     // Админка: поиск по нику, Telegram ID или id; без запроса — последние зашедшие

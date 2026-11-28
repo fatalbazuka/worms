@@ -26,7 +26,7 @@ export function createAdmin({ db, players, analytics, tournaments, shop, saves, 
     totals: db.prepare(`select count(*) as players,
                           sum(case when banned_at is not null then 1 else 0 end) as banned,
                           sum(case when created_at >= ? then 1 else 0 end) as fresh7
-                        from player`),
+                        from player where sim is null`),
     stars: db.prepare(`select coalesce(sum(amount), 0) as all_time,
                          coalesce(sum(case when created_at >= ? then amount else 0 end), 0) as week
                        from payment where refunded_at is null`),

@@ -22,6 +22,7 @@ const server = spawn(process.execPath,
       HOST: '127.0.0.1',
       STATIC_DIR: ROOT,
       DB_PATH: join(tmp, 'worms.db'),
+      SIM_BOTS: process.env.SIM_BOTS ?? '0',
     },
     stdio: ['ignore', 'pipe', 'inherit'],
   });

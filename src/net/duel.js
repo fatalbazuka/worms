@@ -2,7 +2,11 @@ import { captureState, applyState, applyCommand, applyMove, mixAmmo } from './pr
 import { towerMatch } from '../core/match.js';
 import { STATE } from '../core/TurnManager.js';
 import { CFG } from '../config.js';
-import { fetchDuel, sendDuelTurn, ApiError } from './server.js';
+import { fetchDuel, sendDuelTurn, sendDuelBotTurn, ApiError } from './server.js';
+import { Bot } from '../ai/Bot.js';
+
+/** Уровень ИИ для хода соперника-бота (server/simbots.mjs SIM_LEVELS). */
+const SIM_AI = { weak: 'rookie', mid: 'fighter', strong: 'sniper' };
 
 /**
  * Дуэль по переписке на стороне игры (сервер — server/duels.mjs).
@@ -154,7 +158,7 @@ export class DuelSession {
     this.synced = true;
     this.sceneReady = true;
     this.ready = false;        // история ещё не восстановлена — ходить нельзя
-    this.phase = 'replay';     // replay | play | sent | wait | over
+    this.phase = 'replay';     // replay | botplay | play | sent | wait | over
     this.rec = null;           // запись своего хода
     this.started = false;      // игрок начал ход — до этого часы хода стоят
     this.showing = false;      // идёт показ хода — его можно пропустить
@@ -182,6 +186,9 @@ export class DuelSession {
   get peerLost() { return false; }
   get peerSilence() { return 0; }
   get myTurn() { return this.scene?.turn.currentTeam === this.myTeam; }
+  /** Чей ход сейчас пишется: свой, а пока разыгрывается ход соперника-бота — его. */
+  get recTeam() { return this.phase === 'botplay' ? this.botTeam : this.myTeam; }
+  get recording() { return (this.phase === 'play' || this.phase === 'botplay') && Boolean(this.rec); }
 
   requestSync() { return false; }
   sendEmote() {}
@@ -232,6 +239,57 @@ export class DuelSession {
   }
 
   // ---------------------------------------------------------- восстановление
+
+  /**
+   * Ход соперника-бота: его ведёт тот же ИИ, что в бою с ботом (ai/Bot.js),
+   * а запись идёт так же, как свой ход. Для игрока это повтор хода соперника.
+   */
+  _botTurn(bt) {
+    const s = this.scene;
+    this.botTeam = bt.team;
+    s.bots = s.bots ?? [];
+    s.bots[bt.team] = new Bot(s, SIM_AI[bt.level] ?? 'fighter');
+    this.rec = { n: this.duel.turn, t0: performance.now(), cmds: [], lastMove: 0 };
+    this.ready = true;
+    this.started = true;
+    s.turn.timeLeft = s.turnTime;
+    s.fx.banner('Повтор хода соперника', '#ffd166', 1800);
+    s.followTarget = s.turn.activeWorm;
+    this._setPhase('botplay');
+  }
+
+  /** Бот сходил: ход — на сервер от его имени, а здесь — сразу свой ход. */
+  _botDone() {
+    const s = this.scene;
+    const state = captureState(s);
+    state.frozen = s.worms.map((w) => (w.frozen ? 1 : 0));
+    const over = s.turn.state === STATE.OVER;
+    const payload = {
+      turn: this.rec.n, cmds: thin(this.rec.cmds), state, hash: turnHash(s), prevHash: this.prevHash, prevTurn: this.prevTurn,
+      over, ...(over ? { winner: s.checkVictory() ?? -1 } : {}),
+    };
+    this.prevHash = payload.hash;
+    this.prevTurn = payload.turn;
+    if (s.bots) s.bots[this.botTeam] = null;
+    this.duel = { ...this.duel, turn: payload.turn + 1, botTurn: null,
+      turns: [...(this.duel.turns ?? []), { n: payload.turn, team: this.botTeam, kind: 'move', cmds: payload.cmds, state, hash: payload.hash }] };
+    this._botUpload = sendDuelBotTurn(this.duel.id, payload)
+      .then((r) => { if (r?.duel) this.duel = { ...this.duel, ...r.duel, turns: this.duel.turns }; })
+      .catch((e) => { console.warn('[duel] ход соперника не записан', e.message); });
+    this.rec = null;
+    if (over) {
+      this._botUpload.then(() => this.scene?.onDuelSent?.(true));
+      this._setPhase('over');
+      return;
+    }
+    // Свой ход — как после повтора: часы стоят, пока не начал
+    this.rec = { n: payload.turn + 1, t0: performance.now(), cmds: [], lastMove: 0 };
+    s.turn.timeLeft = s.turnTime;
+    this.started = false;
+    this.ready = true;
+    this._setPhase('play');
+    s.onTurnBegin?.();
+  }
 
   async replay() {
     const s = this.scene;
@@ -352,6 +410,12 @@ export class DuelSession {
       }
       return;
     }
+    // Ход соперника-бота наступил: разыгрываем его здесь и показываем как
+    // повтор, потом — свой ход
+    if (d.botTurn && d.status === 'active' && s.turn.currentTeam === d.botTurn.team && s.turn.state !== STATE.OVER) {
+      this._botTurn(d.botTurn);
+      return;
+    }
     if (d.myTurn) {
       if (s.turn.turnNumber !== d.turn || s.turn.currentTeam !== this.myTeam) {
         console.warn('[duel] очередь не сошлась с сервером', s.turn.turnNumber, d.turn, s.turn.currentTeam);
@@ -384,7 +448,7 @@ export class DuelSession {
   }
 
   sendMove(m) {
-    if (this.phase !== 'play' || !this.rec || !m) return;
+    if (!this.recording || !m) return;
     const r = this.rec;
     const t = this._at();
     const prev = r.cmds.findLast?.((c) => c.k === 'move')?.m;
@@ -397,7 +461,7 @@ export class DuelSession {
   }
 
   sendShot(cmd) {
-    if (this.phase === 'play' && this.rec) this.rec.cmds.push({ k: 'shot', at: this._at(), cmd });
+    if (this.recording) this.rec.cmds.push({ k: 'shot', at: this._at(), cmd });
   }
 
   /**
@@ -406,17 +470,18 @@ export class DuelSession {
    * /duellog у бота покажет, попал выстрел или прошёл мимо.
    */
   noteBoom(b) {
-    if (this.phase !== 'play' || !this.rec) return;
+    if (!this.recording) return;
     if (this.rec.cmds.filter((c) => c.k === 'boom').length >= 24) return;
     this.rec.cmds.push({ k: 'boom', at: this._at(), ...b });
   }
 
   sendSplit(m) {
-    if (this.phase === 'play' && this.rec) this.rec.cmds.push({ k: 'split', at: this._at(), turn: m.turn, t: m.t });
+    if (this.recording) this.rec.cmds.push({ k: 'split', at: this._at(), turn: m.turn, t: m.t });
   }
 
   /** Ход отыгран и очередь передана — на сервер. */
   sendState(actedTeam) {
+    if (this.phase === 'botplay' && actedTeam === this.botTeam && this.rec) { this._botDone(); return; }
     if (this.phase !== 'play' || actedTeam !== this.myTeam || !this.rec) return;
     const s = this.scene;
     const state = captureState(s);
@@ -438,6 +503,8 @@ export class DuelSession {
 
   async _upload(payload, tries = 0) {
     try {
+      // Ход соперника-бота, разыгранный здесь, должен уйти первым
+      if (this._botUpload) { await this._botUpload; this._botUpload = null; }
       const r = await sendDuelTurn(this.duel.id, payload);
       setPending(this.duel.id, null);
       this.duel = { ...this.duel, ...r.duel, turns: [...(this.duel.turns ?? []), { n: payload.turn, team: this.myTeam, kind: 'move', cmds: payload.cmds, state: payload.state, hash: payload.hash }] };
@@ -474,7 +541,8 @@ export class DuelSession {
       let fresh = null;
       try { fresh = await fetchDuel(this.duel.id); } catch { continue; }
       if (this.dead || !fresh) break;
-      if (fresh.turn !== this.duel.turn || fresh.status !== this.duel.status) {
+      // Сменился ход, итог — или наступил ход соперника-бота (его разыграем здесь)
+      if (fresh.turn !== this.duel.turn || fresh.status !== this.duel.status || (fresh.botTurn && !this.duel.botTurn)) {
         this.scene.onDuelUpdate?.(fresh);
         break;
       }

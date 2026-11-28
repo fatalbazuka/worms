@@ -344,6 +344,11 @@ export async function sendDuelTurn(id, payload) {
   return call('POST', `/duels/${Number(id)}/turn`, payload);
 }
 
+/** Ход соперника-бота, разыгранный здесь (server/simbots.mjs). */
+export async function sendDuelBotTurn(id, payload) {
+  return call('POST', `/duels/${Number(id)}/botturn`, payload);
+}
+
 export async function resignDuel(id) {
   return (await call('POST', `/duels/${Number(id)}/resign`, {})).duel;
 }

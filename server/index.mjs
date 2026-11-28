@@ -82,11 +82,12 @@ import { createWeekly } from './weekly.mjs';
 import { createPromos } from './promo.mjs';
 import { createFriends } from './friends.mjs';
 import { createDuels } from './duels.mjs';
+import { createSimBots } from './simbots.mjs';
 
 export function createApp({
   db, botToken = '', trustProxy = false, staticDir = null, now = () => Date.now(),
   adminIds = [], publicUrl = '', telegramApiBase = 'https://api.telegram.org', secret = '', tz = 'Europe/Moscow',
-  log = console, mediaDir = null, appName = '',
+  log = console, mediaDir = null, appName = '', simRandom = Math.random,
 }) {
   const admins = new Set(adminIds.map(Number).filter(Boolean));
   // login — подбор пароля: не больше 10 попыток в минуту с одного адреса
@@ -115,7 +116,7 @@ export function createApp({
   const admin = createAdmin({ db, players, analytics, tournaments, shop, saves, api, now, log });
   // Дуэли заводятся ниже (им нужны друзья, а друзьям — бот): боту — ссылка
   bot = createBot({ db, api, players, tournaments, analytics, admin, adminIds: admins, publicUrl, tz, now, log, appName, promos,
-    duels: () => duels, bootlog });
+    duels: () => duels, bootlog, simbots: () => simbots });
   weekly = createWeekly({ db, tournaments, shop, notify: (...a) => bot.notify(...a), tz, now, log });
   const friends = createFriends({
     db, players, analytics, now, log,
@@ -123,6 +124,8 @@ export function createApp({
     invite: (...a) => bot.inviteDuel(...a),
   });
   const duels = createDuels({ db, players, friends, analytics, now, log, notify: (...a) => bot.notify(...a) });
+  // Игроки-боты: играют между собой и вызывают людей на дуэли (server/simbots.mjs)
+  const simbots = createSimBots({ db, players, duels, analytics, now, log, random: simRandom });
   const hookSecret = botToken ? webhookSecret(botToken, secret) : '';
 
   const q = {
@@ -319,7 +322,7 @@ export function createApp({
       }
     }
 
-    const dm = /^\/api\/duels\/(\d+)(?:\/(turn|resign))?$/.exec(path);
+    const dm = /^\/api\/duels\/(\d+)(?:\/(turn|botturn|resign))?$/.exec(path);
     if (dm) {
       const me = auth(req);
       const fail = (r) => { if (r.error) throw new HttpError(r.status ?? 400, r.error, r.duel ? { duel: r.duel } : {}); return r; };
@@ -330,6 +333,8 @@ export function createApp({
       }
       // Ход — приказы и снимок: длиннее обычного запроса
       if (method === 'POST' && dm[2] === 'turn') return fail(await duels.submit(me, dm[1], await readJson(req, 96 * 1024)));
+      // Ход соперника-бота, разыгранный у этого игрока (server/simbots.mjs)
+      if (method === 'POST' && dm[2] === 'botturn') return fail(await duels.submitBot(me, dm[1], await readJson(req, 96 * 1024)));
       if (method === 'POST' && dm[2] === 'resign') return fail(await duels.resign(me, dm[1]));
     }
 
@@ -562,6 +567,7 @@ export function createApp({
   handle.players = players;
   handle.friends = friends;
   handle.duels = duels;
+  handle.simbots = simbots;
   handle.webhookSecret = hookSecret;
   /** Настроить бота (вебхук, меню) — вызывается при запуске сервера. */
   handle.setupBot = () => bot.setup({ secret: hookSecret });
@@ -587,6 +593,8 @@ if (isMain) {
     appName: env.TELEGRAM_APP || '',
     mediaDir: env.MEDIA_DIR || join(dirname(resolve(env.DB_PATH || './data/worms.db')), 'media'),
   });
+  // Боты-игроки заводятся сами при первом запуске (SIM_BOTS=0 — нет: тесты)
+  if (env.SIM_BOTS !== '0' && handle.simbots.enabled()) handle.simbots.ensure();
   const server = createServer(handle);
   server.listen(Number(env.PORT ?? 3000), env.HOST || '0.0.0.0', () => {
     const { port } = server.address();
@@ -609,6 +617,8 @@ if (isMain) {
     handle.bot.remind().catch((e) => console.error('[bot] напоминания', e));
     // Дуэли по переписке: просроченный ход — пропуск, за два часа — напоминание
     handle.duels.tick().catch((e) => console.error('[duels] tick', e));
+    // Боты-игроки: партии между собой и вызовы людям, днём, 3–4 в день
+    try { handle.simbots.tick(); } catch (e) { console.error('[simbots] tick', e); }
   }, 30_000);
   const stop = () => {
     clearInterval(ticker);
