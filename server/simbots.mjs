@@ -27,10 +27,11 @@ export const SIM_LEVELS = {
   strong: { strength: 1.6, ai: 'sniper' },
 };
 
+// Шесть русских имён и шесть дагестанских, на каждом уровне — поровну
 const ROSTER = [
-  ['Дима', 'weak'], ['Kirill_99', 'weak'], ['Аня Л.', 'weak'], ['Tolik', 'weak'],
-  ['Никита 🔥', 'mid'], ['Серый', 'mid'], ['Маша', 'mid'], ['Lexa', 'mid'],
-  ['Артём К.', 'strong'], ['Вова', 'strong'], ['Max', 'strong'], ['Егор', 'strong'],
+  ['Дима', 'weak'], ['Kirill_99', 'weak'], ['Рамазан', 'weak'], ['Гаджи', 'weak'],
+  ['Никита 🔥', 'mid'], ['Серый', 'mid'], ['Ислам М.', 'mid'], ['Абдулла 🦅', 'mid'],
+  ['Артём К.', 'strong'], ['Вова', 'strong'], ['Магомед', 'strong'], ['Шамиль_05', 'strong'],
 ];
 const START = {
   weak: { rating: [930, 990], wins: [3, 8], losses: [5, 10] },
